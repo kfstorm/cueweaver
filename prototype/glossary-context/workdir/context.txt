@@ -1,0 +1,13 @@
+Narrative background for translating this episode's English subtitles to Simplified Chinese. Sourced programmatically from TMDB (series id 38852, 동이):
+
+--- Series (TMDB en-US overview: "Jewel in the Crown") ---
+Set during the reign of King Sukjong in the Joseon dynasty, the story focuses on Dong Yi, a water maid who gains the trust of Queen Inhyeon and later the favour of the king when he is moved by her prayers for the health of the Queen during the court disputes caused by Jang Hee Bin. Dong Yi becomes a concubine with the rank of sook-bin and bears a son who will later become the 21st king of Joseon, Yeongjo.
+
+--- 电视剧（TMDB 中文简介）---
+《同伊》描述的是韩孝珠所饰演的女主角崔淑嫔从平民到朝鲜国母的一生。池珍熙在剧中饰演的是第15代高丽王肃宗一角。历史上的高丽肃宗于1095年他年仅十四岁时即位，在位10年，逝于1105年，是挽救朝鲜失落王权的杰出君主，拥有超凡的个人魅力。
+
+--- Episode 1x11 (en-US): 'The Truth Revealed' ---
+Dong Yi is saved by the King's guard. She tells him that she has evidence to prove Jang Ok Jeong is innocent. The King and Chief Seo gather in the morgue to watch the procedure again. Unaware of the new development, Queen Dowager and the Investigation Bureau are happy on the downfall of Jang Ok Jeong. Jang Ok Jeong's brother, Jang Hee Jae who is a criminal, arrives from Qing. Then, because of her help, Dong Yi finally gets her reward. She is going to be promoted to court lady in the inner palace and will work in the Investigation Bureau.
+
+--- 该集剧情简介（TMDB 官方中文）---
+　　这时暗行的肃宗解救了同伊，肃宗从徐龙继那里听到同伊找出的证据，并对同伊的能力十分震惊。张玉贞在同伊的帮助下洗脱嫌疑，玉贞怒斥监察部的无能。玉贞接见同伊并感谢她。肃宗警戒大臣们不要惹是生非。张玉贞向肃宗提出把同伊提升为内人。车天寿租了英达的房子，并结识了张希载。微服私访调查民情的肃宗再次遇到了同伊，并赏赐同伊。另一方面，张希载（张玉贞的哥哥）回城，劝说张玉贞不要把同伊留在身边。肃宗与黄直周和英达像平凡男子一样度过了一天，向同伊承诺要给他赏赐。同伊成为监察部内人。
