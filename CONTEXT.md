@@ -37,7 +37,7 @@ Converting a Bitmap subtitle into text.
 _Avoid_: OCR (unqualified)
 
 **Target language**:
-The language a Job translates into; v0.1 is Simplified Chinese.
+The language a Job translates into. A required global setting, user-configurable, with no fixed default; a Job cannot start without it being set.
 _Avoid_: output language, destination
 
 **Term**:
