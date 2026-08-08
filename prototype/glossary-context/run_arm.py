@@ -4,11 +4,15 @@
 Three arms on the same 60-sub sample, same provider & model as the #8 engine
 prototype, all with `thinking: disabled` (the #8 seam):
 
-  A (baseline)  : plain translate prompt; no Context, no auto-terminology
-  B (+Context)  : A + narrative Context block (built from TMDB metadata)
-  C (+Context+G): B + PySubtrans dynamically self-learned terminology —
-                  the engine's own auto-Glossary, learned and re-injected
-                  batch-by-batch (build_terminology_map=True).
+  A (baseline)     : plain translate prompt; no Context, no auto-terminology
+  B (+Context)     : A + narrative Context block (built from TMDB metadata)
+  C (+Context+G)   : B + PySubtrans dynamically self-learned terminology —
+                     the engine's own auto-Glossary, learned and re-injected
+                     batch-by-batch (build_terminology_map=True).
+  D (+G only)      : A + dynamic self-learned terminology, with NO injected
+                     Context — isolates the native Glossary's own
+                     quality benefit vs baseline A (the #14 question;
+                     omitted from the original A/B/C design).
 
 Throwaway code. ARM env selects the arm. NO #8 static terminology snapshot is
 used anywhere (that would leak the previous experiment's learned output).
@@ -165,7 +169,7 @@ def main() -> int:
         "OUT",
         os.path.join(WORKDIR, f"jitc-e11.sample.zh.arm{arm}.srt"),
     )
-    dyn_terminology = arm == "C"
+    dyn_terminology = arm in ("C", "D")
     use_context = arm in ("B", "C")
 
     opts = init_options(

@@ -16,7 +16,7 @@ import srt
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "sample" / "jitc-e11.sample.srt"
 WORKDIR = ROOT / "workdir"
-ARMS = ("A", "B", "C")
+ARMS = ("A", "B", "C", "D")
 
 # Gold mappings are limited to terms with an explicit authoritative rendering
 # in the TMDB zh-CN episode/show material used to build Context.
@@ -109,17 +109,20 @@ def main() -> int:
         matched, total = totals[arm]
         print(f"ARM {arm}: {matched}/{total} gold occurrences")
 
-    terminology_path = WORKDIR / "learned-terminology-arm.C.json"
-    if terminology_path.exists():
-        snapshots = json.loads(terminology_path.read_text(encoding="utf-8"))
+    print("\n## Dynamic terminology snapshots")
+    for arm in ("C", "D"):
+        path = WORKDIR / f"learned-terminology-arm.{arm}.json"
+        if not path.exists():
+            continue
+        snapshots = json.loads(path.read_text(encoding="utf-8"))
         learned = snapshots[-1] if snapshots else {}
         authoritative = {term: value for term, value in learned.items() if term in GOLD}
         correct = sum(GOLD[term] == value for term, value in authoritative.items())
-        print("\n## Dynamic terminology snapshot")
         print(
-            f"ARM C: {len(learned)} learned entries; authoritative overlap={len(authoritative)}, correct={correct}"
+            f"ARM {arm}: {len(learned)} learned entries; "
+            f"authoritative overlap={len(authoritative)}, correct={correct}"
         )
-        print(f"authoritative entries: {authoritative}")
+        print(f"ARM {arm} authoritative entries: {authoritative}")
     return 0
 
 

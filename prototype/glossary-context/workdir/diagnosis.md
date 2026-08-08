@@ -69,6 +69,22 @@ With both fixes, the final repeated checks were complete: A 2/2, B 3/3, and
 C 2/2 clean runs were 60/60 timestamp-aligned blocks. The final canonical
 A/B/C run was also 60/60 for every arm.
 
+## Added D arm (Glossary-only isolation)
+
+The original A/B/C design only isolated the Context increment (B-A) and the
+Glossary-on-top-of-Context increment (C-B). It never measured the native
+Glossary alone against baseline, which is the #14 question. A fourth run,
+D = A + `build_terminology_map=True` with no injected Context, produced 60/60
+blocks in 15.7s and scored 3/9 on the gold rubric — identical to baseline A
+(A 3/9, B 6/9, C 6/9, D 3/9). D learned 13 entries but only 1 of the 6
+gold-overlapping forms was authoritative-correct, re-confirming the variant
+forms (`东医`, `姜大人`, `警察局`) the Context arms had already
+disambiguated.
+
+So the rubric benefit traces to the Context block, not to the native dynamic
+terminology self-learning. The dynamic Glossary is not a quality aid on its
+own at this sample size; with no Context it can actively cement wrong forms.
+
 ## Remaining notes
 
 - The Library bug 2 (no-op `TryFuzzyMatches`) should be reported upstream
