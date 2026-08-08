@@ -1,0 +1,86 @@
+src/seconv/Commands/ConvertCommand.cs  | 12 +++++++++---
+ src/seconv/Core/AutoTranslateRunner.cs | 17 ++++++++++++++++-
+ src/seconv/Core/SubtitleConverter.cs   |  3 +++
+ src/seconv/Helpers/HelpDisplay.cs      |  2 +-
+ 4 files changed, 29 insertions(+), 5 deletions(-)
+
+Changes:
+
+src/seconv/Commands/ConvertCommand.cs
+  @@ -147,7 +147,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
+  -        [Description("Translate engine: llamacpp (default) | ollama | lmstudio | libretranslate | nllb-serve | nllb-api")]
+  +        [Description("Translate engine: llamacpp (default) | ollama | lmstudio | libretranslate | nllb-serve | nllb-api | deepseek")]
+           public string? TranslateEngine { get; init; }
+   
+           [CommandOption("--translate-url|--translateurl")]
+  @@ -158,6 +158,10 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
+  +        [CommandOption("--translate-api-key|--translateapikey")]
+  +        [Description("API key for translate engines that require one (e.g. deepseek). Prototype hook; may be replaced by a settings-file key later")]
+  +        public string? TranslateApiKey { get; init; }
+  +
+           [CommandOption("--offset")]
+           [Description("Offset time (hh:mm:ss:ms)")]
+           public string? Offset { get; init; }
+  @@ -431,9 +435,10 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
+  -                 !string.IsNullOrWhiteSpace(settings.TranslateModel)))
+  +                 !string.IsNullOrWhiteSpace(settings.TranslateModel) ||
+  +                 !string.IsNullOrWhiteSpace(settings.TranslateApiKey)))
+               {
+  -                AnsiConsole.MarkupLine("[red]Error: --translate-from/--translate-engine/--translate-url/--translate-model require --translate-to:<language>.[/]");
+  +                AnsiConsole.MarkupLine("[red]Error: --translate-from/--translate-engine/--translate-url/--translate-model/--translate-api-key require --translate-to:<language>.[/]");
+                   return 1;
+               }
+   
+  @@ -693,6 +698,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
+  +                TranslateApiKey = settings.TranslateApiKey,
+                   TeletextOnly = settings.TeletextOnly,
+                   TeletextOnlyPage = settings.TeletextOnlyPage,
+                   Quiet = silent,
+  +9 -3
+
+src/seconv/Core/AutoTranslateRunner.cs
+  @@ -18,7 +18,7 @@ namespace SeConv.Core;
+  -    public static readonly string[] SupportedEngines = { "llamacpp", "ollama", "lmstudio", "libretranslate", "nllb-serve", "nllb-api" };
+  +    public static readonly string[] SupportedEngines = { "llamacpp", "ollama", "lmstudio", "libretranslate", "nllb-serve", "nllb-api", "deepseek" };
+   
+       private readonly ConversionOptions _options;
+       private readonly IAutoTranslator _translator;
+  @@ -109,6 +109,21 @@ internal sealed class AutoTranslateRunner
+  +            case "deepseek":
+  +                translator = new DeepSeekTranslate();
+  +                if (!string.IsNullOrEmpty(url))
+  +                {
+  +                    tools.DeepSeekUrl = url;
+  +                }
+  +                if (!string.IsNullOrWhiteSpace(options.TranslateModel))
+  +                {
+  +                    tools.DeepSeekModel = options.TranslateModel.Trim();
+  +                }
+  +                if (!string.IsNullOrWhiteSpace(options.TranslateApiKey))
+  +                {
+  +                    tools.DeepSeekApiKey = options.TranslateApiKey;
+  +                }
+  +                break;
+               default:
+                   throw new InvalidOperationException(
+                       $"Translate engine '{options.TranslateEngine}' is not supported. Use one of: {string.Join(", ", SupportedEngines)}.");
+  +16 -1
+
+src/seconv/Core/SubtitleConverter.cs
+  @@ -978,6 +978,9 @@ internal record class ConversionOptions
+  +    /// <summary>API key for translate engines that require one (e.g. deepseek).</summary>
+  +    public string? TranslateApiKey { get; init; }
+  +
+       public bool TeletextOnly { get; init; }
+       public bool SkipTeletext { get; init; }
+       public int? TeletextOnlyPage { get; init; }
+  +3 -0
+
+src/seconv/Helpers/HelpDisplay.cs
+  @@ -51,7 +51,7 @@ internal static class HelpDisplay
+  -        ShowParameter("--translate-engine:<engine>", "llamacpp (default; auto-starts a local llama-server) | ollama | lmstudio | libretranslate | nllb-serve | nllb-api");
+  +        ShowParameter("--translate-engine:<engine>", "llamacpp (default; auto-starts a local llama-server) | ollama | lmstudio | libretranslate | nllb-serve | nllb-api | deepseek");
+           ShowParameter("--translate-url:<url>", "Endpoint of an already-running translate server (llamacpp: skips the auto-start)");
+           ShowParameter("--translate-model:<model>", "Ollama/LM Studio model name, or llamacpp .gguf file name/path");
+           ShowParameter("--multiple-replace:<path.xml>", "SE MultipleSearchAndReplaceGroups XML applied per paragraph");
+  +1 -1
