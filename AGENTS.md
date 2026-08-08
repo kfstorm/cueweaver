@@ -13,3 +13,8 @@ Five canonical roles map to the default label strings: `needs-triage`, `needs-in
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Writing style
+
+- Write repository documentation (docs, issues, tickets, README, CONTEXT.md, ADRs) in English.
+- Chat with the user can stay in their language; only durable artifacts are English-first.
