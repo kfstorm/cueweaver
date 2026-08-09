@@ -16,6 +16,7 @@ from .subtitles import (
     SubtitleValidationError,
     validate_subtitle_pair,
 )
+from .translation import PySubtransTranslator
 
 
 class JobState(str, Enum):
@@ -37,10 +38,6 @@ class TargetLanguageRequired(JobError):
 
 class SourceSelectionError(JobError):
     """Raised when Discovery cannot select one External subtitle."""
-
-
-class TranslationUnavailable(JobError):
-    """Raised when a non-no-op Job has no configured translation provider."""
 
 
 class TranslationFailed(JobError):
@@ -246,15 +243,15 @@ class JobRunner:
             )
 
     def _translate(self, source: Path, target_language: str) -> bytes:
-        if self._translator is None:
-            raise TranslationUnavailable(
-                "Source is not already in Target language and no translator is configured"
-            )
         try:
-            if callable(self._translator):
-                translated = self._translator(source, target_language)
+            translator = self._translator
+            if translator is None:
+                translator = PySubtransTranslator()
+                self._translator = translator
+            if callable(translator):
+                translated = translator(source, target_language)
             else:
-                translated = self._translator.translate(source, target_language)
+                translated = translator.translate(source, target_language)
         except Exception as error:
             raise TranslationFailed(f"Translation failed: {error}") from error
         if isinstance(translated, (str, bytes, bytearray)):

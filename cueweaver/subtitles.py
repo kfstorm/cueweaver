@@ -212,7 +212,14 @@ def _parse_vtt(text: str) -> tuple[tuple[str, ...], ...]:
             raise SubtitleValidationError("VTT cue has no text")
         cue_id = block[0].strip() if timestamp_index == 1 else ""
         settings = (timestamp[3] or "").strip()
-        structures.append((cue_id, timestamp[1], timestamp[2], settings))
+        structures.append(
+            (
+                cue_id,
+                str(_vtt_milliseconds(timestamp[1])),
+                str(_vtt_milliseconds(timestamp[2])),
+                settings,
+            )
+        )
     if not structures:
         raise SubtitleValidationError("VTT subtitle has no cues")
     return tuple(structures)

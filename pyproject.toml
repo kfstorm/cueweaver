@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "A self-hosted media subtitle translation tool"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "pysubtrans==1.6.0",
+]
 
 [build-system]
 requires = ["hatchling"]

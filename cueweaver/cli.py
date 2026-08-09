@@ -49,6 +49,10 @@ def main(
     )
     if result.state is JobState.FAILED:
         print(f"Job failed: {result.error}", file=sys.stderr)
+        print(
+            f"  lifecycle: {' -> '.join(state.value for state in result.lifecycle)}",
+            file=sys.stderr,
+        )
         return 1
 
     assert result.source is not None
