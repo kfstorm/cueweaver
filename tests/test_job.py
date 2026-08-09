@@ -1,10 +1,20 @@
+import json
 from pathlib import Path
 from threading import Event, Thread
 
 import pytest
 
 from cueweaver import publishing
-from cueweaver.job import JobError, JobRunner, JobState
+from cueweaver.job import (
+    JobError,
+    JobRunner,
+    JobState,
+    SeconvExtractor,
+    SubtitleCandidate,
+    SubtitleFormat,
+    SubtitleSubtype,
+    discover_subtitles,
+)
 
 SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -44,6 +54,18 @@ class ProviderContractFixture:
         return self.translated
 
 
+class ExtractionFixture:
+    def __init__(self, content: str = SRT):
+        self.content = content
+        self.calls: list[tuple[Path, int | None, Path]] = []
+
+    def extract(self, media: Path, candidate, destination: Path) -> Path:
+        self.calls.append((media, candidate.container_index, destination))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(self.content, encoding="utf-8")
+        return destination
+
+
 class BlockingCancellableTranslator:
     def __init__(self, intermediate_path: Path, translated: str):
         self.intermediate_path = intermediate_path
@@ -70,6 +92,335 @@ def create_media_and_source(tmp_path, source_content=SRT):
     media.write_bytes(b"media")
     source.write_text(source_content, encoding="utf-8")
     return media, source
+
+
+def ffprobe_subtitle_streams(monkeypatch, streams):
+    def run(command, **kwargs):
+        if "-select_streams" not in command:
+            return type(
+                "CompletedProcessFixture",
+                (),
+                {"stdout": json.dumps({"streams": []})},
+            )()
+        assert command[:5] == [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "s",
+        ]
+        return type(
+            "CompletedProcessFixture",
+            (),
+            {"stdout": json.dumps({"streams": streams})},
+        )()
+
+    monkeypatch.setattr("cueweaver.job.subprocess.run", run)
+
+
+def test_discovery_lists_external_text_and_embedded_bitmap_candidates(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container metadata is not subtitle content")
+    (tmp_path / "Movie.en.srt").write_text(SRT, encoding="utf-8")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [
+            {
+                "index": 2,
+                "codec_name": "subrip",
+                "tags": {"language": "eng", "title": "English"},
+            },
+            {
+                "index": 3,
+                "codec_name": "hdmv_pgs_subtitle",
+                "tags": {"language": "zho", "title": "Chinese signs"},
+            },
+        ],
+    )
+
+    candidates = discover_subtitles(media)
+
+    assert [candidate.subtype for candidate in candidates] == [
+        SubtitleSubtype.EXTERNAL,
+        SubtitleSubtype.EMBEDDED,
+        SubtitleSubtype.BITMAP,
+    ]
+    assert [candidate.io_cost for candidate in candidates] == [0, 1, 2]
+    assert candidates[1].language == "en"
+    assert candidates[2].language == "zh"
+    assert candidates[1].container_index == 2
+    assert candidates[2].selectable is False
+
+
+def test_embedded_source_is_extracted_only_after_explicit_selection_and_cached(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [
+            {
+                "index": 1,
+                "codec_name": "subrip",
+                "tags": {"language": "eng"},
+            }
+        ],
+    )
+    extractor = ExtractionFixture()
+    translated = SRT.replace("Hello", "你好")
+    provider = ProviderContractFixture(translated)
+    candidate = discover_subtitles(media)[0]
+
+    first = JobRunner(translator=provider, extractor=extractor).run(
+        media,
+        target_language="zh",
+        source=candidate,
+    )
+    second = JobRunner(translator=provider, extractor=extractor).run(
+        media,
+        target_language="zh",
+        source=candidate,
+    )
+
+    assert first.state is JobState.PUBLISHED
+    assert first.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.EXTRACTING,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.PUBLISHING,
+        JobState.PUBLISHED,
+    )
+    assert first.source is not None
+    assert first.source.subtype is SubtitleSubtype.EMBEDDED
+    assert first.source.path == extractor.calls[0][2]
+    assert provider.calls == [
+        (first.source.path, "zh"),
+        (second.source.path, "zh"),
+    ]
+    assert len(extractor.calls) == 1
+    assert second.state is JobState.PUBLISHED
+    assert second.published_path is not None
+    assert second.published_path.read_text(encoding="utf-8") == translated
+
+
+def test_embedded_source_without_confirmation_does_not_extract(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [{"index": 1, "codec_name": "subrip", "tags": {"language": "eng"}}],
+    )
+    extractor = ExtractionFixture()
+
+    result = JobRunner(extractor=extractor).run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert "Explicit Source selection" in (result.error or "")
+    assert extractor.calls == []
+
+
+def test_bitmap_only_media_fails_with_no_eligible_source(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mp4"
+    media.write_bytes(b"container")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [
+            {
+                "index": 1,
+                "codec_name": "dvd_subtitle",
+                "tags": {"language": "eng"},
+            }
+        ],
+    )
+
+    result = JobRunner().run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert result.error is not None
+    assert "No eligible Source" in result.error
+
+
+def test_media_primary_language_breaks_external_ties_without_configuration(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    english = tmp_path / "Movie.en.srt"
+    japanese = tmp_path / "Movie.ja.srt"
+    media.write_bytes(b"media")
+    english.write_text(SRT, encoding="utf-8")
+    japanese.write_text(SRT, encoding="utf-8")
+
+    def run(command, **kwargs):
+        if "-select_streams" in command:
+            streams = []
+        else:
+            streams = [
+                {
+                    "codec_type": "audio",
+                    "tags": {"language": "eng"},
+                    "disposition": {"default": 0},
+                },
+                {
+                    "codec_type": "audio",
+                    "tags": {"language": "jpn"},
+                    "disposition": {"default": 1},
+                },
+            ]
+        return type(
+            "CompletedProcessFixture",
+            (),
+            {"stdout": json.dumps({"streams": streams})},
+        )()
+
+    monkeypatch.setattr("cueweaver.job.subprocess.run", run)
+    provider = ProviderContractFixture(SRT.replace("Hello", "こんにちは"))
+
+    result = JobRunner(translator=provider).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+    assert result.source is not None
+    assert result.source.path == japanese
+
+
+def test_unknown_embedded_codec_is_not_an_eligible_source(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mp4"
+    media.write_bytes(b"container")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [{"index": 1, "codec_name": "teletext", "tags": {"language": "eng"}}],
+    )
+
+    result = JobRunner().run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert result.error is not None
+    assert "No eligible Source" in result.error
+
+
+def test_embedded_discovery_failure_is_explicit_without_an_external_source(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+
+    def fail_probe(*_args, **_kwargs):
+        raise FileNotFoundError("ffprobe")
+
+    monkeypatch.setattr("cueweaver.job.subprocess.run", fail_probe)
+
+    result = JobRunner().run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert result.error is not None
+    assert "ffprobe" in result.error
+
+
+def test_external_source_without_language_signal_requires_confirmation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+
+    result = JobRunner().run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert "Explicit Source selection" in (result.error or "")
+
+
+def test_language_unknown_external_is_not_auto_selected_over_embedded_source(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.srt"
+    media.write_bytes(b"container")
+    source.write_text(SRT, encoding="utf-8")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [{"index": 1, "codec_name": "subrip", "tags": {"language": "eng"}}],
+    )
+
+    result = JobRunner().run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert "Explicit Source selection" in (result.error or "")
+
+
+def test_language_priority_breaks_an_external_source_tie(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    first_source = tmp_path / "Movie.en.srt"
+    preferred_source = tmp_path / "Movie.ja.srt"
+    media.write_bytes(b"media")
+    first_source.write_text(SRT, encoding="utf-8")
+    preferred_source.write_text(SRT, encoding="utf-8")
+    provider = ProviderContractFixture(SRT.replace("Hello", "こんにちは"))
+
+    result = JobRunner(
+        translator=provider,
+        language_priority=("ja", "en"),
+    ).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+    assert result.source is not None
+    assert result.source.path == preferred_source
+    assert provider.calls == [(preferred_source, "zh")]
+
+
+def test_ambiguous_sources_use_one_explicit_selection_callback(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    english = tmp_path / "Movie.en.srt"
+    french = tmp_path / "Movie.fr.srt"
+    media.write_bytes(b"media")
+    english.write_text(SRT, encoding="utf-8")
+    french.write_text(SRT, encoding="utf-8")
+    provider = ProviderContractFixture(SRT.replace("Hello", "Bonjour"))
+    selections = []
+
+    def select(candidates):
+        selections.append(candidates)
+        return candidates[1]
+
+    result = JobRunner(
+        translator=provider,
+        source_selector=select,
+    ).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+    assert len(selections) == 1
+    assert result.source is not None
+    assert result.source.path == french
+
+
+def test_seconv_extractor_materializes_the_confirmed_embedded_source(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    candidate = SubtitleCandidate(
+        path=media,
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+        subtype=SubtitleSubtype.EMBEDDED,
+        container_index=4,
+    )
+    destination = tmp_path / ".cueweaver" / "extraction" / "Movie.srt"
+
+    def run(command, **kwargs):
+        assert command[:4] == ["seconv", str(media), "srt", "--track-number:4"]
+        output_directory = Path(command[-1])
+        output_directory.mkdir(parents=True, exist_ok=True)
+        (output_directory / "Movie.eng.srt").write_text(SRT, encoding="utf-8")
+        return object()
+
+    monkeypatch.setattr("cueweaver.job.subprocess.run", run)
+
+    extracted = SeconvExtractor().extract(media, candidate, destination)
+
+    assert extracted == destination
+    assert destination.read_text(encoding="utf-8") == SRT
 
 
 def test_non_target_external_source_is_translated_and_published(tmp_path):

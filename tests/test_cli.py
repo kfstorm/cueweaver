@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 from cueweaver.cli import main
 from cueweaver.job import JobResult, JobState
 
@@ -92,3 +95,44 @@ def test_terminal_flow_reports_cancellation_without_asserting_a_published_path(
     assert "Job canceled: Job canceled" in captured.err
     assert "discovered -> translating -> canceled" in captured.err
     assert str(intermediate) in captured.err
+
+
+def test_terminal_flow_prompts_for_ambiguous_sources_and_marks_bitmap_disabled(
+    tmp_path, monkeypatch, capsys
+):
+    media = tmp_path / "Movie.mkv"
+    english = tmp_path / "Movie.en.srt"
+    french = tmp_path / "Movie.fr.srt"
+    media.write_bytes(b"container")
+    english.write_text(SRT, encoding="utf-8")
+    french.write_text(SRT, encoding="utf-8")
+    monkeypatch.setattr(
+        "cueweaver.job.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "streams": [
+                        {
+                            "index": 3,
+                            "codec_name": "hdmv_pgs_subtitle",
+                            "tags": {"language": "eng"},
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "cueweaver.translation.PySubtransTranslator.translate",
+        lambda _self, _source, _target_language: SRT.replace("Hello", "Bonjour"),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+
+    exit_code = main(["run", str(media), "--target-language", "zh"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Source selection required" in captured.out
+    assert "I/O cost 0" in captured.out
+    assert "disabled; needs Subtitle OCR" in captured.out
+    assert "source: Movie.fr.srt" in captured.out

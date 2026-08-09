@@ -1,7 +1,7 @@
 # CueWeaver
 
 CueWeaver is a self-hosted media subtitle translation tool. The first
-vertical slice runs one Media through a single External subtitle Job.
+vertical slice runs one Media through a single Source Job.
 
 ## Run
 
@@ -16,7 +16,14 @@ The Target language is required and has no product default. It can also be
 configured for a shell session with `CUEWEAVER_TARGET_LANGUAGE`. A subtitle
 named after the Media, such as `Movie.zh.srt`, `Movie.en.ass`, or
 `Movie.vtt`, is discovered automatically when it is the only eligible
-External subtitle.
+External subtitle. MKV and MP4 Embedded subtitles are listed from container
+metadata with `ffprobe`; install FFmpeg so `ffprobe` is available. Text
+Embedded Sources require an explicit selection and are
+materialized lazily through `seconv` into `.cueweaver/extraction`. Bitmap
+Sources are listed as disabled because Subtitle OCR is outside v0.1. Set
+`CUEWEAVER_SECONV` when `seconv` is not on `PATH`.
+Use `--language-priority en,ja` or `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` to
+break same-cost Source ties without content sniffing.
 
 If the Source language already matches the Target language, the Job skips the
 translator, validates the subtitle structure, and atomically publishes the

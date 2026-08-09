@@ -9,7 +9,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
 
-from .job import JobRunner, JobState
+from .job import (
+    JobRunner,
+    JobState,
+    SourceSelectionError,
+    SubtitleCandidate,
+    SubtitleSubtype,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,7 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source",
         type=Path,
-        help="External subtitle to use when more than one is discovered",
+        help="External subtitle path or Embedded subtitle identifier",
+    )
+    parser.add_argument(
+        "--language-priority",
+        help="Comma-separated Source language priority, for example en,ja",
     )
     parser.add_argument(
         "--source-language",
@@ -43,7 +53,11 @@ def main(
     if arguments and arguments[0] == "run":
         arguments = arguments[1:]
     args = build_parser().parse_args(arguments)
-    active_runner = runner or JobRunner()
+    active_runner = runner or JobRunner(
+        source_selector=_prompt_for_source,
+        discovery_observer=_display_candidates,
+        language_priority=args.language_priority,
+    )
 
     def request_cancel(_signal_number: int, _frame: FrameType | None) -> None:
         active_runner.cancel()
@@ -82,12 +96,50 @@ def main(
     assert result.source is not None
     assert result.published_path is not None
     print("Job published")
-    print(f"  source: {result.source.path}")
+    print(f"  source: {result.source.label}")
     print(f"  target: {result.target_language}")
     print(f"  lifecycle: {' -> '.join(state.value for state in result.lifecycle)}")
     print(f"  output: {result.published_path}")
     print(f"  no-op: {'yes' if result.no_op else 'no'}")
     return 0
+
+
+def _prompt_for_source(
+    candidates: tuple[SubtitleCandidate, ...],
+) -> SubtitleCandidate:
+    print("Source selection required")
+    try:
+        choice = input("Choose a Source number: ").strip()
+    except EOFError as error:
+        raise SourceSelectionError(
+            "Source selection requires an interactive choice"
+        ) from error
+    if not choice.isdigit():
+        raise SourceSelectionError("Source selection must be a candidate number")
+    index = int(choice) - 1
+    if index < 0 or index >= len(candidates):
+        raise SourceSelectionError("Source selection is outside the candidate list")
+    selected = candidates[index]
+    if not selected.selectable:
+        raise SourceSelectionError(
+            "Bitmap Sources are visible but disabled and cannot be selected"
+        )
+    return selected
+
+
+def _display_candidates(candidates: tuple[SubtitleCandidate, ...]) -> None:
+    print("Discovered Sources")
+    for index, candidate in enumerate(candidates, start=1):
+        if candidate.subtype is SubtitleSubtype.BITMAP:
+            status = "disabled; needs Subtitle OCR"
+        elif candidate.subtype is SubtitleSubtype.EMBEDDED:
+            status = "needs Extraction"
+        else:
+            status = "ready"
+        print(
+            f"  {index}. {candidate.label} "
+            f"[{candidate.subtype.value}, I/O cost {candidate.io_cost}; {status}]"
+        )
 
 
 if __name__ == "__main__":
