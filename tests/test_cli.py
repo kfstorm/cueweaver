@@ -1,4 +1,5 @@
 from cueweaver.cli import main
+from cueweaver.job import JobResult, JobState
 
 SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -54,3 +55,40 @@ def test_terminal_flow_accepts_the_global_target_language_environment_setting(
     assert exit_code == 0
     assert "Job published" in captured.out
     assert captured.err == ""
+
+
+def test_terminal_flow_reports_cancellation_without_asserting_a_published_path(
+    tmp_path, capsys
+):
+    media = tmp_path / "Movie.mkv"
+    intermediate = tmp_path / "Movie.zh.partial.srt"
+
+    class CanceledRunner:
+        def run(self, media, *, target_language, source, source_language):
+            return JobResult(
+                state=JobState.CANCELED,
+                lifecycle=(
+                    JobState.DISCOVERED,
+                    JobState.TRANSLATING,
+                    JobState.CANCELED,
+                ),
+                media=media,
+                target_language=target_language,
+                source=None,
+                published_path=None,
+                no_op=False,
+                error="Job canceled",
+                intermediate_path=intermediate,
+            )
+
+    exit_code = main(
+        ["run", str(media), "--target-language", "zh"],
+        runner=CanceledRunner(),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "Job canceled: Job canceled" in captured.err
+    assert "discovered -> translating -> canceled" in captured.err
+    assert str(intermediate) in captured.err

@@ -63,6 +63,12 @@ def validate_subtitle_pair(
         )
 
 
+def validate_subtitle(content: bytes, subtitle_format: SubtitleFormat) -> None:
+    """Validate one subtitle document without comparing it to a Source."""
+
+    _parse(_decode(content), subtitle_format)
+
+
 def _decode(content: bytes) -> str:
     try:
         return content.decode("utf-8-sig")

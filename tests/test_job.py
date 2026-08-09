@@ -1,8 +1,9 @@
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
-from cueweaver.job import JobRunner, JobState
+from cueweaver.job import JobError, JobRunner, JobState
 
 SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -42,15 +43,40 @@ class ProviderContractFixture:
         return self.translated
 
 
-def test_non_target_external_source_is_translated_and_published(tmp_path):
+class BlockingCancellableTranslator:
+    def __init__(self, intermediate_path: Path, translated: str):
+        self.intermediate_path = intermediate_path
+        self.translated = translated
+        self.started = Event()
+        self.released = Event()
+        self.cancelled = False
+
+    def translate(self, source: Path, target_language: str) -> str:
+        self.started.set()
+        assert self.released.wait(timeout=5)
+        self.intermediate_path.parent.mkdir(parents=True, exist_ok=True)
+        self.intermediate_path.write_text(self.translated, encoding="utf-8")
+        return self.translated
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self.released.set()
+
+
+def create_media_and_source(tmp_path, source_content=SRT):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(source_content, encoding="utf-8")
+    return media, source
+
+
+def test_non_target_external_source_is_translated_and_published(tmp_path):
+    media, source = create_media_and_source(tmp_path)
     translated = """1
 00:00:01,000 --> 00:00:02,000
 你好
 """
-    media.write_bytes(b"media")
-    source.write_text(SRT, encoding="utf-8")
     provider = ProviderContractFixture(translated)
 
     result = JobRunner(translator=provider).run(
@@ -70,6 +96,90 @@ def test_non_target_external_source_is_translated_and_published(tmp_path):
         JobState.PUBLISHED,
     )
     assert published.read_text(encoding="utf-8") == translated
+
+
+def test_cancel_is_terminal_retains_intermediate_result_and_does_not_publish(
+    tmp_path,
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    intermediate = tmp_path / ".cueweaver" / "Movie.zh.partial.srt"
+    translated = """1
+00:00:01,000 --> 00:00:02,000
+你好
+"""
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    translator = BlockingCancellableTranslator(intermediate, translated)
+    runner = JobRunner(translator=translator)
+    results = []
+
+    thread = Thread(
+        target=lambda: results.append(
+            runner.run(media, target_language="zh", source=source)
+        )
+    )
+    thread.start()
+    assert translator.started.wait(timeout=5)
+
+    runner.cancel()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert translator.cancelled is True
+    assert len(results) == 1
+    result = results[0]
+    assert result.state is JobState.CANCELED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.TRANSLATING,
+        JobState.CANCELED,
+    )
+    assert result.published_path is None
+    assert result.intermediate_path == intermediate
+    assert intermediate.read_text(encoding="utf-8") == translated
+    assert not (tmp_path / "Movie.zh.srt").exists()
+    with pytest.raises(JobError, match="Explicit confirmation"):
+        runner.publish_intermediate(result)
+    assert runner.publish_intermediate(result, confirmed=True) == (
+        tmp_path / "Movie.zh.srt"
+    )
+    assert (tmp_path / "Movie.zh.srt").read_text(encoding="utf-8") == translated
+
+
+def test_fresh_job_after_cancellation_can_publish_a_complete_result(tmp_path):
+    media, source = create_media_and_source(tmp_path)
+    translated = """1
+00:00:01,000 --> 00:00:02,000
+你好
+"""
+    canceled_translator = BlockingCancellableTranslator(
+        tmp_path / ".cueweaver" / "Movie.zh.partial.srt", translated
+    )
+    canceled_runner = JobRunner(translator=canceled_translator)
+    results = []
+    thread = Thread(
+        target=lambda: results.append(
+            canceled_runner.run(media, target_language="zh", source=source)
+        )
+    )
+    thread.start()
+    assert canceled_translator.started.wait(timeout=5)
+    canceled_runner.cancel()
+    thread.join(timeout=5)
+
+    provider = ProviderContractFixture(translated)
+    result = JobRunner(translator=provider).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert results[0].state is JobState.CANCELED
+    assert result.state is JobState.PUBLISHED
+    assert result.published_path == tmp_path / "Movie.zh.srt"
+    assert result.published_path.read_text(encoding="utf-8") == translated
+    assert provider.calls == [(source, "zh")]
 
 
 def test_non_target_source_uses_the_default_pysubtrans_adapter(tmp_path, monkeypatch):

@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from enum import Enum
 from os import PathLike
 from pathlib import Path
+from threading import Event, Lock
 from typing import Protocol, runtime_checkable
 
 from .publishing import publish_atomically
 from .subtitles import (
     SubtitleFormat,
     SubtitleValidationError,
+    validate_subtitle,
     validate_subtitle_pair,
 )
 from .translation import PySubtransTranslator
@@ -26,6 +28,7 @@ class JobState(str, Enum):
     VALIDATING = "validating"
     PUBLISHING = "publishing"
     PUBLISHED = "published"
+    CANCELED = "canceled"
     FAILED = "failed"
 
 
@@ -43,6 +46,10 @@ class SourceSelectionError(JobError):
 
 class TranslationFailed(JobError):
     """Raised when an injected translation provider fails."""
+
+
+class JobCanceled(JobError):
+    """Raised internally when the user cancels an active Job."""
 
 
 @runtime_checkable
@@ -73,6 +80,7 @@ class JobResult:
     published_path: Path | None
     no_op: bool
     error: str | None = None
+    intermediate_path: Path | None = None
 
     @property
     def status(self) -> str:
@@ -173,6 +181,51 @@ class JobRunner:
 
     def __init__(self, translator: Translator | TranslatorFunction | None = None):
         self._translator = translator
+        self._state_lock = Lock()
+        self._cancel_requested = Event()
+        self._active_translator: Translator | TranslatorFunction | None = None
+        self._intermediate_path: Path | None = None
+
+    def cancel(self) -> None:
+        """Cancel the active Job without publishing its partial translation."""
+
+        self._cancel_requested.set()
+        with self._state_lock:
+            translator = self._active_translator
+        if translator is None:
+            return
+        cancel = getattr(translator, "cancel", None)
+        if callable(cancel):
+            cancel()
+
+    def publish_intermediate(
+        self,
+        result: JobResult,
+        *,
+        confirmed: bool = False,
+    ) -> Path:
+        """Publish a partial result only after explicit caller confirmation."""
+
+        if not confirmed:
+            raise JobError(
+                "Explicit confirmation is required to publish partial output"
+            )
+        if result.state not in {JobState.CANCELED, JobState.FAILED}:
+            raise JobError("Only an incomplete Job can publish intermediate output")
+        if (
+            result.intermediate_path is None
+            or result.source is None
+            or result.target_language is None
+        ):
+            raise JobError("Job has no intermediate output to publish")
+        content = result.intermediate_path.read_bytes()
+        validate_subtitle(content, result.source.subtitle_format)
+        destination = _published_path(
+            result.media,
+            result.target_language,
+            result.source.subtitle_format,
+        )
+        return publish_atomically(content, destination)
 
     def run(
         self,
@@ -182,6 +235,9 @@ class JobRunner:
         source: PathLike[str] | str | None = None,
         source_language: str | None = None,
     ) -> JobResult:
+        self._cancel_requested.clear()
+        self._intermediate_path = None
+        self._reset_translator_for_job()
         media_path = Path(media).expanduser().resolve()
         lifecycle: list[JobState] = []
         selected_source: SubtitleCandidate | None = None
@@ -196,10 +252,12 @@ class JobRunner:
             candidates = discover_external_subtitles(media_path)
             selected_source = _select_source(candidates, source, media_path.parent)
             lifecycle.append(JobState.DISCOVERED)
+            self._raise_if_canceled()
 
             effective_source_language = source_language or selected_source.language
             no_op = languages_match(effective_source_language, configured_target)
             source_content = selected_source.path.read_bytes()
+            self._raise_if_canceled()
             if no_op:
                 delivered_content = source_content
             else:
@@ -208,7 +266,9 @@ class JobRunner:
                     selected_source.path,
                     configured_target,
                 )
+                self._raise_if_canceled()
 
+            self._raise_if_canceled()
             lifecycle.append(JobState.VALIDATING)
             validate_subtitle_pair(
                 source_content,
@@ -216,6 +276,7 @@ class JobRunner:
                 selected_source.subtitle_format,
             )
 
+            self._raise_if_canceled()
             lifecycle.append(JobState.PUBLISHING)
             published_path = _published_path(
                 media_path,
@@ -233,6 +294,19 @@ class JobRunner:
                 published_path=published_path,
                 no_op=no_op,
             )
+        except JobCanceled as error:
+            lifecycle.append(JobState.CANCELED)
+            return JobResult(
+                state=JobState.CANCELED,
+                lifecycle=tuple(lifecycle),
+                media=media_path,
+                target_language=configured_target,
+                source=selected_source,
+                published_path=None,
+                no_op=no_op,
+                error=str(error),
+                intermediate_path=self._intermediate_path,
+            )
         except (JobError, OSError, SubtitleValidationError) as error:
             lifecycle.append(JobState.FAILED)
             return JobResult(
@@ -244,6 +318,7 @@ class JobRunner:
                 published_path=None,
                 no_op=no_op,
                 error=str(error),
+                intermediate_path=self._intermediate_path,
             )
 
     def _translate(self, source: Path, target_language: str) -> bytes:
@@ -252,12 +327,26 @@ class JobRunner:
             if translator is None:
                 translator = PySubtransTranslator()
                 self._translator = translator
+            with self._state_lock:
+                self._active_translator = translator
+                canceled = self._cancel_requested.is_set()
+            if canceled:
+                raise JobCanceled("Job canceled")
             if callable(translator):
                 translated = translator(source, target_language)
             else:
                 translated = translator.translate(source, target_language)
         except Exception as error:
+            if isinstance(error, JobCanceled):
+                raise
+            if self._cancel_requested.is_set():
+                raise JobCanceled("Job canceled") from error
             raise TranslationFailed(f"Translation failed: {error}") from error
+        finally:
+            with self._state_lock:
+                self._active_translator = None
+            self._intermediate_path = _get_intermediate_path(translator)
+        self._raise_if_canceled()
         if isinstance(translated, (str, bytes, bytearray)):
             return (
                 translated.encode("utf-8")
@@ -275,6 +364,18 @@ class JobRunner:
             raise TranslationFailed(
                 "Translation provider returned an unreadable path"
             ) from error
+
+    def _raise_if_canceled(self) -> None:
+        if self._cancel_requested.is_set():
+            raise JobCanceled("Job canceled")
+
+    def _reset_translator_for_job(self) -> None:
+        translator = self._translator
+        if translator is None:
+            return
+        reset = getattr(translator, "reset_for_job", None)
+        if callable(reset):
+            reset()
 
 
 def _infer_language(suffix: str) -> str | None:
@@ -325,3 +426,14 @@ def _published_path(
     return media.with_name(
         f"{media.stem}.{language_tag(target_language)}{subtitle_format.extension}"
     )
+
+
+def _get_intermediate_path(
+    translator: Translator | TranslatorFunction | None,
+) -> Path | None:
+    if translator is None:
+        return None
+    path = getattr(translator, "intermediate_path", None)
+    if isinstance(path, (str, PathLike)):
+        return Path(path)
+    return None

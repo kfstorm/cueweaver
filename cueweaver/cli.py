@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from types import FrameType
 
 from .job import JobRunner, JobState
 
@@ -41,12 +43,34 @@ def main(
     if arguments and arguments[0] == "run":
         arguments = arguments[1:]
     args = build_parser().parse_args(arguments)
-    result = (runner or JobRunner()).run(
-        args.media,
-        target_language=args.target_language,
-        source=args.source,
-        source_language=args.source_language,
-    )
+    active_runner = runner or JobRunner()
+
+    def request_cancel(_signal_number: int, _frame: FrameType | None) -> None:
+        active_runner.cancel()
+
+    handler_installed = False
+    previous_handler = signal.getsignal(signal.SIGINT)
+    try:
+        signal.signal(signal.SIGINT, request_cancel)
+        handler_installed = True
+        result = active_runner.run(
+            args.media,
+            target_language=args.target_language,
+            source=args.source,
+            source_language=args.source_language,
+        )
+    finally:
+        if handler_installed:
+            signal.signal(signal.SIGINT, previous_handler)
+    if result.state is JobState.CANCELED:
+        print(f"Job canceled: {result.error}", file=sys.stderr)
+        print(
+            f"  lifecycle: {' -> '.join(state.value for state in result.lifecycle)}",
+            file=sys.stderr,
+        )
+        if result.intermediate_path is not None:
+            print(f"  intermediate: {result.intermediate_path}", file=sys.stderr)
+        return 1
     if result.state is JobState.FAILED:
         print(f"Job failed: {result.error}", file=sys.stderr)
         print(

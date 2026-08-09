@@ -6,6 +6,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any, ClassVar
 
 from PySubtrans import (
@@ -18,6 +19,10 @@ from PySubtrans import (
 
 class TranslationProviderConfigurationError(ValueError):
     """Raised when a provider outside the v0.1 scope is requested."""
+
+
+class TranslationCanceled(RuntimeError):
+    """Raised when PySubtrans stops because the active Job was canceled."""
 
 
 class PySubtransTranslator:
@@ -84,10 +89,33 @@ class PySubtransTranslator:
         self.endpoint = endpoint or os.environ.get("CUEWEAVER_TRANSLATION_ENDPOINT")
         if self.endpoint is None and self.provider == "Custom Server":
             self.endpoint = os.environ.get("CUSTOM_ENDPOINT")
+        self.intermediate_path: Path | None = None
+        self._cancel_requested = Event()
+        self._state_lock = Lock()
+        self._active_engine: SubtitleTranslator | None = None
+
+    def cancel(self) -> None:
+        """Stop the active PySubtrans request and retain its checkpoint."""
+
+        self._cancel_requested.set()
+        with self._state_lock:
+            engine = self._active_engine
+        if engine is not None:
+            engine.StopTranslating()
+
+    def reset_for_job(self) -> None:
+        """Clear cancellation from a previous terminal Job before a new one."""
+
+        with self._state_lock:
+            if self._active_engine is not None:
+                raise RuntimeError("Cannot reset an active translation")
+            self._cancel_requested.clear()
+            self.intermediate_path = None
 
     def translate(self, source: Path, target_language: str) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
+        self.intermediate_path = None
         source = Path(source).expanduser().resolve()
         working_source = _prepare_working_source(source, target_language)
         settings: dict[str, Any] = {
@@ -131,20 +159,44 @@ class PySubtransTranslator:
         )
         _disable_thinking(engine)
 
-        project.TranslateSubtitles(engine)
-        if engine.aborted:
-            raise RuntimeError("PySubtrans translation was aborted")
-        if engine.errors:
-            raise RuntimeError(
-                f"PySubtrans reported {len(engine.errors)} translation error(s)"
-            )
-        if not project.subtitles.all_translated:
-            raise RuntimeError("PySubtrans did not translate every subtitle")
+        with self._state_lock:
+            self._active_engine = engine
+            canceled = self._cancel_requested.is_set()
+        if canceled:
+            engine.StopTranslating()
 
-        with tempfile.TemporaryDirectory(prefix="cueweaver-translation-") as directory:
-            translated_path = Path(directory) / f"translated{source.suffix}"
-            project.subtitles.SaveTranslation(str(translated_path))
-            return translated_path.read_bytes()
+        def save_checkpoint(_sender: Any, **_kwargs: Any) -> None:
+            project.SaveProjectFile()
+
+        engine.events.batch_translated.connect(save_checkpoint, weak=False)
+        try:
+            project.TranslateSubtitles(engine)
+            if engine.aborted or self._cancel_requested.is_set():
+                raise TranslationCanceled("PySubtrans translation was canceled")
+            if engine.errors:
+                raise RuntimeError(
+                    f"PySubtrans reported {len(engine.errors)} translation error(s)"
+                )
+            if not project.subtitles.all_translated:
+                raise RuntimeError("PySubtrans did not translate every subtitle")
+
+            return _save_translation_bytes(project, source.suffix)
+        except Exception:
+            _discard_incomplete_batches(project)
+            if project.subtitles.any_translated:
+                self.intermediate_path = self._save_intermediate_result(
+                    project,
+                    working_source,
+                    target_language,
+                )
+            raise
+        finally:
+            try:
+                project.SaveProjectFile()
+            finally:
+                engine.events.batch_translated.disconnect(save_checkpoint)
+                with self._state_lock:
+                    self._active_engine = None
 
     @classmethod
     def _normalize_provider(cls, provider: str) -> str:
@@ -156,6 +208,18 @@ class PySubtransTranslator:
                 "Unsupported translation provider; v0.1 supports DeepSeek "
                 "and OpenAI-compatible providers"
             ) from error
+
+    def _save_intermediate_result(
+        self,
+        project: Any,
+        working_source: Path,
+        target_language: str,
+    ) -> Path:
+        intermediate_path = working_source.with_name(
+            f"{working_source.stem}.{target_language}.partial{working_source.suffix}"
+        )
+        project.subtitles.SaveTranslation(str(intermediate_path))
+        return intermediate_path
 
 
 def _disable_thinking(engine: SubtitleTranslator) -> None:
@@ -202,3 +266,22 @@ def _same_file_content(path: Path, expected: bytes) -> bool:
         return path.read_bytes() == expected
     except OSError:
         return False
+
+
+def _save_translation_bytes(project: Any, suffix: str) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="cueweaver-translation-") as directory:
+        translated_path = Path(directory) / f"translated{suffix}"
+        project.subtitles.SaveTranslation(str(translated_path))
+        return translated_path.read_bytes()
+
+
+def _discard_incomplete_batches(project: Any) -> None:
+    """Keep only complete batch anchors in a durable checkpoint."""
+
+    for scene in project.subtitles.scenes:
+        for batch in scene.batches:
+            if batch.all_translated and not batch.errors:
+                continue
+            batch.translated = []
+            batch.translation = None
+            batch.errors = []
