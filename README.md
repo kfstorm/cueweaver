@@ -44,3 +44,24 @@ The adapter also accepts PySubtrans's provider-native settings when present:
 ```bash
 uv run pytest
 ```
+
+## Development checks
+
+Install the development dependencies and the local Git hook:
+
+```bash
+uv sync --group dev
+uv run pre-commit install
+```
+
+Run every pre-commit check manually:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Run the quality checks without changing files:
+
+```bash
+./scripts/lint.sh --check
+```

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from os import PathLike
@@ -50,6 +51,9 @@ class Translator(Protocol):
         self, source: Path, target_language: str
     ) -> bytes | str | PathLike[str]:
         """Return translated subtitle content or a path containing it."""
+
+
+TranslatorFunction = Callable[[Path, str], bytes | str | PathLike[str]]
 
 
 @dataclass(frozen=True)
@@ -138,7 +142,7 @@ def normalize_language(value: str) -> str:
         return alias
     if _LANGUAGE_CODE.fullmatch(clean_value):
         return clean_value.replace("_", "-").casefold()
-    matches = _LANGUAGE_CODE_IN_TEXT.findall(clean_value)
+    matches: list[str] = _LANGUAGE_CODE_IN_TEXT.findall(clean_value)
     if len(matches) == 1:
         return matches[0].replace("_", "-").casefold()
     raise TargetLanguageRequired(f"Invalid Target language: {value!r}")
@@ -167,7 +171,7 @@ def language_tag(value: str) -> str:
 class JobRunner:
     """Run one Media through External Source selection and Publishing."""
 
-    def __init__(self, translator: Translator | object | None = None):
+    def __init__(self, translator: Translator | TranslatorFunction | None = None):
         self._translator = translator
 
     def run(

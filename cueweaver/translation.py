@@ -47,6 +47,11 @@ class PySubtransTranslator:
             "DeepSeek",
         )
         self.provider = self._normalize_provider(configured_provider)
+        self.api_key: str | None = None
+        self.model: str | None = None
+        self.api_base: str | None = None
+        self.server_address: str | None = None
+        self.endpoint: str | None = None
 
         if self.provider == "DeepSeek":
             self.api_key = api_key or os.environ.get(
