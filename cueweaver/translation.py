@@ -128,7 +128,9 @@ class PySubtransTranslator:
             "provider": self.provider,
             "target_language": target_language,
             "prompt": f"Translate these subtitles to {target_language}",
-            "description": context or None,
+            # An empty value must clear a persisted description when a resumed
+            # Job falls back to baseline translation after metadata degradation.
+            "description": context,
             "scene_threshold": 60.0,
             "min_batch_size": 10,
             "max_batch_size": 30,

@@ -5,6 +5,7 @@ from threading import Event, Thread
 from typing import ClassVar
 
 from cueweaver.job import JobRunner, JobState
+from cueweaver.metadata import MetadataCache
 from cueweaver.translation import PySubtransTranslator
 
 SRT = """1
@@ -205,6 +206,71 @@ def test_job_resume_skips_a_committed_batch_after_provider_interruption(tmp_path
         assert request_numbers[3][0] == "11"
         assert request_numbers[3][-1] == "31"
         assert sum("1" in numbers for numbers in request_numbers) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_resume_clears_stale_metadata_context_after_degradation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(srt_with_cues(31), encoding="utf-8")
+    server, thread = start_provider_server(fail_after_first_request=True)
+
+    class MetadataFixture:
+        def get_series_overview(self, series_id: str) -> str:
+            return "The stale series overview."
+
+        def get_episode_overview(
+            self, series_id: str, season_number: int, episode_number: int
+        ) -> str:
+            return "The stale episode overview."
+
+    translator = PySubtransTranslator(
+        provider="openai-compatible",
+        server_address=f"http://127.0.0.1:{server.server_port}",
+        endpoint="/v1/chat/completions",
+        model="fixture-model",
+    )
+
+    try:
+        first_result = JobRunner(
+            translator=translator,
+            metadata_provider=MetadataFixture(),
+            metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+        ).run(
+            media,
+            target_language="zh",
+            source=source,
+            series_id="1399",
+            season_number=1,
+            episode_number=2,
+        )
+
+        initial_prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[0]["messages"]
+        )
+        assert "The stale series overview." in initial_prompt
+        assert "The stale episode overview." in initial_prompt
+
+        ProviderFixtureHandler.fail_after_first_request = False
+        second_result = JobRunner(translator=translator).run(
+            media,
+            target_language="zh",
+            source=source,
+        )
+
+        assert first_result.state is JobState.FAILED
+        assert second_result.state is JobState.PUBLISHED
+        resumed_prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[-1]["messages"]
+        )
+        assert "The stale series overview." not in resumed_prompt
+        assert "The stale episode overview." not in resumed_prompt
     finally:
         server.shutdown()
         server.server_close()
