@@ -5,7 +5,7 @@ from threading import Event, Thread
 from typing import ClassVar
 
 from cueweaver.job import JobRunner, JobState
-from cueweaver.metadata import MetadataCache
+from cueweaver.metadata import Glossary, MetadataCache, Term
 from cueweaver.translation import PySubtransTranslator
 
 SRT = """1
@@ -149,6 +149,72 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path):
         assert "fixture scene 1" in second_prompt
         assert ProviderFixtureHandler.requests[0]["thinking"] == {"type": "disabled"}
         assert ProviderFixtureHandler.requests[0]["model"] == "fixture-model"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_job_seeds_pysubtrans_with_metadata_glossary_and_keeps_dynamic_learning(
+    tmp_path,
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server()
+
+    class MetadataGlossary:
+        def get_series_overview(self, series_id: str) -> str:
+            return "Series overview"
+
+        def get_episode_overview(
+            self, series_id: str, season_number: int, episode_number: int
+        ) -> str:
+            return "Episode overview"
+
+        def get_glossary(self, series_id: str, target_language: str) -> Glossary:
+            return Glossary.from_terms(
+                [
+                    Term(
+                        source="Jon Snow",
+                        target="琼恩·雪诺",
+                        provider="wikidata",
+                        source_url="https://www.wikidata.org/wiki/Q1",
+                        entity_id="Q1",
+                    )
+                ]
+            )
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+        result = JobRunner(
+            translator=translator,
+            metadata_provider=MetadataGlossary(),
+            metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+        ).run(
+            media,
+            target_language="zh",
+            source=source,
+            series_id="1399",
+            season_number=1,
+            episode_number=1,
+        )
+
+        assert result.state is JobState.PUBLISHED
+        prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[0]["messages"]
+        )
+        assert "Jon Snow" in prompt
+        assert "琼恩·雪诺" in prompt
+        assert result.published_path is not None
+        assert result.published_path.read_text(encoding="utf-8").count("你好") == 2
     finally:
         server.shutdown()
         server.server_close()

@@ -16,6 +16,8 @@ from .job import (
     rank_subtitle_candidates,
 )
 from .metadata import (
+    Glossary,
+    GlossaryProvider,
     MetadataCache,
     MetadataConfigurationError,
     MetadataContext,
@@ -23,13 +25,19 @@ from .metadata import (
     MetadataProvider,
     MetadataProviderError,
     MetadataRequest,
+    SeriesWikidataIdentifierProvider,
+    Term,
+    TermPriority,
     TMDbMetadataProvider,
+    WikidataGlossaryProvider,
 )
 from .translation import PySubtransTranslator
 
 __all__ = [
     "DiscoveryFailed",
     "ExtractionFailed",
+    "Glossary",
+    "GlossaryProvider",
     "JobResult",
     "JobRunner",
     "JobState",
@@ -42,9 +50,13 @@ __all__ = [
     "MetadataRequest",
     "PySubtransTranslator",
     "SeconvExtractor",
+    "SeriesWikidataIdentifierProvider",
     "SubtitleCandidate",
     "SubtitleSubtype",
     "TMDbMetadataProvider",
+    "Term",
+    "TermPriority",
+    "WikidataGlossaryProvider",
     "discover_embedded_subtitles",
     "discover_external_subtitles",
     "discover_media_primary_language",

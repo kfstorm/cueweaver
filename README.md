@@ -38,6 +38,17 @@ For an already-published degraded Job, `JobRunner.retry_metadata` refreshes the
 metadata cache without invoking translation again or changing the published
 baseline artifact.
 
+The same metadata stage builds an automatic Glossary from series-linked
+Wikidata entities in the configured Target language. It includes only
+structured entity evidence for characters, organizations/factions, locations,
+and species, and records each Term's provider, source URL, and entity ID.
+Missing target labels may use an exact structured Wikipedia `langlinks`/
+`pageprops` lookup; article prose, tables, and subtitle content are never
+scraped. Ambiguous or unsupported mappings are dropped, so a series with no
+usable relations continues with an empty Glossary and baseline translation.
+Glossary Terms are cached at the same series scope and seeded into PySubtrans;
+dynamic terminology learning remains enabled for uncovered terms.
+
 If the Source language already matches the Target language, the Job skips the
 translator, validates the subtitle structure, and atomically publishes the
 result beside the Media. SRT, ASS, and VTT are supported. A non-Target-language

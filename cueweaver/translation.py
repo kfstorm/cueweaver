@@ -16,6 +16,8 @@ from PySubtrans import (
     init_translation_provider,
 )
 
+from .metadata import Glossary
+
 
 class TranslationProviderConfigurationError(ValueError):
     """Raised when a provider outside the v0.1 scope is requested."""
@@ -118,6 +120,7 @@ class PySubtransTranslator:
         target_language: str,
         *,
         context: str = "",
+        glossary: Glossary | None = None,
     ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
@@ -160,11 +163,19 @@ class PySubtransTranslator:
         )
         project.write_translation = False
         provider = init_translation_provider(self.provider, options)
+        persisted_terminology = getattr(project.subtitles, "terminology_map", None)
+        terminology_map = (
+            dict(persisted_terminology)
+            if isinstance(persisted_terminology, dict)
+            else {}
+        )
+        if glossary is not None:
+            terminology_map.update(glossary.mapping)
         engine = SubtitleTranslator(
             options,
             provider,
             resume=True,
-            terminology_map=getattr(project.subtitles, "terminology_map", None) or {},
+            terminology_map=terminology_map,
         )
         _disable_thinking(engine)
 

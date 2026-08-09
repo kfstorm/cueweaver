@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from os import PathLike
 from os import replace as atomic_replace
@@ -19,12 +19,16 @@ from threading import Event, Lock
 from typing import Protocol, cast, runtime_checkable
 
 from .metadata import (
+    Glossary,
+    GlossaryProvider,
     MetadataCache,
     MetadataContext,
     MetadataError,
     MetadataProvider,
     MetadataRequest,
+    SeriesWikidataIdentifierProvider,
     TMDbMetadataProvider,
+    WikidataGlossaryProvider,
 )
 from .publishing import publish_atomically
 from .subtitles import (
@@ -84,8 +88,9 @@ class Translator(Protocol):
         target_language: str,
         *,
         context: str = "",
+        glossary: Glossary | None = None,
     ) -> bytes | str | PathLike[str]:
-        """Return translated subtitle content or a path containing it."""
+        """Return translated subtitle content, optionally seeded by a Glossary."""
 
 
 TranslatorFunction = Callable[[Path, str], bytes | str | PathLike[str]]
@@ -234,6 +239,7 @@ class JobResult:
     context: str = ""
     metadata_degradation: str | None = None
     metadata_request: MetadataRequest | None = None
+    glossary: Glossary = field(default_factory=Glossary)
 
     @property
     def status(self) -> str:
@@ -555,6 +561,7 @@ class JobRunner:
         translator: Translator | TranslatorFunction | None = None,
         *,
         metadata_provider: MetadataProvider | None = None,
+        glossary_provider: GlossaryProvider | None = None,
         metadata_cache: MetadataCache | PathLike[str] | str | None = None,
         extractor: SubtitleExtractor | None = None,
         source_selector: Callable[
@@ -568,6 +575,7 @@ class JobRunner:
     ):
         self._translator = translator
         self._metadata_provider = metadata_provider
+        self._glossary_provider = glossary_provider
         self._metadata_cache = (
             metadata_cache
             if isinstance(metadata_cache, MetadataCache)
@@ -586,7 +594,7 @@ class JobRunner:
         self._state_lock = Lock()
         self._cancel_requested = Event()
         self._active_translator: Translator | TranslatorFunction | None = None
-        self._active_metadata_provider: MetadataProvider | None = None
+        self._active_metadata_provider: object | None = None
         self._intermediate_path: Path | None = None
         self._translated_content: bytes | None = None
 
@@ -711,11 +719,13 @@ class JobRunner:
 
         context = self._gather_metadata(
             result.metadata_request,
+            target_language=result.target_language or "",
             refresh=True,
         )
         return replace(
             result,
             context=context.text,
+            glossary=context.glossary,
             metadata_degradation=context.degradation,
         )
 
@@ -794,6 +804,7 @@ class JobRunner:
                     lifecycle.append(JobState.METADATA)
                     metadata_context = self._gather_metadata(
                         metadata_request,
+                        target_language=configured_target,
                         refresh=refresh_metadata,
                     )
                     self._raise_if_canceled()
@@ -802,6 +813,11 @@ class JobRunner:
                     source_path,
                     configured_target,
                     context=(metadata_context.text if metadata_context else ""),
+                    glossary=(
+                        metadata_context.glossary
+                        if metadata_context is not None
+                        else Glossary()
+                    ),
                 )
                 self._raise_if_canceled()
 
@@ -841,6 +857,11 @@ class JobRunner:
                     metadata_context.degradation if metadata_context else None
                 ),
                 metadata_request=metadata_request,
+                glossary=(
+                    metadata_context.glossary
+                    if metadata_context is not None
+                    else Glossary()
+                ),
             )
         except (JobCanceled, JobError, OSError, SubtitleValidationError) as error:
             terminal_state = (
@@ -863,20 +884,33 @@ class JobRunner:
                     metadata_context.degradation if metadata_context else None
                 ),
                 metadata_request=metadata_request,
+                glossary=(
+                    metadata_context.glossary
+                    if metadata_context is not None
+                    else Glossary()
+                ),
             )
 
     def _gather_metadata(
         self,
         request: MetadataRequest,
         *,
+        target_language: str,
         refresh: bool,
     ) -> MetadataContext:
         provider = self._metadata_provider or TMDbMetadataProvider()
+        glossary_provider = self._resolve_glossary_provider(provider)
         cache = self._metadata_cache or MetadataCache(_default_metadata_cache_path())
         series_overview: str | None = None
         episode_overview: str | None = None
+        glossary: Glossary | None = None
+        degradation: list[str] = []
+        context_failed = False
+        glossary_cached = False
         if not refresh:
             series_overview, episode_overview = cache.load(request)
+            glossary = cache.load_glossary(request, target_language)
+            glossary_cached = glossary is not None
 
         try:
             with self._state_lock:
@@ -909,19 +943,83 @@ class JobRunner:
         except (MetadataError, OSError) as error:
             if self._cancel_requested.is_set():
                 raise JobCanceled("Job canceled") from error
-            return MetadataContext(
-                request=request,
-                degradation=f"Metadata degraded: {error}",
-            )
+            context_failed = True
+            degradation.append(f"Metadata degraded: {error}")
         finally:
             with self._state_lock:
                 self._active_metadata_provider = None
+
+        if (
+            glossary is None
+            and glossary_provider is not None
+            and (
+                not context_failed
+                or self._glossary_provider is not None
+                or series_overview is not None
+            )
+        ):
+            try:
+                with self._state_lock:
+                    self._active_metadata_provider = glossary_provider
+                self._raise_if_canceled()
+                glossary = _fetch_metadata_glossary(
+                    glossary_provider,
+                    request.series_id,
+                    target_language,
+                )
+                cache.store_glossary(
+                    request,
+                    glossary,
+                    target_language=target_language,
+                )
+                if glossary.is_empty:
+                    degradation.append("Glossary degraded: no usable series Terms")
+                self._raise_if_canceled()
+            except JobCanceled:
+                raise
+            except (MetadataError, OSError) as error:
+                if self._cancel_requested.is_set():
+                    raise JobCanceled("Job canceled") from error
+                degradation.append(f"Glossary degraded: {error}")
+            finally:
+                with self._state_lock:
+                    self._active_metadata_provider = None
+
+        if glossary_cached and glossary is not None and glossary.is_empty:
+            degradation.append("Glossary degraded: no usable series Terms")
 
         return MetadataContext(
             request=request,
             series_overview=series_overview or "",
             episode_overview=episode_overview or "",
+            glossary=glossary or Glossary(),
+            degradation="; ".join(degradation) or None,
         )
+
+    def _resolve_glossary_provider(
+        self,
+        metadata_provider: MetadataProvider,
+    ) -> GlossaryProvider | None:
+        if self._glossary_provider is not None:
+            return self._glossary_provider
+        get_glossary = getattr(metadata_provider, "get_glossary", None)
+        if callable(get_glossary):
+            return cast(GlossaryProvider, metadata_provider)
+        get_series_wikidata_id = getattr(
+            metadata_provider,
+            "get_series_wikidata_id",
+            None,
+        )
+        if callable(get_series_wikidata_id):
+            return WikidataGlossaryProvider(
+                series_identity_provider=cast(
+                    SeriesWikidataIdentifierProvider,
+                    metadata_provider,
+                )
+            )
+        if self._metadata_provider is None:
+            return WikidataGlossaryProvider()
+        return None
 
     def _extract_source(self, media: Path, candidate: SubtitleCandidate) -> Path:
         destination = _extraction_cache_path(media, candidate)
@@ -948,6 +1046,7 @@ class JobRunner:
         target_language: str,
         *,
         context: str = "",
+        glossary: Glossary | None = None,
     ) -> bytes:
         try:
             translator = self._translator
@@ -964,6 +1063,7 @@ class JobRunner:
                 source,
                 target_language,
                 context=context,
+                glossary=glossary or Glossary(),
             )
         except Exception as error:
             if isinstance(error, JobCanceled):
@@ -1007,12 +1107,13 @@ class JobRunner:
             reset()
 
     def _reset_metadata_provider_for_job(self) -> None:
-        provider = self._metadata_provider
-        if provider is None:
-            return
-        reset = getattr(provider, "reset_for_job", None)
-        if callable(reset):
-            reset()
+        providers = (self._metadata_provider, self._glossary_provider)
+        for provider in providers:
+            if provider is None:
+                continue
+            reset = getattr(provider, "reset_for_job", None)
+            if callable(reset):
+                reset()
 
 
 def _metadata_request(
@@ -1061,29 +1162,49 @@ def _validate_metadata_overview(value: object, label: str) -> str:
     return value
 
 
+def _fetch_metadata_glossary(
+    provider: GlossaryProvider,
+    series_id: str,
+    target_language: str,
+) -> Glossary:
+    try:
+        value = provider.get_glossary(series_id, target_language)
+    except JobCanceled:
+        raise
+    except Exception as error:
+        raise MetadataError(str(error)) from error
+    if not isinstance(value, Glossary):
+        raise MetadataError("Glossary provider returned an invalid Glossary")
+    return value
+
+
 def _call_translator(
     translator: Translator | TranslatorFunction,
     source: Path,
     target_language: str,
     *,
     context: str,
+    glossary: Glossary,
 ) -> bytes | str | PathLike[str]:
     method = cast(
         Callable[..., bytes | str | PathLike[str]],
         translator if callable(translator) else translator.translate,
     )
-    if _accepts_context(method):
-        return method(source, target_language, context=context)
-    return method(source, target_language)
+    kwargs: dict[str, object] = {}
+    if _accepts_parameter(method, "context"):
+        kwargs["context"] = context
+    if _accepts_parameter(method, "glossary"):
+        kwargs["glossary"] = glossary
+    return method(source, target_language, **kwargs)
 
 
-def _accepts_context(method: Callable[..., object]) -> bool:
+def _accepts_parameter(method: Callable[..., object], name: str) -> bool:
     try:
         parameters = inspect.signature(method).parameters.values()
     except (TypeError, ValueError):
         return False
     return any(
-        parameter.name == "context" or parameter.kind is parameter.VAR_KEYWORD
+        parameter.name == name or parameter.kind is parameter.VAR_KEYWORD
         for parameter in parameters
     )
 
