@@ -3,6 +3,7 @@
 # Public result API.
 JobResult.status
 JobRunner.publish_intermediate
+JobRunner.retry_publishing
 
 # PySubtrans project attributes are accessed dynamically.
 _.write_translation

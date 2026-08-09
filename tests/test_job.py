@@ -3,6 +3,7 @@ from threading import Event, Thread
 
 import pytest
 
+from cueweaver import publishing
 from cueweaver.job import JobError, JobRunner, JobState
 
 SRT = """1
@@ -326,6 +327,13 @@ Wrong timing
         """
 
 
+class IncompleteTranslator:
+    def translate(self, source: Path, target_language: str) -> str:
+        return """1
+00:00:01,000 --> 00:00:02,000
+"""
+
+
 class FailingTranslator:
     def translate(self, source: Path, target_language: str) -> str:
         raise RuntimeError("provider unavailable")
@@ -373,6 +381,27 @@ def test_validation_failure_does_not_replace_existing_published_artifact(tmp_pat
     assert destination.read_text(encoding="utf-8") == "previous complete artifact"
 
 
+def test_incomplete_translation_fails_before_creating_a_media_artifact(tmp_path):
+    media, source = create_media_and_source(tmp_path)
+    destination = tmp_path / "Movie.zh.srt"
+
+    result = JobRunner(translator=IncompleteTranslator()).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.FAILED,
+    )
+    assert result.translated_content == (b"1\n00:00:01,000 --> 00:00:02,000\n")
+    assert not destination.exists()
+
+
 def test_job_publishing_replaces_an_existing_artifact_as_one_complete_write(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.zh.srt"
@@ -390,3 +419,51 @@ def test_job_publishing_replaces_an_existing_artifact_as_one_complete_write(tmp_
     assert result.state is JobState.PUBLISHED
     assert destination.read_text(encoding="utf-8") == SRT
     assert list(tmp_path.glob(f".{destination.name}.*.tmp")) == []
+
+
+def test_atomic_publishing_failure_is_recoverable_at_the_job_boundary(
+    tmp_path, monkeypatch
+):
+    media, source = create_media_and_source(tmp_path)
+    destination = tmp_path / "Movie.zh.srt"
+    destination.write_text("previous complete artifact", encoding="utf-8")
+    translated = """1
+00:00:01,000 --> 00:00:02,000
+你好
+"""
+    provider = ProviderContractFixture(translated)
+    real_replace = publishing.os.replace
+    replace_attempts = 0
+
+    def fail_first_replace(temporary_path, final_path):
+        nonlocal replace_attempts
+        replace_attempts += 1
+        if replace_attempts == 1:
+            raise OSError("disk full")
+        return real_replace(temporary_path, final_path)
+
+    monkeypatch.setattr("cueweaver.publishing.os.replace", fail_first_replace)
+    runner = JobRunner(translator=provider)
+
+    failed = runner.run(media, target_language="zh", source=source)
+
+    assert failed.state is JobState.FAILED
+    assert failed.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.PUBLISHING,
+        JobState.FAILED,
+    )
+    assert failed.intermediate_path is not None
+    assert failed.intermediate_path.read_text(encoding="utf-8") == translated
+    assert destination.read_text(encoding="utf-8") == "previous complete artifact"
+    assert provider.calls == [(source, "zh")]
+
+    retried = runner.retry_publishing(failed)
+
+    assert retried.state is JobState.PUBLISHED
+    assert retried.published_path == destination
+    assert destination.read_text(encoding="utf-8") == translated
+    assert provider.calls == [(source, "zh")]
+    assert failed.intermediate_path.exists() is False

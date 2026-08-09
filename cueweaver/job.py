@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from os import PathLike
+from os import replace as atomic_replace
 from pathlib import Path
 from threading import Event, Lock
 from typing import Protocol, runtime_checkable
@@ -81,6 +83,7 @@ class JobResult:
     no_op: bool
     error: str | None = None
     intermediate_path: Path | None = None
+    translated_content: bytes | None = None
 
     @property
     def status(self) -> str:
@@ -185,6 +188,7 @@ class JobRunner:
         self._cancel_requested = Event()
         self._active_translator: Translator | TranslatorFunction | None = None
         self._intermediate_path: Path | None = None
+        self._translated_content: bytes | None = None
 
     def cancel(self) -> None:
         """Cancel the active Job without publishing its partial translation."""
@@ -227,6 +231,67 @@ class JobRunner:
         )
         return publish_atomically(content, destination)
 
+    def retry_publishing(self, result: JobResult) -> JobResult:
+        """Retry Publishing for a failed Job without translating again."""
+
+        if (
+            result.state is not JobState.FAILED
+            or JobState.PUBLISHING not in result.lifecycle
+        ):
+            raise JobError("Only a Publishing failure can be retried")
+        if (
+            result.source is None
+            or result.target_language is None
+            or (result.intermediate_path is None and result.translated_content is None)
+        ):
+            raise JobError("Job has no translated result to republish")
+
+        retry_lifecycle = (*result.lifecycle, JobState.PUBLISHING)
+        staged_path = result.intermediate_path
+        try:
+            content = result.translated_content
+            if content is None:
+                assert staged_path is not None
+                content = staged_path.read_bytes()
+            self._translated_content = content
+            validate_subtitle_pair(
+                result.source.path.read_bytes(),
+                content,
+                result.source.subtitle_format,
+            )
+            destination = _published_path(
+                result.media,
+                result.target_language,
+                result.source.subtitle_format,
+            )
+            if staged_path is None:
+                staged_path = _stage_translation(content, destination)
+            self._intermediate_path = staged_path
+            publish_atomically(content, destination)
+        except (OSError, SubtitleValidationError) as error:
+            self._intermediate_path = staged_path
+            return replace(
+                result,
+                lifecycle=(*retry_lifecycle, JobState.FAILED),
+                error=str(error),
+                intermediate_path=staged_path,
+                translated_content=content,
+            )
+
+        if staged_path is not None:
+            _discard_staged_translation(staged_path)
+        self._intermediate_path = None
+        self._translated_content = None
+        return replace(
+            result,
+            state=JobState.PUBLISHED,
+            lifecycle=(*retry_lifecycle, JobState.PUBLISHED),
+            published_path=destination,
+            error=None,
+            intermediate_path=None,
+            translated_content=None,
+        )
+
     def run(
         self,
         media: PathLike[str] | str,
@@ -237,6 +302,7 @@ class JobRunner:
     ) -> JobResult:
         self._cancel_requested.clear()
         self._intermediate_path = None
+        self._translated_content = None
         self._reset_translator_for_job()
         media_path = Path(media).expanduser().resolve()
         lifecycle: list[JobState] = []
@@ -268,6 +334,7 @@ class JobRunner:
                 )
                 self._raise_if_canceled()
 
+            self._translated_content = delivered_content
             self._raise_if_canceled()
             lifecycle.append(JobState.VALIDATING)
             validate_subtitle_pair(
@@ -283,7 +350,12 @@ class JobRunner:
                 configured_target,
                 selected_source.subtitle_format,
             )
+            staged_path = _stage_translation(delivered_content, published_path)
+            self._intermediate_path = staged_path
             publish_atomically(delivered_content, published_path)
+            _discard_staged_translation(staged_path)
+            self._intermediate_path = None
+            self._translated_content = None
             lifecycle.append(JobState.PUBLISHED)
             return JobResult(
                 state=JobState.PUBLISHED,
@@ -306,6 +378,7 @@ class JobRunner:
                 no_op=no_op,
                 error=str(error),
                 intermediate_path=self._intermediate_path,
+                translated_content=self._translated_content,
             )
         except (JobError, OSError, SubtitleValidationError) as error:
             lifecycle.append(JobState.FAILED)
@@ -319,6 +392,7 @@ class JobRunner:
                 no_op=no_op,
                 error=str(error),
                 intermediate_path=self._intermediate_path,
+                translated_content=self._translated_content,
             )
 
     def _translate(self, source: Path, target_language: str) -> bytes:
@@ -437,3 +511,36 @@ def _get_intermediate_path(
     if isinstance(path, (str, PathLike)):
         return Path(path)
     return None
+
+
+def _stage_translation(content: bytes, destination: Path) -> Path:
+    """Persist a complete translation outside the Media directory for retry."""
+
+    work_directory = destination.parent / ".cueweaver" / "publishing"
+    work_directory.mkdir(parents=True, exist_ok=True)
+    staged_path = work_directory / f"{destination.name}.pending"
+    temporary_path: Path | None = None
+    try:
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{staged_path.name}.",
+            suffix=".tmp",
+            dir=work_directory,
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(file_descriptor, "wb") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        atomic_replace(temporary_path, staged_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return staged_path
+
+
+def _discard_staged_translation(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
