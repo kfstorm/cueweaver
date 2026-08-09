@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from cueweaver.cli import main
-from cueweaver.job import JobResult, JobState
+from cueweaver.job import JobResult, JobState, SubtitleCandidate, SubtitleFormat
 
 SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -136,3 +136,48 @@ def test_terminal_flow_prompts_for_ambiguous_sources_and_marks_bitmap_disabled(
     assert "I/O cost 0" in captured.out
     assert "disabled; needs Subtitle OCR" in captured.out
     assert "source: Movie.fr.srt" in captured.out
+
+
+def test_terminal_flow_surfaces_metadata_degradation_for_a_published_baseline(
+    tmp_path, capsys
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    published = tmp_path / "Movie.zh.srt"
+    candidate = SubtitleCandidate(
+        path=source,
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+    )
+
+    class DegradedRunner:
+        def run(self, media, *, target_language, source, source_language):
+            return JobResult(
+                state=JobState.PUBLISHED,
+                lifecycle=(
+                    JobState.DISCOVERED,
+                    JobState.METADATA,
+                    JobState.TRANSLATING,
+                    JobState.VALIDATING,
+                    JobState.PUBLISHING,
+                    JobState.PUBLISHED,
+                ),
+                media=media,
+                target_language=target_language,
+                source=candidate,
+                published_path=published,
+                no_op=False,
+                metadata_degradation="Metadata degraded: TMDb API key is missing",
+            )
+
+    exit_code = main(
+        ["run", str(media), "--target-language", "zh"],
+        runner=DegradedRunner(),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Job published" in captured.out
+    assert "metadata: degraded: Metadata degraded: TMDb API key is missing" in (
+        captured.err
+    )

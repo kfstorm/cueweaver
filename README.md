@@ -25,6 +25,19 @@ Sources are listed as disabled because Subtitle OCR is outside v0.1. Set
 Use `--language-priority en,ja` or `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` to
 break same-cost Source ties without content sniffing.
 
+For an episode Job, pass `--tmdb-series-id`, `--season`, and `--episode` to
+gather the full TMDb series and episode overviews as Context before
+translation. Set `CUEWEAVER_TMDB_API_KEY` (or `TMDB_API_KEY`) for TMDb access.
+Successful Context is cached by series ID in the long-lived user cache at
+`$XDG_CACHE_HOME/cueweaver/metadata` or `~/.cache/cueweaver/metadata`; set
+`CUEWEAVER_METADATA_CACHE` to choose another location. The cache has no expiry
+or polling. Use `--refresh-metadata` for an explicit refresh. A missing key or
+provider failure is reported as a metadata degradation hint and the Job
+continues with baseline translation and an empty Context.
+For an already-published degraded Job, `JobRunner.retry_metadata` refreshes the
+metadata cache without invoking translation again or changing the published
+baseline artifact.
+
 If the Source language already matches the Target language, the Job skips the
 translator, validates the subtitle structure, and atomically publishes the
 result beside the Media. SRT, ASS, and VTT are supported. A non-Target-language

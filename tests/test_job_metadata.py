@@ -1,0 +1,465 @@
+import io
+import json
+from pathlib import Path
+from threading import Event, Thread
+
+from cueweaver.job import JobRunner, JobState
+from cueweaver.metadata import MetadataCache, TMDbMetadataProvider
+
+SRT = """1
+00:00:01,000 --> 00:00:02,000
+Hello
+"""
+
+
+TRANSLATED = """1
+00:00:01,000 --> 00:00:02,000
+你好
+"""
+
+
+class MetadataFixture:
+    def __init__(self) -> None:
+        self.series_calls: list[str] = []
+        self.episode_calls: list[tuple[str, int, int]] = []
+        self.series_overview = "The complete series overview."
+        self.episode_overview = "The complete episode overview."
+
+    def get_series_overview(self, series_id: str) -> str:
+        self.series_calls.append(series_id)
+        return self.series_overview
+
+    def get_episode_overview(
+        self, series_id: str, season_number: int, episode_number: int
+    ) -> str:
+        self.episode_calls.append((series_id, season_number, episode_number))
+        return self.episode_overview
+
+
+class ContextTranslator:
+    def __init__(self) -> None:
+        self.contexts: list[str] = []
+
+    def translate(
+        self, source: Path, target_language: str, *, context: str = ""
+    ) -> str:
+        self.contexts.append(context)
+        return TRANSLATED
+
+
+class FailingMetadata:
+    def get_series_overview(self, series_id: str) -> str:
+        raise RuntimeError("TMDb is unavailable")
+
+    def get_episode_overview(
+        self, series_id: str, season_number: int, episode_number: int
+    ) -> str:
+        raise AssertionError("episode metadata should not be requested")
+
+
+class RetryableMetadata(MetadataFixture):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail = True
+
+    def get_series_overview(self, series_id: str) -> str:
+        if self.fail:
+            raise RuntimeError("temporary TMDb outage")
+        return super().get_series_overview(series_id)
+
+
+class BlockingMetadata:
+    def __init__(self) -> None:
+        self.started = Event()
+        self.released = Event()
+        self.cancelled = False
+
+    def get_series_overview(self, series_id: str) -> str:
+        self.started.set()
+        assert self.released.wait(timeout=5)
+        return "unused series overview"
+
+    def get_episode_overview(
+        self, series_id: str, season_number: int, episode_number: int
+    ) -> str:
+        return "unused episode overview"
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self.released.set()
+
+
+class JsonResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+
+def run_metadata_job(
+    media,
+    source,
+    metadata,
+    cache,
+    *,
+    translator=None,
+    season_number=1,
+    episode_number=2,
+    refresh_metadata=False,
+):
+    return JobRunner(
+        translator=translator or ContextTranslator(),
+        metadata_provider=metadata,
+        metadata_cache=cache,
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=season_number,
+        episode_number=episode_number,
+        refresh_metadata=refresh_metadata,
+    )
+
+
+def start_metadata_job(runner, media, source):
+    results = []
+    thread = Thread(
+        target=lambda: results.append(
+            runner.run(
+                media,
+                target_language="zh",
+                source=source,
+                series_id="1399",
+                season_number=1,
+                episode_number=2,
+            )
+        )
+    )
+    thread.start()
+    return results, thread
+
+
+def create_metadata_fixture(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    return media, source
+
+
+def test_metadata_context_is_gathered_before_translation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    metadata = MetadataFixture()
+    translator = ContextTranslator()
+
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.METADATA,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.PUBLISHING,
+        JobState.PUBLISHED,
+    )
+    assert metadata.series_calls == ["1399"]
+    assert metadata.episode_calls == [("1399", 1, 2)]
+    assert translator.contexts == [
+        (
+            "TMDb series overview:\nThe complete series overview.\n\n"
+            "TMDb episode overview (S01E02):\nThe complete episode overview."
+        )
+    ]
+    assert result.context == translator.contexts[0]
+    assert result.metadata_degradation is None
+
+
+def test_tmdb_provider_returns_full_series_and_episode_overviews(monkeypatch):
+    requests = []
+    responses = iter(
+        [
+            {"overview": "full series overview"},
+            {"overview": "full episode overview"},
+        ]
+    )
+
+    def urlopen(request, *, timeout):
+        requests.append((request, timeout))
+        return JsonResponse(json.dumps(next(responses)).encode("utf-8"))
+
+    monkeypatch.setattr("cueweaver.metadata.urllib.request.urlopen", urlopen)
+    provider = TMDbMetadataProvider(
+        api_key="tmdb-key",
+        base_url="https://tmdb.test/3",
+    )
+
+    series_overview = provider.get_series_overview("1399")
+    episode_overview = provider.get_episode_overview("1399", 1, 2)
+
+    assert series_overview == "full series overview"
+    assert episode_overview == "full episode overview"
+    assert len(requests) == 2
+    assert "/tv/1399?language=en-US&api_key=tmdb-key" in requests[0][0].full_url
+    assert "/tv/1399/season/1/episode/2?language=en-US&api_key=tmdb-key" in (
+        requests[1][0].full_url
+    )
+    assert requests[0][1] == 30.0
+
+
+def test_metadata_cache_reuses_series_context_across_episodes_and_jobs(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = MetadataFixture()
+    cache = MetadataCache(tmp_path / "metadata-cache")
+
+    first = run_metadata_job(media, source, metadata, cache)
+    second = run_metadata_job(
+        media,
+        source,
+        metadata,
+        cache,
+        season_number=2,
+        episode_number=1,
+    )
+    third = run_metadata_job(media, source, metadata, cache)
+
+    assert first.state is JobState.PUBLISHED
+    assert second.state is JobState.PUBLISHED
+    assert third.state is JobState.PUBLISHED
+    assert metadata.series_calls == ["1399"]
+    assert metadata.episode_calls == [
+        ("1399", 1, 2),
+        ("1399", 2, 1),
+    ]
+
+
+def test_manual_metadata_refresh_bypasses_the_long_lived_cache(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = MetadataFixture()
+    cache = MetadataCache(tmp_path / "metadata-cache")
+
+    first = run_metadata_job(media, source, metadata, cache)
+    metadata.series_overview = "The refreshed series overview."
+    metadata.episode_overview = "The refreshed episode overview."
+    translator = ContextTranslator()
+    refreshed = run_metadata_job(
+        media,
+        source,
+        metadata,
+        cache,
+        translator=translator,
+        refresh_metadata=True,
+    )
+
+    assert first.state is JobState.PUBLISHED
+    assert refreshed.state is JobState.PUBLISHED
+    assert metadata.series_calls == ["1399", "1399"]
+    assert metadata.episode_calls == [("1399", 1, 2), ("1399", 1, 2)]
+    assert translator.contexts == [
+        (
+            "TMDb series overview:\nThe refreshed series overview.\n\n"
+            "TMDb episode overview (S01E02):\nThe refreshed episode overview."
+        )
+    ]
+
+
+def test_missing_tmdb_credentials_degrade_to_baseline_translation(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    monkeypatch.delenv("CUEWEAVER_TMDB_API_KEY", raising=False)
+    monkeypatch.delenv("TMDB_API_KEY", raising=False)
+    translator = ContextTranslator()
+
+    result = JobRunner(
+        translator=translator,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.metadata_degradation is not None
+    assert "TMDb API key is missing" in result.metadata_degradation
+    assert result.context == ""
+    assert translator.contexts == [""]
+    assert result.published_path is not None
+    assert result.published_path.read_text(encoding="utf-8") == TRANSLATED
+
+
+def test_metadata_refresh_requires_a_series_identifier_at_the_job_boundary(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+
+    result = JobRunner(translator=ContextTranslator()).run(
+        media,
+        target_language="zh",
+        source=source,
+        refresh_metadata=True,
+    )
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (JobState.FAILED,)
+    assert result.error == (
+        "A TMDb series ID is required with season, episode, or metadata refresh"
+    )
+
+
+def test_metadata_provider_failure_is_visible_without_blocking_translation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    translator = ContextTranslator()
+
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=FailingMetadata(),
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.metadata_degradation == "Metadata degraded: TMDb is unavailable"
+    assert translator.contexts == [""]
+
+
+def test_metadata_retry_refreshes_context_without_repeating_translation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    metadata = RetryableMetadata()
+    translator = ContextTranslator()
+    runner = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    )
+
+    first = runner.run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+    )
+    metadata.fail = False
+    retried = runner.retry_metadata(first)
+
+    assert first.state is JobState.PUBLISHED
+    assert first.metadata_degradation == "Metadata degraded: temporary TMDb outage"
+    assert retried.state is JobState.PUBLISHED
+    assert retried.metadata_degradation is None
+    assert retried.context == (
+        "TMDb series overview:\nThe complete series overview.\n\n"
+        "TMDb episode overview (S01E02):\nThe complete episode overview."
+    )
+    assert translator.contexts == [""]
+    assert retried.published_path is not None
+    assert retried.published_path.read_text(encoding="utf-8") == TRANSLATED
+
+
+def test_cancel_during_metadata_is_terminal_and_never_starts_translation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    metadata = BlockingMetadata()
+    translator = ContextTranslator()
+    runner = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    )
+    results, thread = start_metadata_job(runner, media, source)
+    assert metadata.started.wait(timeout=5)
+
+    runner.cancel()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert metadata.cancelled is True
+    assert len(results) == 1
+    result = results[0]
+    assert result.state is JobState.CANCELED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.METADATA,
+        JobState.CANCELED,
+    )
+    assert result.error == "Job canceled"
+    assert translator.contexts == []
+    assert result.published_path is None
+
+
+def test_cancel_stops_a_blocking_tmdb_request_before_translation(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    request_started = Event()
+    release_request = Event()
+
+    def urlopen(_request, *, timeout):
+        request_started.set()
+        assert release_request.wait(timeout=5)
+        return JsonResponse(json.dumps({"overview": "late response"}).encode("utf-8"))
+
+    monkeypatch.setattr("cueweaver.metadata.urllib.request.urlopen", urlopen)
+    metadata = TMDbMetadataProvider(api_key="tmdb-key")
+    translator = ContextTranslator()
+    runner = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    )
+    results, thread = start_metadata_job(runner, media, source)
+    assert request_started.wait(timeout=5)
+
+    runner.cancel()
+    thread.join(timeout=2)
+    release_request.set()
+
+    assert not thread.is_alive()
+    assert len(results) == 1
+    assert results[0].state is JobState.CANCELED
+    assert results[0].lifecycle == (
+        JobState.DISCOVERED,
+        JobState.METADATA,
+        JobState.CANCELED,
+    )
+    assert translator.contexts == []

@@ -112,7 +112,13 @@ class PySubtransTranslator:
             self._cancel_requested.clear()
             self.intermediate_path = None
 
-    def translate(self, source: Path, target_language: str) -> bytes:
+    def translate(
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        context: str = "",
+    ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
         self.intermediate_path = None
@@ -122,6 +128,7 @@ class PySubtransTranslator:
             "provider": self.provider,
             "target_language": target_language,
             "prompt": f"Translate these subtitles to {target_language}",
+            "description": context or None,
             "scene_threshold": 60.0,
             "min_batch_size": 10,
             "max_batch_size": 30,

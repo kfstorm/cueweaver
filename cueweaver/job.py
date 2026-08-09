@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -15,8 +16,16 @@ from os import PathLike
 from os import replace as atomic_replace
 from pathlib import Path
 from threading import Event, Lock
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
+from .metadata import (
+    MetadataCache,
+    MetadataContext,
+    MetadataError,
+    MetadataProvider,
+    MetadataRequest,
+    TMDbMetadataProvider,
+)
 from .publishing import publish_atomically
 from .subtitles import (
     SubtitleFormat,
@@ -30,6 +39,7 @@ from .translation import PySubtransTranslator
 class JobState(str, Enum):
     DISCOVERED = "discovered"
     EXTRACTING = "extracting"
+    METADATA = "metadata"
     TRANSLATING = "translating"
     VALIDATING = "validating"
     PUBLISHING = "publishing"
@@ -69,7 +79,11 @@ class JobCanceled(JobError):
 @runtime_checkable
 class Translator(Protocol):
     def translate(
-        self, source: Path, target_language: str
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        context: str = "",
     ) -> bytes | str | PathLike[str]:
         """Return translated subtitle content or a path containing it."""
 
@@ -217,6 +231,9 @@ class JobResult:
     error: str | None = None
     intermediate_path: Path | None = None
     translated_content: bytes | None = None
+    context: str = ""
+    metadata_degradation: str | None = None
+    metadata_request: MetadataRequest | None = None
 
     @property
     def status(self) -> str:
@@ -537,6 +554,8 @@ class JobRunner:
         self,
         translator: Translator | TranslatorFunction | None = None,
         *,
+        metadata_provider: MetadataProvider | None = None,
+        metadata_cache: MetadataCache | PathLike[str] | str | None = None,
         extractor: SubtitleExtractor | None = None,
         source_selector: Callable[
             [tuple[SubtitleCandidate, ...]],
@@ -548,6 +567,14 @@ class JobRunner:
         language_priority: Sequence[str] | str | None = None,
     ):
         self._translator = translator
+        self._metadata_provider = metadata_provider
+        self._metadata_cache = (
+            metadata_cache
+            if isinstance(metadata_cache, MetadataCache)
+            else MetadataCache(metadata_cache)
+            if metadata_cache is not None
+            else None
+        )
         self._extractor = extractor or SeconvExtractor()
         self._source_selector = source_selector
         self._discovery_observer = discovery_observer
@@ -559,6 +586,7 @@ class JobRunner:
         self._state_lock = Lock()
         self._cancel_requested = Event()
         self._active_translator: Translator | TranslatorFunction | None = None
+        self._active_metadata_provider: MetadataProvider | None = None
         self._intermediate_path: Path | None = None
         self._translated_content: bytes | None = None
 
@@ -568,11 +596,18 @@ class JobRunner:
         self._cancel_requested.set()
         with self._state_lock:
             translator = self._active_translator
+            metadata_provider = self._active_metadata_provider
         if translator is None:
+            metadata_cancel = getattr(metadata_provider, "cancel", None)
+            if callable(metadata_cancel):
+                metadata_cancel()
             return
         cancel = getattr(translator, "cancel", None)
         if callable(cancel):
             cancel()
+        metadata_cancel = getattr(metadata_provider, "cancel", None)
+        if callable(metadata_cancel):
+            metadata_cancel()
 
     def publish_intermediate(
         self,
@@ -664,6 +699,26 @@ class JobRunner:
             translated_content=None,
         )
 
+    def retry_metadata(self, result: JobResult) -> JobResult:
+        """Retry degraded metadata without repeating a completed translation."""
+
+        if (
+            result.state is not JobState.PUBLISHED
+            or result.metadata_request is None
+            or result.metadata_degradation is None
+        ):
+            raise JobError("Only a published Job with degraded metadata can be retried")
+
+        context = self._gather_metadata(
+            result.metadata_request,
+            refresh=True,
+        )
+        return replace(
+            result,
+            context=context.text,
+            metadata_degradation=context.degradation,
+        )
+
     def run(
         self,
         media: PathLike[str] | str,
@@ -671,21 +726,34 @@ class JobRunner:
         target_language: str | None = None,
         source: SubtitleCandidate | PathLike[str] | str | None = None,
         source_language: str | None = None,
+        series_id: str | None = None,
+        season_number: int | None = None,
+        episode_number: int | None = None,
+        refresh_metadata: bool = False,
     ) -> JobResult:
         self._cancel_requested.clear()
         self._intermediate_path = None
         self._translated_content = None
         self._reset_translator_for_job()
+        self._reset_metadata_provider_for_job()
         media_path = Path(media).expanduser().resolve()
         lifecycle: list[JobState] = []
         selected_source: SubtitleCandidate | None = None
         configured_target: str | None = None
         no_op = False
+        metadata_context: MetadataContext | None = None
+        metadata_request: MetadataRequest | None = None
         try:
             configured_target = normalize_language(
                 target_language
                 if target_language is not None
                 else os.environ.get("CUEWEAVER_TARGET_LANGUAGE", "")
+            )
+            metadata_request = _metadata_request(
+                series_id,
+                season_number,
+                episode_number,
+                refresh_metadata,
             )
             candidates = discover_subtitles(media_path)
             language_priority = self._language_priority
@@ -722,10 +790,18 @@ class JobRunner:
             if no_op:
                 delivered_content = source_content
             else:
+                if metadata_request is not None:
+                    lifecycle.append(JobState.METADATA)
+                    metadata_context = self._gather_metadata(
+                        metadata_request,
+                        refresh=refresh_metadata,
+                    )
+                    self._raise_if_canceled()
                 lifecycle.append(JobState.TRANSLATING)
                 delivered_content = self._translate(
                     source_path,
                     configured_target,
+                    context=(metadata_context.text if metadata_context else ""),
                 )
                 self._raise_if_canceled()
 
@@ -760,11 +836,19 @@ class JobRunner:
                 source=selected_source,
                 published_path=published_path,
                 no_op=no_op,
+                context=metadata_context.text if metadata_context else "",
+                metadata_degradation=(
+                    metadata_context.degradation if metadata_context else None
+                ),
+                metadata_request=metadata_request,
             )
-        except JobCanceled as error:
-            lifecycle.append(JobState.CANCELED)
+        except (JobCanceled, JobError, OSError, SubtitleValidationError) as error:
+            terminal_state = (
+                JobState.CANCELED if isinstance(error, JobCanceled) else JobState.FAILED
+            )
+            lifecycle.append(terminal_state)
             return JobResult(
-                state=JobState.CANCELED,
+                state=terminal_state,
                 lifecycle=tuple(lifecycle),
                 media=media_path,
                 target_language=configured_target,
@@ -774,21 +858,70 @@ class JobRunner:
                 error=str(error),
                 intermediate_path=self._intermediate_path,
                 translated_content=self._translated_content,
+                context=metadata_context.text if metadata_context else "",
+                metadata_degradation=(
+                    metadata_context.degradation if metadata_context else None
+                ),
+                metadata_request=metadata_request,
             )
-        except (JobError, OSError, SubtitleValidationError) as error:
-            lifecycle.append(JobState.FAILED)
-            return JobResult(
-                state=JobState.FAILED,
-                lifecycle=tuple(lifecycle),
-                media=media_path,
-                target_language=configured_target,
-                source=selected_source,
-                published_path=None,
-                no_op=no_op,
-                error=str(error),
-                intermediate_path=self._intermediate_path,
-                translated_content=self._translated_content,
+
+    def _gather_metadata(
+        self,
+        request: MetadataRequest,
+        *,
+        refresh: bool,
+    ) -> MetadataContext:
+        provider = self._metadata_provider or TMDbMetadataProvider()
+        cache = self._metadata_cache or MetadataCache(_default_metadata_cache_path())
+        series_overview: str | None = None
+        episode_overview: str | None = None
+        if not refresh:
+            series_overview, episode_overview = cache.load(request)
+
+        try:
+            with self._state_lock:
+                self._active_metadata_provider = provider
+            self._raise_if_canceled()
+            if series_overview is None:
+                series_overview = _fetch_metadata_overview(
+                    lambda: provider.get_series_overview(request.series_id),
+                    "series",
+                )
+                cache.store(request, series_overview=series_overview)
+            self._raise_if_canceled()
+            if request.episode_key is not None and episode_overview is None:
+                season_number = request.season_number
+                episode_number = request.episode_number
+                assert season_number is not None
+                assert episode_number is not None
+                episode_overview = _fetch_metadata_overview(
+                    lambda: provider.get_episode_overview(
+                        request.series_id,
+                        season_number,
+                        episode_number,
+                    ),
+                    "episode",
+                )
+                cache.store(request, episode_overview=episode_overview)
+            self._raise_if_canceled()
+        except JobCanceled:
+            raise
+        except (MetadataError, OSError) as error:
+            if self._cancel_requested.is_set():
+                raise JobCanceled("Job canceled") from error
+            return MetadataContext(
+                request=request,
+                degradation=f"Metadata degraded: {error}",
             )
+        finally:
+            with self._state_lock:
+                self._active_metadata_provider = None
+
+        return MetadataContext(
+            request=request,
+            series_overview=series_overview or "",
+            episode_overview=episode_overview or "",
+        )
 
     def _extract_source(self, media: Path, candidate: SubtitleCandidate) -> Path:
         destination = _extraction_cache_path(media, candidate)
@@ -809,7 +942,13 @@ class JobRunner:
             raise ExtractionFailed("Extraction did not produce a subtitle in the cache")
         return destination
 
-    def _translate(self, source: Path, target_language: str) -> bytes:
+    def _translate(
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        context: str = "",
+    ) -> bytes:
         try:
             translator = self._translator
             if translator is None:
@@ -820,10 +959,12 @@ class JobRunner:
                 canceled = self._cancel_requested.is_set()
             if canceled:
                 raise JobCanceled("Job canceled")
-            if callable(translator):
-                translated = translator(source, target_language)
-            else:
-                translated = translator.translate(source, target_language)
+            translated = _call_translator(
+                translator,
+                source,
+                target_language,
+                context=context,
+            )
         except Exception as error:
             if isinstance(error, JobCanceled):
                 raise
@@ -864,6 +1005,87 @@ class JobRunner:
         reset = getattr(translator, "reset_for_job", None)
         if callable(reset):
             reset()
+
+    def _reset_metadata_provider_for_job(self) -> None:
+        provider = self._metadata_provider
+        if provider is None:
+            return
+        reset = getattr(provider, "reset_for_job", None)
+        if callable(reset):
+            reset()
+
+
+def _metadata_request(
+    series_id: str | None,
+    season_number: int | None,
+    episode_number: int | None,
+    refresh_metadata: bool,
+) -> MetadataRequest | None:
+    if series_id is None:
+        if season_number is not None or episode_number is not None or refresh_metadata:
+            raise JobError(
+                "A TMDb series ID is required with season, episode, or metadata refresh"
+            )
+        return None
+    try:
+        return MetadataRequest(series_id, season_number, episode_number)
+    except MetadataError as error:
+        raise JobError(str(error)) from error
+
+
+def _default_metadata_cache_path() -> Path:
+    configured = os.environ.get("CUEWEAVER_METADATA_CACHE")
+    if configured:
+        return Path(configured).expanduser()
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+    return root / "cueweaver" / "metadata"
+
+
+def _fetch_metadata_overview(
+    fetch: Callable[[], str],
+    label: str,
+) -> str:
+    try:
+        value = fetch()
+    except JobCanceled:
+        raise
+    except Exception as error:
+        raise MetadataError(str(error)) from error
+    return _validate_metadata_overview(value, label)
+
+
+def _validate_metadata_overview(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise MetadataError(f"Metadata provider returned an invalid {label} overview")
+    return value
+
+
+def _call_translator(
+    translator: Translator | TranslatorFunction,
+    source: Path,
+    target_language: str,
+    *,
+    context: str,
+) -> bytes | str | PathLike[str]:
+    method = cast(
+        Callable[..., bytes | str | PathLike[str]],
+        translator if callable(translator) else translator.translate,
+    )
+    if _accepts_context(method):
+        return method(source, target_language, context=context)
+    return method(source, target_language)
+
+
+def _accepts_context(method: Callable[..., object]) -> bool:
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "context" or parameter.kind is parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
 
 
 def _infer_language(suffix: str) -> str | None:
@@ -1079,23 +1301,8 @@ def _extraction_cache_path(media: Path, candidate: SubtitleCandidate) -> Path:
 
 
 def _write_cached_extraction(destination: Path, content: bytes) -> None:
-    temporary_path: Path | None = None
-    try:
-        file_descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            dir=destination.parent,
-        )
-        temporary_path = Path(temporary_name)
-        with os.fdopen(file_descriptor, "wb") as temporary_file:
-            temporary_file.write(content)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        atomic_replace(temporary_path, destination)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    publish_atomically(content, destination)
 
 
 def _cache_extracted_path(source: Path, destination: Path) -> None:

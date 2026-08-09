@@ -41,6 +41,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-language",
         help="Override language inferred from the Source filename",
     )
+    parser.add_argument(
+        "--tmdb-series-id",
+        "--series-id",
+        dest="series_id",
+        help="TMDb series ID for Context gathering",
+    )
+    parser.add_argument(
+        "--season-number",
+        "--season",
+        dest="season_number",
+        type=int,
+        help="Series season number for TMDb Context",
+    )
+    parser.add_argument(
+        "--episode-number",
+        "--episode",
+        dest="episode_number",
+        type=int,
+        help="Series episode number for TMDb Context",
+    )
+    parser.add_argument(
+        "--refresh-metadata",
+        action="store_true",
+        help="Ignore cached TMDb Context and fetch it again",
+    )
     return parser
 
 
@@ -52,7 +77,16 @@ def main(
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "run":
         arguments = arguments[1:]
-    args = build_parser().parse_args(arguments)
+    parser = build_parser()
+    args = parser.parse_args(arguments)
+    if args.series_id is None and (
+        args.season_number is not None
+        or args.episode_number is not None
+        or args.refresh_metadata
+    ):
+        parser.error(
+            "--tmdb-series-id is required with season, episode, or metadata refresh"
+        )
     active_runner = runner or JobRunner(
         source_selector=_prompt_for_source,
         discovery_observer=_display_candidates,
@@ -67,12 +101,19 @@ def main(
     try:
         signal.signal(signal.SIGINT, request_cancel)
         handler_installed = True
-        result = active_runner.run(
-            args.media,
-            target_language=args.target_language,
-            source=args.source,
-            source_language=args.source_language,
-        )
+        run_options = {
+            "target_language": args.target_language,
+            "source": args.source,
+            "source_language": args.source_language,
+        }
+        if args.series_id is not None:
+            run_options.update(
+                series_id=args.series_id,
+                season_number=args.season_number,
+                episode_number=args.episode_number,
+                refresh_metadata=args.refresh_metadata,
+            )
+        result = active_runner.run(args.media, **run_options)
     finally:
         if handler_installed:
             signal.signal(signal.SIGINT, previous_handler)
@@ -92,6 +133,12 @@ def main(
             file=sys.stderr,
         )
         return 1
+
+    if result.metadata_degradation is not None:
+        print(
+            f"  metadata: degraded: {result.metadata_degradation}",
+            file=sys.stderr,
+        )
 
     assert result.source is not None
     assert result.published_path is not None
