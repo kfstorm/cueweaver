@@ -7,6 +7,7 @@ from typing import ClassVar
 from cueweaver.job import JobRunner, JobState
 from cueweaver.metadata import Glossary, MetadataCache, Term
 from cueweaver.translation import PySubtransTranslator
+from tests.test_helpers import write_user_override
 
 SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -31,10 +32,14 @@ def start_provider_server(
     *,
     fail_after_first_request: bool = False,
     block_scene: str | None = None,
+    use_terminology: bool = False,
+    include_dynamic_terminology: bool = False,
 ) -> tuple[ThreadingHTTPServer, Thread]:
     ProviderFixtureHandler.requests = []
     ProviderFixtureHandler.fail_after_first_request = fail_after_first_request
     ProviderFixtureHandler.block_scene = block_scene
+    ProviderFixtureHandler.use_terminology = use_terminology
+    ProviderFixtureHandler.include_dynamic_terminology = include_dynamic_terminology
     ProviderFixtureHandler.blocked_request_started = Event()
     ProviderFixtureHandler.release_block = Event()
     server = ThreadingHTTPServer(("127.0.0.1", 0), ProviderFixtureHandler)
@@ -61,6 +66,8 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
     requests: ClassVar[list[dict]] = []
     fail_after_first_request: ClassVar[bool] = False
     block_scene: ClassVar[str | None] = None
+    use_terminology: ClassVar[bool] = False
+    include_dynamic_terminology: ClassVar[bool] = False
     blocked_request_started: ClassVar[Event] = Event()
     release_block: ClassVar[Event] = Event()
 
@@ -74,9 +81,17 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
         if self.fail_after_first_request and len(type(self).requests) > 1:
             translation = "#999\nTranslation>\n失败"
         else:
+            match = re.search(r"Jon Snow::([^\n]+)", prompt)
+            terminology_target = match.group(1).strip() if match else "你好"
+            if re.search(r"Original>\s*Pinellia", prompt):
+                terminology_target = "半夏"
             translation = "\n\n".join(
-                f"#{number}\nTranslation>\n你好" for number in numbers
+                f"#{number}\nTranslation>\n"
+                f"{terminology_target if type(self).use_terminology else '你好'}"
+                for number in numbers
             )
+            if type(self).include_dynamic_terminology:
+                translation += "\n<terminology>Pinellia::半夏</terminology>"
         if numbers and numbers[-1] == self.block_scene:
             type(self).blocked_request_started.set()
             type(self).release_block.wait(timeout=5)
@@ -155,14 +170,25 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path):
         thread.join(timeout=5)
 
 
-def test_job_seeds_pysubtrans_with_metadata_glossary_and_keeps_dynamic_learning(
+def test_job_seeds_pysubtrans_with_override_precedence_and_keeps_dynamic_learning(
     tmp_path,
 ):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
-    source.write_text(SRT, encoding="utf-8")
-    server, thread = start_provider_server()
+    source.write_text(
+        SRT.replace("Hello", "Pinellia").replace("Goodbye", "Jon Snow"),
+        encoding="utf-8",
+    )
+    server, thread = start_provider_server(
+        use_terminology=True,
+        include_dynamic_terminology=True,
+    )
+    overrides, _ = write_user_override(
+        tmp_path / "overrides",
+        "1399",
+        {"Jon Snow": "用户名称"},
+    )
 
     class MetadataGlossary:
         def get_series_overview(self, series_id: str) -> str:
@@ -197,6 +223,7 @@ def test_job_seeds_pysubtrans_with_metadata_glossary_and_keeps_dynamic_learning(
             translator=translator,
             metadata_provider=MetadataGlossary(),
             metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+            user_override_store=overrides,
         ).run(
             media,
             target_language="zh",
@@ -212,9 +239,65 @@ def test_job_seeds_pysubtrans_with_metadata_glossary_and_keeps_dynamic_learning(
             for message in ProviderFixtureHandler.requests[0]["messages"]
         )
         assert "Jon Snow" in prompt
-        assert "琼恩·雪诺" in prompt
+        assert "用户名称" in prompt
+        assert "琼恩·雪诺" not in prompt
+        second_prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[1]["messages"]
+        )
+        assert "Pinellia::半夏" in second_prompt
+        assert "Jon Snow::用户名称" in second_prompt
+        assert result.glossary.terms[0].target == "琼恩·雪诺"
+        assert result.user_overrides == {"Jon Snow": "用户名称"}
         assert result.published_path is not None
-        assert result.published_path.read_text(encoding="utf-8").count("你好") == 2
+        published = result.published_path.read_text(encoding="utf-8")
+        assert published.count("半夏") == 1
+        assert published.count("用户名称") == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_changed_user_override_does_not_resume_an_old_translation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT.split("\n\n", 1)[0] + "\n", encoding="utf-8")
+    server, thread = start_provider_server()
+    overrides, override_path = write_user_override(
+        tmp_path / "overrides",
+        "Movie",
+        {"Jon Snow": "first name"},
+    )
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+        runner = JobRunner(
+            translator=translator,
+            user_override_store=overrides,
+        )
+        first = runner.run(media, target_language="zh", source=source)
+
+        override_path.write_text(
+            json.dumps({"Jon Snow": "second name"}),
+            encoding="utf-8",
+        )
+        second = runner.run(media, target_language="zh", source=source)
+
+        assert first.state is JobState.PUBLISHED
+        assert second.state is JobState.PUBLISHED
+        assert len(ProviderFixtureHandler.requests) == 2
+        second_prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[1]["messages"]
+        )
+        assert "second name" in second_prompt
     finally:
         server.shutdown()
         server.server_close()

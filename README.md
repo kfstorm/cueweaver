@@ -49,6 +49,29 @@ usable relations continues with an empty Glossary and baseline translation.
 Glossary Terms are cached at the same series scope and seeded into PySubtrans;
 dynamic terminology learning remains enabled for uncovered terms.
 
+User overrides are loaded from one JSON file per scope. By default, files live
+under `$XDG_CONFIG_HOME/cueweaver/overrides` or `~/.config/cueweaver/overrides`;
+set `CUEWEAVER_USER_OVERRIDE_DIRECTORY` or pass
+`--user-override-directory` to choose another directory. Name a series file
+`<series-id>.json`; a film uses its Media stem, such as `Movie.json` (scoped
+names that need filesystem sanitization receive a short digest suffix). Each
+file is a JSON object mapping Source terms to Target-language terms:
+There is no global override file.
+Without an explicitly selected directory, a missing scope file means that no
+User override is defined. When a directory is explicitly selected, the scope
+file is required; use `{}` for a scope with no mappings.
+
+```json
+{
+  "Jon Snow": "Custom name"
+}
+```
+
+The User override seed wins over automatic Terms and PySubtrans's dynamic
+learning. Automatic Term provenance remains available in the Job result. A
+malformed override file fails the Job with the file path and validation error;
+the automatic Glossary is not discarded.
+
 If the Source language already matches the Target language, the Job skips the
 translator, validates the subtitle structure, and atomically publishes the
 result beside the Media. SRT, ASS, and VTT are supported. A non-Target-language

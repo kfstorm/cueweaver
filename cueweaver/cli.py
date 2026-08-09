@@ -66,6 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore cached TMDb Context and fetch it again",
     )
+    parser.add_argument(
+        "--user-override-directory",
+        "--override-directory",
+        dest="user_override_directory",
+        type=Path,
+        help=(
+            "Directory containing one <series-id>.json User override file "
+            "per series (or one <media-stem>.json file per film)"
+        ),
+    )
     return parser
 
 
@@ -91,6 +101,7 @@ def main(
         source_selector=_prompt_for_source,
         discovery_observer=_display_candidates,
         language_priority=args.language_priority,
+        user_override_directory=args.user_override_directory,
     )
 
     def request_cancel(_signal_number: int, _frame: FrameType | None) -> None:

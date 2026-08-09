@@ -30,6 +30,7 @@ from .metadata import (
     TMDbMetadataProvider,
     WikidataGlossaryProvider,
 )
+from .overrides import UserOverrideError, UserOverrideStore
 from .publishing import publish_atomically
 from .subtitles import (
     SubtitleFormat,
@@ -89,8 +90,9 @@ class Translator(Protocol):
         *,
         context: str = "",
         glossary: Glossary | None = None,
+        user_overrides: dict[str, str] | None = None,
     ) -> bytes | str | PathLike[str]:
-        """Return translated subtitle content, optionally seeded by a Glossary."""
+        """Return translated subtitle content with explicit terminology seeds."""
 
 
 TranslatorFunction = Callable[[Path, str], bytes | str | PathLike[str]]
@@ -240,6 +242,7 @@ class JobResult:
     metadata_degradation: str | None = None
     metadata_request: MetadataRequest | None = None
     glossary: Glossary = field(default_factory=Glossary)
+    user_overrides: dict[str, str] = field(default_factory=dict)
 
     @property
     def status(self) -> str:
@@ -563,6 +566,8 @@ class JobRunner:
         metadata_provider: MetadataProvider | None = None,
         glossary_provider: GlossaryProvider | None = None,
         metadata_cache: MetadataCache | PathLike[str] | str | None = None,
+        user_override_store: UserOverrideStore | None = None,
+        user_override_directory: PathLike[str] | str | None = None,
         extractor: SubtitleExtractor | None = None,
         source_selector: Callable[
             [tuple[SubtitleCandidate, ...]],
@@ -582,6 +587,22 @@ class JobRunner:
             else MetadataCache(metadata_cache)
             if metadata_cache is not None
             else None
+        )
+        configured_override_directory = user_override_directory or os.environ.get(
+            "CUEWEAVER_USER_OVERRIDE_DIRECTORY"
+        )
+        if (
+            user_override_store is not None
+            and configured_override_directory is not None
+        ):
+            raise ValueError(
+                "Provide either user_override_store or user_override_directory"
+            )
+        self._user_override_required = (
+            user_override_store is not None or configured_override_directory is not None
+        )
+        self._user_override_store = user_override_store or UserOverrideStore(
+            configured_override_directory or _default_user_override_directory()
         )
         self._extractor = extractor or SeconvExtractor()
         self._source_selector = source_selector
@@ -753,6 +774,7 @@ class JobRunner:
         no_op = False
         metadata_context: MetadataContext | None = None
         metadata_request: MetadataRequest | None = None
+        user_overrides: dict[str, str] = {}
         try:
             configured_target = normalize_language(
                 target_language
@@ -797,17 +819,20 @@ class JobRunner:
             no_op = languages_match(effective_source_language, configured_target)
             source_content = source_path.read_bytes()
             self._raise_if_canceled()
+            if not no_op and metadata_request is not None:
+                lifecycle.append(JobState.METADATA)
+                metadata_context = self._gather_metadata(
+                    metadata_request,
+                    target_language=configured_target,
+                    refresh=refresh_metadata,
+                )
+                self._raise_if_canceled()
+            user_overrides = self._load_user_overrides(
+                metadata_request.series_id if metadata_request else media_path.stem
+            )
             if no_op:
                 delivered_content = source_content
             else:
-                if metadata_request is not None:
-                    lifecycle.append(JobState.METADATA)
-                    metadata_context = self._gather_metadata(
-                        metadata_request,
-                        target_language=configured_target,
-                        refresh=refresh_metadata,
-                    )
-                    self._raise_if_canceled()
                 lifecycle.append(JobState.TRANSLATING)
                 delivered_content = self._translate(
                     source_path,
@@ -818,6 +843,7 @@ class JobRunner:
                         if metadata_context is not None
                         else Glossary()
                     ),
+                    user_overrides=user_overrides,
                 )
                 self._raise_if_canceled()
 
@@ -862,6 +888,7 @@ class JobRunner:
                     if metadata_context is not None
                     else Glossary()
                 ),
+                user_overrides=user_overrides,
             )
         except (JobCanceled, JobError, OSError, SubtitleValidationError) as error:
             terminal_state = (
@@ -889,6 +916,7 @@ class JobRunner:
                     if metadata_context is not None
                     else Glossary()
                 ),
+                user_overrides=user_overrides,
             )
 
     def _gather_metadata(
@@ -1047,6 +1075,7 @@ class JobRunner:
         *,
         context: str = "",
         glossary: Glossary | None = None,
+        user_overrides: dict[str, str] | None = None,
     ) -> bytes:
         try:
             translator = self._translator
@@ -1064,6 +1093,7 @@ class JobRunner:
                 target_language,
                 context=context,
                 glossary=glossary or Glossary(),
+                user_overrides=user_overrides or {},
             )
         except Exception as error:
             if isinstance(error, JobCanceled):
@@ -1093,6 +1123,15 @@ class JobRunner:
             raise TranslationFailed(
                 "Translation provider returned an unreadable path"
             ) from error
+
+    def _load_user_overrides(self, series_scope: str) -> dict[str, str]:
+        try:
+            return self._user_override_store.load(
+                series_scope,
+                required=self._user_override_required,
+            )
+        except UserOverrideError as error:
+            raise JobError(f"User override failed: {error}") from error
 
     def _raise_if_canceled(self) -> None:
         if self._cancel_requested.is_set():
@@ -1143,6 +1182,15 @@ def _default_metadata_cache_path() -> Path:
     return root / "cueweaver" / "metadata"
 
 
+def _default_user_override_directory() -> Path:
+    configured = os.environ.get("CUEWEAVER_USER_OVERRIDE_DIRECTORY")
+    if configured:
+        return Path(configured).expanduser()
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(config_home).expanduser() if config_home else Path.home() / ".config"
+    return root / "cueweaver" / "overrides"
+
+
 def _fetch_metadata_overview(
     fetch: Callable[[], str],
     label: str,
@@ -1185,6 +1233,7 @@ def _call_translator(
     *,
     context: str,
     glossary: Glossary,
+    user_overrides: dict[str, str],
 ) -> bytes | str | PathLike[str]:
     method = cast(
         Callable[..., bytes | str | PathLike[str]],
@@ -1195,6 +1244,8 @@ def _call_translator(
         kwargs["context"] = context
     if _accepts_parameter(method, "glossary"):
         kwargs["glossary"] = glossary
+    if _accepts_parameter(method, "user_overrides"):
+        kwargs["user_overrides"] = user_overrides
     return method(source, target_language, **kwargs)
 
 

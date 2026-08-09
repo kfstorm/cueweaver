@@ -31,6 +31,7 @@ from .metadata import (
     TMDbMetadataProvider,
     WikidataGlossaryProvider,
 )
+from .overrides import UserOverrideError, UserOverrideStore
 from .translation import PySubtransTranslator
 
 __all__ = [
@@ -56,6 +57,8 @@ __all__ = [
     "TMDbMetadataProvider",
     "Term",
     "TermPriority",
+    "UserOverrideError",
+    "UserOverrideStore",
     "WikidataGlossaryProvider",
     "discover_embedded_subtitles",
     "discover_external_subtitles",

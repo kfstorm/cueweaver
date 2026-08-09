@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from threading import Event, Lock
 from typing import Any, ClassVar
@@ -121,12 +123,18 @@ class PySubtransTranslator:
         *,
         context: str = "",
         glossary: Glossary | None = None,
+        user_overrides: Mapping[str, str] | None = None,
     ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
         self.intermediate_path = None
         source = Path(source).expanduser().resolve()
-        working_source = _prepare_working_source(source, target_language)
+        static_terminology = _build_static_terminology(glossary, user_overrides)
+        working_source = _prepare_working_source(
+            source,
+            target_language,
+            static_terminology,
+        )
         settings: dict[str, Any] = {
             "provider": self.provider,
             "target_language": target_language,
@@ -164,13 +172,11 @@ class PySubtransTranslator:
         project.write_translation = False
         provider = init_translation_provider(self.provider, options)
         persisted_terminology = getattr(project.subtitles, "terminology_map", None)
-        terminology_map = (
-            dict(persisted_terminology)
-            if isinstance(persisted_terminology, dict)
-            else {}
+        terminology_map, static_terminology = _build_terminology_seed(
+            persisted_terminology,
+            glossary,
+            user_overrides,
         )
-        if glossary is not None:
-            terminology_map.update(glossary.mapping)
         engine = SubtitleTranslator(
             options,
             provider,
@@ -188,7 +194,18 @@ class PySubtransTranslator:
         def save_checkpoint(_sender: Any, **_kwargs: Any) -> None:
             project.SaveProjectFile()
 
+        def preserve_static_terminology(_sender: Any, update: Any) -> None:
+            with engine.lock:
+                for source, target in static_terminology.items():
+                    _overlay_terminology(engine.terminology_map, source, target)
+                update.terminology_map = dict(engine.terminology_map)
+
         engine.events.batch_translated.connect(save_checkpoint, weak=False)
+        if static_terminology:
+            engine.events.terminology_updated.connect(
+                preserve_static_terminology,
+                weak=False,
+            )
         try:
             project.TranslateSubtitles(engine)
             if engine.aborted or self._cancel_requested.is_set():
@@ -215,6 +232,10 @@ class PySubtransTranslator:
                 project.SaveProjectFile()
             finally:
                 engine.events.batch_translated.disconnect(save_checkpoint)
+                if static_terminology:
+                    engine.events.terminology_updated.disconnect(
+                        preserve_static_terminology
+                    )
                 with self._state_lock:
                     self._active_engine = None
 
@@ -259,7 +280,51 @@ def _disable_thinking(engine: SubtitleTranslator) -> None:
     client._generate_request_body = generate_request_body
 
 
-def _prepare_working_source(source: Path, target_language: str) -> Path:
+def _build_terminology_seed(
+    persisted: object,
+    glossary: Glossary | None,
+    user_overrides: Mapping[str, str] | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    terminology_map = (
+        {str(source): str(target) for source, target in persisted.items()}
+        if isinstance(persisted, dict)
+        else {}
+    )
+    static_terminology = _build_static_terminology(glossary, user_overrides)
+    for source, target in static_terminology.items():
+        _overlay_terminology(terminology_map, source, target)
+    return terminology_map, static_terminology
+
+
+def _build_static_terminology(
+    glossary: Glossary | None,
+    user_overrides: Mapping[str, str] | None,
+) -> dict[str, str]:
+    static_terminology: dict[str, str] = {}
+    if glossary is not None:
+        for source, target in glossary.mapping.items():
+            _overlay_terminology(static_terminology, source, target)
+    if user_overrides is not None:
+        for source, target in user_overrides.items():
+            _overlay_terminology(static_terminology, source, target)
+    return static_terminology
+
+
+def _overlay_terminology(
+    terminology_map: dict[str, str], source: str, target: str
+) -> None:
+    source_key = source.casefold()
+    for existing_source in tuple(terminology_map):
+        if existing_source.casefold() == source_key:
+            del terminology_map[existing_source]
+    terminology_map[source] = target
+
+
+def _prepare_working_source(
+    source: Path,
+    target_language: str,
+    terminology: Mapping[str, str] | None = None,
+) -> Path:
     """Place a stable Source copy in the Job work directory used by PySubtrans."""
 
     source_content = source.read_bytes()
@@ -270,6 +335,11 @@ def _prepare_working_source(source: Path, target_language: str) -> Path:
             source_content,
         )
     )
+    if terminology:
+        key_material += b"\0" + json.dumps(
+            sorted(terminology.items(), key=lambda item: (item[0].casefold(), item[0])),
+            ensure_ascii=False,
+        ).encode("utf-8")
     job_key = hashlib.sha256(key_material).hexdigest()[:16]
     work_directory = source.parent / ".cueweaver" / job_key
     work_directory.mkdir(parents=True, exist_ok=True)

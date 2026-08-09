@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from threading import Event, Thread
 
+import pytest
+
 from cueweaver.job import JobRunner, JobState
 from cueweaver.metadata import (
     Glossary,
@@ -12,6 +14,7 @@ from cueweaver.metadata import (
     TermPriority,
     WikidataGlossaryProvider,
 )
+from tests.test_helpers import write_user_override
 
 SRT = """1
 00:00:01,000 --> 00:00:02,000
@@ -85,6 +88,26 @@ class GlossaryTranslator:
         self.contexts.append(context)
         self.glossaries.append(glossary or Glossary())
         return TRANSLATED
+
+
+class UserOverrideTranslator:
+    def __init__(self) -> None:
+        self.glossaries: list[Glossary] = []
+        self.overrides: list[dict[str, str]] = []
+
+    def translate(
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        context: str = "",
+        glossary: Glossary | None = None,
+        user_overrides: dict[str, str] | None = None,
+    ) -> str:
+        self.glossaries.append(glossary or Glossary())
+        self.overrides.append(dict(user_overrides or {}))
+        translated = (user_overrides or {}).get("Jon Snow", "baseline")
+        return SRT.replace("Hello", translated)
 
 
 def create_media_and_source(tmp_path):
@@ -599,3 +622,165 @@ def test_metadata_retry_refreshes_glossary_without_repeating_translation(tmp_pat
     assert translator.glossaries == [Glossary()]
     assert retried.published_path is not None
     assert retried.published_path.read_text(encoding="utf-8") == TRANSLATED
+
+
+def test_series_override_is_shared_across_seasons_and_preserves_automatic_provenance(
+    tmp_path,
+):
+    media, source = create_media_and_source(tmp_path)
+    automatic = Glossary.from_terms(
+        [
+            Term(
+                source="Jon Snow",
+                target="琼恩·雪诺",
+                provider="wikidata",
+                source_url="https://www.wikidata.org/wiki/Q1",
+                entity_id="Q1",
+            )
+        ]
+    )
+    metadata = MetadataGlossaryFixture(automatic)
+    translator = UserOverrideTranslator()
+    overrides, _ = write_user_override(
+        tmp_path / "overrides",
+        "1399",
+        {"Jon Snow": "用户名称"},
+    )
+    runner = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+        user_override_store=overrides,
+    )
+
+    first = runner.run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=1,
+    )
+    second = runner.run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=2,
+        episode_number=1,
+    )
+
+    assert first.state is JobState.PUBLISHED
+    assert second.state is JobState.PUBLISHED
+    assert metadata.glossary_calls == 1
+    assert translator.overrides == [
+        {"Jon Snow": "用户名称"},
+        {"Jon Snow": "用户名称"},
+    ]
+    assert translator.glossaries == [automatic, automatic]
+    assert first.glossary.terms[0].target == "琼恩·雪诺"
+    assert first.user_overrides == {"Jon Snow": "用户名称"}
+    assert first.published_path is not None
+    assert first.published_path.read_text(encoding="utf-8") == (
+        SRT.replace("Hello", "用户名称")
+    )
+
+
+def test_film_override_is_scoped_to_its_own_media(tmp_path):
+    first_media = tmp_path / "哪吒.mkv"
+    first_source = tmp_path / "哪吒.en.srt"
+    second_media = tmp_path / "奥本海默.mkv"
+    second_source = tmp_path / "奥本海默.en.srt"
+    for media, source in (
+        (first_media, first_source),
+        (second_media, second_source),
+    ):
+        media.write_bytes(b"media")
+        source.write_text(SRT, encoding="utf-8")
+
+    translator = UserOverrideTranslator()
+    overrides, _ = write_user_override(
+        tmp_path / "overrides",
+        "哪吒",
+        {"Jon Snow": "只属于第一部"},
+    )
+    write_user_override(tmp_path / "overrides", "奥本海默", {})
+    runner = JobRunner(translator=translator, user_override_store=overrides)
+
+    first = runner.run(
+        first_media,
+        target_language="zh",
+        source=first_source,
+    )
+    second = runner.run(
+        second_media,
+        target_language="zh",
+        source=second_source,
+    )
+
+    assert first.state is JobState.PUBLISHED
+    assert second.state is JobState.PUBLISHED
+    assert translator.overrides == [{"Jon Snow": "只属于第一部"}, {}]
+    assert first.published_path is not None
+    assert second.published_path is not None
+    assert "只属于第一部" in first.published_path.read_text(encoding="utf-8")
+    assert "baseline" in second.published_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("malformed", [True, False], ids=["malformed", "missing"])
+def test_invalid_override_fails_without_discarding_automatic_glossary(
+    tmp_path, malformed
+):
+    media, source = create_media_and_source(tmp_path)
+    automatic = Glossary.from_terms(
+        [
+            Term(
+                source="Jon Snow",
+                target="琼恩·雪诺",
+                provider="wikidata",
+                source_url="https://www.wikidata.org/wiki/Q1",
+                entity_id="Q1",
+            )
+        ]
+    )
+    override_directory = tmp_path / "overrides"
+    if malformed:
+        overrides, _ = write_user_override(
+            override_directory,
+            "1399",
+            {"Jon Snow": 123},
+        )
+    else:
+        overrides = None
+    translator = UserOverrideTranslator()
+    runner_options = {
+        "user_override_store": overrides,
+    }
+    if not malformed:
+        runner_options = {"user_override_directory": override_directory}
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=MetadataGlossaryFixture(automatic),
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+        **runner_options,
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=1,
+    )
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.METADATA,
+        JobState.FAILED,
+    )
+    assert result.error is not None
+    assert "User override" in result.error
+    assert ("string" if malformed else "missing") in result.error
+    assert result.glossary == automatic
+    assert translator.overrides == []
+    assert result.published_path is None
