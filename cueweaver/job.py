@@ -750,6 +750,7 @@ class JobRunner:
             context=context.text,
             glossary=context.glossary,
             metadata_degradation=context.degradation,
+            metadata_request=context.request,
         )
 
     def run(
@@ -886,7 +887,11 @@ class JobRunner:
                 metadata_degradation=(
                     metadata_context.degradation if metadata_context else None
                 ),
-                metadata_request=metadata_request,
+                metadata_request=(
+                    metadata_context.request
+                    if metadata_context is not None
+                    else metadata_request
+                ),
                 glossary=(
                     metadata_context.glossary
                     if metadata_context is not None
@@ -914,7 +919,11 @@ class JobRunner:
                 metadata_degradation=(
                     metadata_context.degradation if metadata_context else None
                 ),
-                metadata_request=metadata_request,
+                metadata_request=(
+                    metadata_context.request
+                    if metadata_context is not None
+                    else metadata_request
+                ),
                 glossary=(
                     metadata_context.glossary
                     if metadata_context is not None
@@ -931,6 +940,14 @@ class JobRunner:
         refresh: bool,
     ) -> MetadataContext:
         provider = self._metadata_provider or TMDbMetadataProvider()
+        with self._state_lock:
+            self._active_metadata_provider = provider
+        try:
+            request = self._resolve_metadata_cache_request(request, provider)
+            self._raise_if_canceled()
+        finally:
+            with self._state_lock:
+                self._active_metadata_provider = None
         glossary_provider = self._resolve_glossary_provider(provider)
         cache = self._metadata_cache or MetadataCache(_default_metadata_cache_path())
         series_overview: str | None = None
@@ -944,42 +961,52 @@ class JobRunner:
             glossary = cache.load_glossary(request, target_language)
             glossary_cached = glossary is not None
 
-        try:
-            with self._state_lock:
-                self._active_metadata_provider = provider
-            self._raise_if_canceled()
-            if series_overview is None:
-                series_overview = _fetch_metadata_overview(
-                    lambda: provider.get_series_overview(request.series_id),
-                    "series",
-                )
-                cache.store(request, series_overview=series_overview)
-            self._raise_if_canceled()
-            if request.episode_key is not None and episode_overview is None:
-                season_number = request.season_number
-                episode_number = request.episode_number
-                assert season_number is not None
-                assert episode_number is not None
-                episode_overview = _fetch_metadata_overview(
-                    lambda: provider.get_episode_overview(
-                        request.series_id,
-                        season_number,
-                        episode_number,
-                    ),
-                    "episode",
-                )
-                cache.store(request, episode_overview=episode_overview)
-            self._raise_if_canceled()
-        except JobCanceled:
-            raise
-        except (MetadataError, OSError) as error:
-            if self._cancel_requested.is_set():
-                raise JobCanceled("Job canceled") from error
-            context_failed = True
-            degradation.append(f"Metadata degraded: {error}")
-        finally:
-            with self._state_lock:
-                self._active_metadata_provider = None
+        for attempt in range(2):
+            try:
+                with self._state_lock:
+                    self._active_metadata_provider = provider
+                self._raise_if_canceled()
+                if series_overview is None:
+                    series_overview = _fetch_metadata_overview(
+                        lambda: provider.get_series_overview(request.series_id),
+                        "series",
+                    )
+                    cache.store(request, series_overview=series_overview)
+                self._raise_if_canceled()
+                if request.episode_key is not None and episode_overview is None:
+                    season_number = request.season_number
+                    episode_number = request.episode_number
+                    assert season_number is not None
+                    assert episode_number is not None
+
+                    def fetch_episode_overview(
+                        season_number: int = season_number,
+                        episode_number: int = episode_number,
+                    ) -> str:
+                        return provider.get_episode_overview(
+                            request.series_id,
+                            season_number,
+                            episode_number,
+                        )
+
+                    episode_overview = _fetch_metadata_overview(
+                        fetch_episode_overview,
+                        "episode",
+                    )
+                    cache.store(request, episode_overview=episode_overview)
+                self._raise_if_canceled()
+                break
+            except JobCanceled:
+                raise
+            except (MetadataError, OSError) as error:
+                if self._cancel_requested.is_set():
+                    raise JobCanceled("Job canceled") from error
+                if attempt == 1:
+                    context_failed = True
+                    degradation.append(f"Metadata degraded: {error}")
+            finally:
+                with self._state_lock:
+                    self._active_metadata_provider = None
 
         if (
             glossary is None
@@ -1027,6 +1054,32 @@ class JobRunner:
             glossary=glossary or Glossary(),
             degradation="; ".join(degradation) or None,
         )
+
+    def _resolve_metadata_cache_request(
+        self,
+        request: MetadataRequest,
+        metadata_provider: MetadataProvider,
+    ) -> MetadataRequest:
+        if request.cache_key is not None:
+            return request
+
+        for provider in (metadata_provider, self._glossary_provider):
+            if provider is None:
+                continue
+            get_series_wikidata_id = getattr(provider, "get_series_wikidata_id", None)
+            if not callable(get_series_wikidata_id):
+                continue
+            try:
+                series_qid = get_series_wikidata_id(request.series_id)
+            except JobCanceled:
+                raise
+            except (MetadataError, OSError, ValueError):
+                continue
+            if isinstance(series_qid, str) and re.fullmatch(
+                r"Q[1-9][0-9]*", series_qid.strip()
+            ):
+                return replace(request, cache_key=series_qid.strip())
+        return request
 
     def _resolve_glossary_provider(
         self,

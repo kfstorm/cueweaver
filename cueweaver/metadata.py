@@ -144,12 +144,18 @@ class MetadataRequest:
     series_id: str
     season_number: int | None = None
     episode_number: int | None = None
+    cache_key: str | None = None
 
     def __post_init__(self) -> None:
         series_id = self.series_id.strip()
         if not series_id:
             raise MetadataConfigurationError("TMDb series ID is required")
         object.__setattr__(self, "series_id", series_id)
+        if self.cache_key is not None:
+            cache_key = self.cache_key.strip()
+            if not cache_key:
+                raise MetadataConfigurationError("Metadata cache key cannot be empty")
+            object.__setattr__(self, "cache_key", cache_key)
         if (self.season_number is None) != (self.episode_number is None):
             raise MetadataConfigurationError(
                 "Both season and episode numbers are required for episode Context"
@@ -164,6 +170,12 @@ class MetadataRequest:
         if self.season_number is None or self.episode_number is None:
             return None
         return f"{self.season_number}x{self.episode_number}"
+
+    @property
+    def cache_identity(self) -> str:
+        """Return the stable series identity used by the metadata cache."""
+
+        return self.cache_key or self.series_id
 
 
 @dataclass(frozen=True)
@@ -226,7 +238,7 @@ class MetadataCache:
         """Return cached series and episode overviews, if present."""
 
         with self._lock:
-            payload = self._read(request.series_id)
+            payload = self._read(request.cache_identity)
             series_overview = payload.get("series_overview")
             episodes = payload.get("episodes")
             episode_overview = None
@@ -249,8 +261,10 @@ class MetadataCache:
         """Merge successful provider responses into the series cache."""
 
         with self._lock:
-            payload = self._read(request.series_id)
+            payload = self._read(request.cache_identity)
             payload["series_id"] = request.series_id
+            if request.cache_key is not None:
+                payload["series_qid"] = request.cache_key
             if series_overview is not None:
                 payload["series_overview"] = series_overview
             episodes = payload.setdefault("episodes", {})
@@ -259,7 +273,7 @@ class MetadataCache:
                 payload["episodes"] = episodes
             if request.episode_key is not None and episode_overview is not None:
                 episodes[request.episode_key] = episode_overview
-            self._write(request.series_id, payload)
+            self._write(request.cache_identity, payload)
 
     def load_glossary(
         self,
@@ -269,7 +283,7 @@ class MetadataCache:
         """Return a cached series/Target-language Glossary."""
 
         with self._lock:
-            payload = self._read(request.series_id)
+            payload = self._read(request.cache_identity)
             raw_terms: object | None = None
             variants = payload.get("glossaries")
             if target_language is not None and isinstance(variants, dict):
@@ -314,8 +328,10 @@ class MetadataCache:
         """Merge a complete series/Target-language Glossary into the cache."""
 
         with self._lock:
-            payload = self._read(request.series_id)
+            payload = self._read(request.cache_identity)
             payload["series_id"] = request.series_id
+            if request.cache_key is not None:
+                payload["series_qid"] = request.cache_key
             serialized = [
                 {
                     "source": term.source,
@@ -335,7 +351,7 @@ class MetadataCache:
                     variants = {}
                     payload["glossaries"] = variants
                 variants[_metadata_cache_language(target_language)] = serialized
-            self._write(request.series_id, payload)
+            self._write(request.cache_identity, payload)
 
     def _read(self, series_id: str) -> dict[str, object]:
         try:

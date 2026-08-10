@@ -28,7 +28,8 @@ break same-cost Source ties without content sniffing.
 For an episode Job, pass `--tmdb-series-id`, `--season`, and `--episode` to
 gather the full TMDb series and episode overviews as Context before
 translation. Set `CUEWEAVER_TMDB_API_KEY` (or `TMDB_API_KEY`) for TMDb access.
-Successful Context is cached by series ID in the long-lived user cache at
+Successful Context is cached by the resolved series QID when available (with
+the provider series ID as a fallback) in the long-lived user cache at
 `$XDG_CACHE_HOME/cueweaver/metadata` or `~/.cache/cueweaver/metadata`; set
 `CUEWEAVER_METADATA_CACHE` to choose another location. The cache has no expiry
 or polling. Use `--refresh-metadata` for an explicit refresh. A missing key or
