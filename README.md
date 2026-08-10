@@ -92,6 +92,9 @@ The adapter also accepts PySubtrans's provider-native settings when present:
 `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, and `DEEPSEEK_API_BASE` for DeepSeek, or
 `CUSTOM_API_KEY`, `CUSTOM_MODEL`, `CUSTOM_SERVER_ADDRESS`, and
 `CUSTOM_ENDPOINT` for an OpenAI-compatible server.
+Before a translated Job gathers metadata, CueWeaver verifies that the selected
+provider has the required credentials. A Target-language no-op does not require
+translation provider credentials.
 
 ## Test
 

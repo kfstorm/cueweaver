@@ -330,7 +330,7 @@ def discover_subtitles(
     try:
         embedded = discover_embedded_subtitles(media_path)
     except DiscoveryFailed as error:
-        if not external or not _is_invalid_container_error(error):
+        if not external or not _is_unreadable_container_error(error):
             raise
         embedded = ()
     return tuple(
@@ -481,8 +481,10 @@ def _probe_container_entries(
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
-def _is_invalid_container_error(error: DiscoveryFailed) -> bool:
+def _is_unreadable_container_error(error: DiscoveryFailed) -> bool:
     cause = error.__cause__
+    if isinstance(cause, OSError):
+        return True
     if not isinstance(cause, subprocess.CalledProcessError):
         return False
     diagnostic = str(cause.stderr or "").casefold()
@@ -793,6 +795,7 @@ class JobRunner:
                 language_priority = discover_media_primary_language(media_path)
             if self._discovery_observer is not None:
                 self._discovery_observer(candidates)
+            lifecycle.append(JobState.DISCOVERED)
             selected_source = _select_source(
                 candidates,
                 source,
@@ -800,7 +803,6 @@ class JobRunner:
                 language_priority=language_priority,
                 source_selector=self._source_selector,
             )
-            lifecycle.append(JobState.DISCOVERED)
             self._raise_if_canceled()
 
             source_path = selected_source.path
@@ -819,6 +821,8 @@ class JobRunner:
             no_op = languages_match(effective_source_language, configured_target)
             source_content = source_path.read_bytes()
             self._raise_if_canceled()
+            if not no_op:
+                self._validate_translation_configuration()
             if not no_op and metadata_request is not None:
                 lifecycle.append(JobState.METADATA)
                 metadata_context = self._gather_metadata(
@@ -1122,6 +1126,20 @@ class JobRunner:
         except Exception as error:
             raise TranslationFailed(
                 "Translation provider returned an unreadable path"
+            ) from error
+
+    def _validate_translation_configuration(self) -> None:
+        translator = self._translator
+        try:
+            if translator is None:
+                translator = PySubtransTranslator()
+                self._translator = translator
+            validate = getattr(translator, "validate_configuration", None)
+            if callable(validate):
+                validate()
+        except Exception as error:
+            raise TranslationFailed(
+                f"Translation provider configuration failed: {error}"
             ) from error
 
     def _load_user_overrides(self, series_scope: str) -> dict[str, str]:

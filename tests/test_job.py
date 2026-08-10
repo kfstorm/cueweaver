@@ -319,6 +319,88 @@ def test_embedded_discovery_failure_is_explicit_without_an_external_source(
     assert "ffprobe" in result.error
 
 
+def test_external_source_survives_missing_ffprobe(tmp_path, monkeypatch):
+    media, source = create_media_and_source(tmp_path)
+    provider = ProviderContractFixture(SRT.replace("Hello", "你好"))
+
+    def fail_probe(*_args, **_kwargs):
+        raise FileNotFoundError("ffprobe")
+
+    monkeypatch.setattr("cueweaver.job.subprocess.run", fail_probe)
+
+    result = JobRunner(translator=provider).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.PUBLISHING,
+        JobState.PUBLISHED,
+    )
+    assert provider.calls == [(source, "zh")]
+    assert result.published_path is not None
+    assert result.published_path.read_text(encoding="utf-8") == SRT.replace(
+        "Hello", "你好"
+    )
+
+
+def test_bitmap_only_failure_reports_completed_discovery(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mp4"
+    media.write_bytes(b"container")
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [{"index": 1, "codec_name": "dvd_subtitle", "tags": {"language": "eng"}}],
+    )
+
+    result = JobRunner().run(media, target_language="zh")
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (JobState.DISCOVERED, JobState.FAILED)
+    assert "No eligible Source" in (result.error or "")
+
+
+@pytest.mark.parametrize(
+    ("provider", "missing_settings", "expected_error"),
+    [
+        (
+            "DeepSeek",
+            ("CUEWEAVER_TRANSLATION_API_KEY", "DEEPSEEK_API_KEY"),
+            "DeepSeek API key is required",
+        ),
+        (
+            "openai-compatible",
+            (
+                "CUEWEAVER_TRANSLATION_SERVER_ADDRESS",
+                "CUSTOM_SERVER_ADDRESS",
+                "CUEWEAVER_TRANSLATION_ENDPOINT",
+                "CUSTOM_ENDPOINT",
+            ),
+            "Custom Server address is required",
+        ),
+    ],
+    ids=["deepseek", "custom-server"],
+)
+def test_missing_provider_configuration_fails_before_translation(
+    tmp_path, monkeypatch, provider, missing_settings, expected_error
+):
+    media, source = create_media_and_source(tmp_path)
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_PROVIDER", provider)
+    for name in missing_settings:
+        monkeypatch.delenv(name, raising=False)
+
+    result = JobRunner().run(media, target_language="zh", source=source)
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (JobState.DISCOVERED, JobState.FAILED)
+    assert result.error is not None
+    assert expected_error in result.error
+
+
 def test_external_source_without_language_signal_requires_confirmation(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.srt"
@@ -545,6 +627,7 @@ def test_non_target_source_uses_the_default_pysubtrans_adapter(tmp_path, monkeyp
 你好
 """
     )
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_API_KEY", "fixture-key")
 
     monkeypatch.setattr(
         "cueweaver.translation.PySubtransTranslator.translate",

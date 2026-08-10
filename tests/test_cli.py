@@ -106,6 +106,7 @@ def test_terminal_flow_prompts_for_ambiguous_sources_and_marks_bitmap_disabled(
     media.write_bytes(b"container")
     english.write_text(SRT, encoding="utf-8")
     french.write_text(SRT, encoding="utf-8")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_API_KEY", "fixture-key")
     monkeypatch.setattr(
         "cueweaver.job.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(

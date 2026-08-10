@@ -123,6 +123,22 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
         return
 
 
+class SwitchableMetadata:
+    def __init__(self, glossary: Glossary) -> None:
+        self.glossary = glossary
+
+    def get_series_overview(self, series_id: str) -> str:
+        return "Series overview"
+
+    def get_episode_overview(
+        self, series_id: str, season_number: int, episode_number: int
+    ) -> str:
+        return "Episode overview"
+
+    def get_glossary(self, series_id: str, target_language: str) -> Glossary:
+        return self.glossary
+
+
 def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
@@ -355,6 +371,75 @@ def test_job_resume_skips_a_committed_batch_after_provider_interruption(tmp_path
         assert request_numbers[3][0] == "11"
         assert request_numbers[3][-1] == "31"
         assert sum("1" in numbers for numbers in request_numbers) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_resume_after_metadata_recovery_does_not_resend_committed_batches(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    source_content = srt_with_cues(31)
+    media.write_bytes(b"media")
+    source.write_text(source_content, encoding="utf-8")
+    server, thread = start_provider_server(fail_after_first_request=True)
+    cache = MetadataCache(tmp_path / "metadata-cache")
+    metadata = SwitchableMetadata(Glossary())
+    automatic = Glossary.from_terms(
+        [
+            Term(
+                source="Line 1",
+                target="第一行",
+                provider="wikidata",
+                source_url="https://www.wikidata.org/wiki/Q1",
+                entity_id="Q1",
+            )
+        ]
+    )
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+        runner = JobRunner(
+            translator=translator,
+            metadata_provider=metadata,
+            metadata_cache=cache,
+        )
+        first = runner.run(
+            media,
+            target_language="zh",
+            source=source,
+            series_id="1399",
+            season_number=1,
+            episode_number=1,
+        )
+
+        metadata.glossary = automatic
+        ProviderFixtureHandler.fail_after_first_request = False
+        second = runner.run(
+            media,
+            target_language="zh",
+            source=source,
+            series_id="1399",
+            season_number=1,
+            episode_number=1,
+            refresh_metadata=True,
+        )
+
+        assert first.state is JobState.FAILED
+        assert second.state is JobState.PUBLISHED
+        request_numbers = provider_request_numbers(max_number=31)
+        assert request_numbers[0][0] == "1"
+        assert request_numbers[1][0] == "11"
+        assert request_numbers[2][0] == "11"
+        assert all("1" not in numbers for numbers in request_numbers[2:]), (
+            request_numbers
+        )
     finally:
         server.shutdown()
         server.server_close()

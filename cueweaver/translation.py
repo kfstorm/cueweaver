@@ -116,6 +116,26 @@ class PySubtransTranslator:
             self._cancel_requested.clear()
             self.intermediate_path = None
 
+    def validate_configuration(self) -> None:
+        """Fail before a Job gathers metadata when provider credentials are absent."""
+
+        if self.provider == "DeepSeek" and not self.api_key:
+            raise TranslationProviderConfigurationError(
+                "DeepSeek API key is required; set CUEWEAVER_TRANSLATION_API_KEY "
+                "or DEEPSEEK_API_KEY"
+            )
+        if self.provider == "Custom Server":
+            if not self.server_address:
+                raise TranslationProviderConfigurationError(
+                    "Custom Server address is required; set "
+                    "CUEWEAVER_TRANSLATION_SERVER_ADDRESS or CUSTOM_SERVER_ADDRESS"
+                )
+            if not self.endpoint:
+                raise TranslationProviderConfigurationError(
+                    "Custom Server endpoint is required; set "
+                    "CUEWEAVER_TRANSLATION_ENDPOINT or CUSTOM_ENDPOINT"
+                )
+
     def translate(
         self,
         source: Path,
@@ -133,7 +153,7 @@ class PySubtransTranslator:
         working_source = _prepare_working_source(
             source,
             target_language,
-            static_terminology,
+            user_overrides,
         )
         settings: dict[str, Any] = {
             "provider": self.provider,
@@ -323,7 +343,7 @@ def _overlay_terminology(
 def _prepare_working_source(
     source: Path,
     target_language: str,
-    terminology: Mapping[str, str] | None = None,
+    user_overrides: Mapping[str, str] | None = None,
 ) -> Path:
     """Place a stable Source copy in the Job work directory used by PySubtrans."""
 
@@ -335,9 +355,13 @@ def _prepare_working_source(
             source_content,
         )
     )
-    if terminology:
+    # Metadata can recover between attempts; only an explicit User override
+    # changes the translation contract enough to invalidate a checkpoint.
+    if user_overrides:
         key_material += b"\0" + json.dumps(
-            sorted(terminology.items(), key=lambda item: (item[0].casefold(), item[0])),
+            sorted(
+                user_overrides.items(), key=lambda item: (item[0].casefold(), item[0])
+            ),
             ensure_ascii=False,
         ).encode("utf-8")
     job_key = hashlib.sha256(key_material).hexdigest()[:16]
