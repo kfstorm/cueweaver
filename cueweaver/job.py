@@ -15,7 +15,7 @@ from os import PathLike
 from os import replace as atomic_replace
 from pathlib import Path
 from threading import Event, Lock
-from typing import Protocol, cast, runtime_checkable
+from typing import Protocol, TypeVar, cast, runtime_checkable
 
 from .metadata import (
     Glossary,
@@ -52,6 +52,12 @@ class JobState(str, Enum):
     PUBLISHED = "published"
     CANCELED = "canceled"
     FAILED = "failed"
+
+
+class SourceSelectionMode(str, Enum):
+    EXPLICIT = "explicit"
+    AUTOMATIC = "automatic"
+    INTERACTIVE = "interactive"
 
 
 class JobError(Exception):
@@ -163,6 +169,13 @@ class SubtitleCandidate:
         if container_number is not None:
             return f"embedded:{container_number}"
         return self.label
+
+
+@dataclass(frozen=True)
+class SourceSelection:
+    mode: SourceSelectionMode
+    candidate: SubtitleCandidate
+    reason: str | None = None
 
 
 class SubtitleExtractor(Protocol):
@@ -292,6 +305,7 @@ _TEXT_CODEC_FORMATS = {
     "hdmv_text_subtitle": SubtitleFormat.SRT,
     "substation_alpha": SubtitleFormat.ASS,
 }
+_ObserverEvent = TypeVar("_ObserverEvent")
 
 
 def discover_external_subtitles(
@@ -580,6 +594,8 @@ class JobRunner:
         | None = None,
         discovery_observer: Callable[[tuple[SubtitleCandidate, ...]], None]
         | None = None,
+        progress_observer: Callable[[JobState], None] | None = None,
+        selection_observer: Callable[[SourceSelection], None] | None = None,
         language_priority: Sequence[str] | str | None = None,
     ):
         self._translator = translator
@@ -611,6 +627,8 @@ class JobRunner:
         self._extractor = extractor or SeconvExtractor()
         self._source_selector = source_selector
         self._discovery_observer = discovery_observer
+        self._progress_observer = progress_observer
+        self._selection_observer = selection_observer
         self._language_priority = (
             language_priority
             if language_priority is not None
@@ -790,6 +808,15 @@ class JobRunner:
         metadata_context: MetadataContext | None = None
         metadata_request: MetadataRequest | None = None
         user_overrides: dict[str, str] = {}
+
+        def record_state(state: JobState) -> None:
+            lifecycle.append(state)
+            try:
+                _notify_observer(self._progress_observer, state)
+            except JobCanceled:
+                if state is not JobState.PUBLISHED:
+                    raise
+
         try:
             configured_target = normalize_language(
                 target_language
@@ -804,18 +831,23 @@ class JobRunner:
             )
             candidates = discover_subtitles(media_path)
             language_priority = self._language_priority
+            language_priority_label = "configured language priority"
             if language_priority is None:
                 language_priority = discover_media_primary_language(media_path)
+                language_priority_label = "Media language priority"
+            record_state(JobState.DISCOVERED)
             if self._discovery_observer is not None:
-                self._discovery_observer(candidates)
-            lifecycle.append(JobState.DISCOVERED)
-            selected_source = _select_source(
+                _notify_observer(self._discovery_observer, candidates)
+            selection = _select_source(
                 candidates,
                 source,
                 media_path.parent,
                 language_priority=language_priority,
+                language_priority_label=language_priority_label,
                 source_selector=self._source_selector,
             )
+            selected_source = selection.candidate
+            _notify_observer(self._selection_observer, selection)
             self._job_work_directory = job_work_directory(
                 media_path,
                 configured_target,
@@ -825,7 +857,7 @@ class JobRunner:
 
             source_path = selected_source.path
             if selected_source.subtype is SubtitleSubtype.EMBEDDED:
-                lifecycle.append(JobState.EXTRACTING)
+                record_state(JobState.EXTRACTING)
                 selected_label = selected_source.label
                 source_path = self._extract_source(media_path, selected_source)
                 selected_source = replace(
@@ -852,7 +884,7 @@ class JobRunner:
             if not no_op:
                 self._validate_translation_configuration()
             if not no_op and metadata_request is not None:
-                lifecycle.append(JobState.METADATA)
+                record_state(JobState.METADATA)
                 metadata_context = self._gather_metadata(
                     metadata_request,
                     target_language=configured_target,
@@ -865,7 +897,7 @@ class JobRunner:
             if no_op:
                 delivered_content = source_content
             else:
-                lifecycle.append(JobState.TRANSLATING)
+                record_state(JobState.TRANSLATING)
                 delivered_content = self._translate(
                     source_path,
                     configured_target,
@@ -881,7 +913,7 @@ class JobRunner:
 
             self._translated_content = delivered_content
             self._raise_if_canceled()
-            lifecycle.append(JobState.VALIDATING)
+            record_state(JobState.VALIDATING)
             validate_subtitle_pair(
                 source_content,
                 delivered_content,
@@ -889,7 +921,7 @@ class JobRunner:
             )
 
             self._raise_if_canceled()
-            lifecycle.append(JobState.PUBLISHING)
+            record_state(JobState.PUBLISHING)
             published_path = _published_path(
                 media_path,
                 configured_target,
@@ -905,7 +937,7 @@ class JobRunner:
             _discard_staged_translation(staged_path)
             self._intermediate_path = None
             self._translated_content = None
-            lifecycle.append(JobState.PUBLISHED)
+            record_state(JobState.PUBLISHED)
             return JobResult(
                 state=JobState.PUBLISHED,
                 lifecycle=tuple(lifecycle),
@@ -934,7 +966,7 @@ class JobRunner:
             terminal_state = (
                 JobState.CANCELED if isinstance(error, JobCanceled) else JobState.FAILED
             )
-            lifecycle.append(terminal_state)
+            record_state(terminal_state)
             return JobResult(
                 state=terminal_state,
                 lifecycle=tuple(lifecycle),
@@ -1593,6 +1625,20 @@ def _infer_language(suffix: str) -> str | None:
     return None
 
 
+def _notify_observer(
+    observer: Callable[[_ObserverEvent], None] | None,
+    event: _ObserverEvent,
+) -> None:
+    if observer is None:
+        return
+    try:
+        observer(event)
+    except JobCanceled:
+        raise
+    except Exception:  # noqa: BLE001 - observer failures must not alter the Job
+        return
+
+
 def rank_subtitle_candidates(
     candidates: Sequence[SubtitleCandidate],
     language_priority: Sequence[str] | str | None = None,
@@ -1622,31 +1668,36 @@ def _select_source(
     media_directory: Path,
     *,
     language_priority: Sequence[str] | str | None = None,
+    language_priority_label: str = "language priority",
     source_selector: Callable[
         [tuple[SubtitleCandidate, ...]],
         SubtitleCandidate,
     ]
     | None = None,
-) -> SubtitleCandidate:
+) -> SourceSelection:
     if source is not None:
         requested_source = _resolve_source_reference(
             candidates, source, media_directory
         )
         if requested_source is None:
-            raise SourceSelectionError(f"Source was not discovered: {source}")
-        if not requested_source.selectable:
-            raise SourceSelectionError(
-                "Bitmap Sources are visible but disabled and cannot be selected"
+            raise _selection_error_with_candidates(
+                f"Source was not discovered: {source}", candidates
             )
-        return requested_source
+        if not requested_source.selectable:
+            raise _selection_error_with_candidates(
+                "Bitmap Sources are visible but disabled and cannot be selected",
+                candidates,
+            )
+        return SourceSelection(SourceSelectionMode.EXPLICIT, requested_source)
 
     eligible = tuple(candidate for candidate in candidates if candidate.selectable)
     if not eligible:
         if candidates:
-            raise SourceSelectionError(
+            raise _selection_error_with_candidates(
                 "No eligible Source found: the discovered candidates are Bitmap "
                 "subtitles, which are visible but disabled; Subtitle OCR is not "
-                "available in v0.1"
+                "available in v0.1",
+                candidates,
             )
         raise SourceSelectionError(
             "No eligible Source found beside the Media "
@@ -1656,19 +1707,87 @@ def _select_source(
     ranked = rank_subtitle_candidates(eligible, language_priority)
     if _source_needs_confirmation(ranked, language_priority):
         if source_selector is None:
-            names = ", ".join(candidate.label for candidate in candidates)
-            raise SourceSelectionError(
-                "Explicit Source selection is required; choose one with "
-                f"--source: {names}"
+            raise _selection_error_with_candidates(
+                "Explicit Source selection is required; choose one with --source",
+                candidates,
             )
-        selected_reference = source_selector(candidates)
-        return _select_source(
-            candidates,
-            selected_reference,
-            media_directory,
-            language_priority=language_priority,
+        try:
+            selected_reference = source_selector(candidates)
+        except KeyboardInterrupt as error:
+            raise JobCanceled("Job canceled") from error
+        except SourceSelectionError as error:
+            raise _selection_error_with_candidates(str(error), candidates) from error
+        selected_source = _resolve_source_reference(
+            candidates, selected_reference, media_directory
         )
-    return ranked[0]
+        if selected_source is None:
+            raise _selection_error_with_candidates(
+                "Interactive Source selection returned an undiscovered Source",
+                candidates,
+            )
+        if not selected_source.selectable:
+            raise _selection_error_with_candidates(
+                "Bitmap Sources are visible but disabled and cannot be selected",
+                candidates,
+            )
+        return SourceSelection(SourceSelectionMode.INTERACTIVE, selected_source)
+
+    return SourceSelection(
+        SourceSelectionMode.AUTOMATIC,
+        ranked[0],
+        _selection_reason(ranked, language_priority, language_priority_label),
+    )
+
+
+def format_candidates(
+    candidates: Sequence[SubtitleCandidate],
+    *,
+    heading: str = "Discovered Sources",
+) -> str:
+    lines = [heading]
+    for index, candidate in enumerate(candidates, start=1):
+        lines.append(format_candidate(candidate, index))
+    return "\n".join(lines)
+
+
+def format_candidate(candidate: SubtitleCandidate, index: int) -> str:
+    if candidate.subtype is SubtitleSubtype.BITMAP:
+        status = "disabled; needs Subtitle OCR"
+    elif candidate.subtype is SubtitleSubtype.EMBEDDED:
+        status = "needs Extraction"
+    else:
+        status = "ready"
+    return (
+        f"  {index}. {candidate.label} "
+        f"[{candidate.subtype.value}, I/O cost {candidate.io_cost}; {status}]"
+    )
+
+
+def _selection_error_with_candidates(
+    message: str,
+    candidates: Sequence[SubtitleCandidate],
+) -> SourceSelectionError:
+    return SourceSelectionError(
+        f"{message}\n{format_candidates(candidates, heading='Available Sources')}"
+    )
+
+
+def _selection_reason(
+    ranked: tuple[SubtitleCandidate, ...],
+    language_priority: Sequence[str] | str | None,
+    language_priority_label: str,
+) -> str:
+    if len(ranked) == 1:
+        return "only eligible Source"
+    first, second = ranked[:2]
+    if first.io_cost != second.io_cost:
+        return "lowest I/O cost"
+    priorities = _normalise_language_priority(language_priority)
+    if _language_rank(first.language, priorities) != _language_rank(
+        second.language, priorities
+    ):
+        return f"{language_priority_label}: {first.language}"
+    return "deterministic ranking"
 
 
 def _resolve_source_reference(

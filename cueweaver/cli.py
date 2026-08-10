@@ -10,11 +10,13 @@ from pathlib import Path
 from types import FrameType
 
 from .job import (
+    JobCanceled,
     JobRunner,
     JobState,
+    SourceSelection,
     SourceSelectionError,
     SubtitleCandidate,
-    SubtitleSubtype,
+    format_candidates,
 )
 
 
@@ -100,12 +102,15 @@ def main(
     active_runner = runner or JobRunner(
         source_selector=_prompt_for_source,
         discovery_observer=_display_candidates,
+        progress_observer=_display_progress,
+        selection_observer=_display_selection,
         language_priority=args.language_priority,
         user_override_directory=args.user_override_directory,
     )
 
     def request_cancel(_signal_number: int, _frame: FrameType | None) -> None:
         active_runner.cancel()
+        raise JobCanceled("Job canceled")
 
     handler_installed = False
     previous_handler = signal.getsignal(signal.SIGINT)
@@ -136,6 +141,7 @@ def main(
         )
         if result.intermediate_path is not None:
             print(f"  intermediate: {result.intermediate_path}", file=sys.stderr)
+        print("  published: no", file=sys.stderr)
         return 1
     if result.state is JobState.FAILED:
         print(f"Job failed: {result.error}", file=sys.stderr)
@@ -165,13 +171,16 @@ def main(
 def _prompt_for_source(
     candidates: tuple[SubtitleCandidate, ...],
 ) -> SubtitleCandidate:
-    print("Source selection required")
+    print("Source selection required", file=sys.stderr)
+    print("Choose a Source number: ", file=sys.stderr, end="", flush=True)
     try:
-        choice = input("Choose a Source number: ").strip()
+        choice = input("").strip()
     except EOFError as error:
         raise SourceSelectionError(
             "Source selection requires an interactive choice"
         ) from error
+    except KeyboardInterrupt as error:
+        raise JobCanceled("Job canceled") from error
     if not choice.isdigit():
         raise SourceSelectionError("Source selection must be a candidate number")
     index = int(choice) - 1
@@ -186,18 +195,22 @@ def _prompt_for_source(
 
 
 def _display_candidates(candidates: tuple[SubtitleCandidate, ...]) -> None:
-    print("Discovered Sources")
-    for index, candidate in enumerate(candidates, start=1):
-        if candidate.subtype is SubtitleSubtype.BITMAP:
-            status = "disabled; needs Subtitle OCR"
-        elif candidate.subtype is SubtitleSubtype.EMBEDDED:
-            status = "needs Extraction"
-        else:
-            status = "ready"
-        print(
-            f"  {index}. {candidate.label} "
-            f"[{candidate.subtype.value}, I/O cost {candidate.io_cost}; {status}]"
-        )
+    print(format_candidates(candidates), file=sys.stderr)
+
+
+def _display_progress(state: JobState) -> None:
+    print(f"[progress] {state.value}", file=sys.stderr)
+
+
+def _display_selection(selection: SourceSelection) -> None:
+    message = (
+        f"Source selected ({selection.mode.value}): {selection.candidate.label} "
+        f"[{selection.candidate.subtype.value}, "
+        f"I/O cost {selection.candidate.io_cost}"
+    )
+    if selection.reason is not None:
+        message += f"; {selection.reason}"
+    print(f"{message}]", file=sys.stderr)
 
 
 if __name__ == "__main__":
