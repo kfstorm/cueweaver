@@ -56,6 +56,21 @@ class ProviderContractFixture:
         return self.translated
 
 
+class DynamicTerminologySettingTranslator:
+    def __init__(self):
+        self.settings: list[bool] = []
+
+    def translate(
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        dynamic_terminology_enabled: bool,
+    ) -> str:
+        self.settings.append(dynamic_terminology_enabled)
+        return SRT.replace("Hello", "你好")
+
+
 class ExtractionFixture:
     def __init__(self, content: str = SRT):
         self.content = content
@@ -857,6 +872,93 @@ def test_missing_target_language_fails_before_discovery_or_translation(
     )
     assert result.lifecycle == (JobState.FAILED,)
     assert not (tmp_path / "Movie.zh.srt").exists()
+
+
+def test_dynamic_terminology_setting_defaults_to_enabled(tmp_path, monkeypatch):
+    media, source = create_media_and_source(tmp_path)
+    translator = DynamicTerminologySettingTranslator()
+    monkeypatch.delenv("CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP", raising=False)
+
+    result = JobRunner(translator=translator).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.dynamic_terminology_enabled is True
+    assert translator.settings == [True]
+
+
+def test_explicit_dynamic_terminology_value_wins_over_environment(
+    tmp_path, monkeypatch
+):
+    media, source = create_media_and_source(tmp_path)
+    translator = DynamicTerminologySettingTranslator()
+    monkeypatch.setenv("CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP", "false")
+
+    result = JobRunner(translator=translator).run(
+        media,
+        target_language="zh",
+        source=source,
+        dynamic_terminology_enabled=True,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.dynamic_terminology_enabled is True
+    assert translator.settings == [True]
+
+
+def test_dynamic_terminology_setting_reads_common_environment_booleans(
+    tmp_path, monkeypatch
+):
+    media, source = create_media_and_source(tmp_path)
+    translator = DynamicTerminologySettingTranslator()
+    monkeypatch.setenv("CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP", "No")
+
+    result = JobRunner(translator=translator).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.dynamic_terminology_enabled is False
+    assert translator.settings == [False]
+
+
+def test_invalid_dynamic_terminology_environment_value_fails_before_discovery(
+    tmp_path, monkeypatch
+):
+    media, source = create_media_and_source(tmp_path)
+    monkeypatch.setenv("CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP", "maybe")
+
+    result = JobRunner(translator=TranslatorMustNotBeCalled()).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (JobState.FAILED,)
+    assert "CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP" in (result.error or "")
+
+
+def test_invalid_programmatic_dynamic_terminology_value_fails_before_discovery(
+    tmp_path,
+):
+    media, source = create_media_and_source(tmp_path)
+
+    result = JobRunner(translator=TranslatorMustNotBeCalled()).run(
+        media,
+        target_language="zh",
+        source=source,
+        dynamic_terminology_enabled=1,
+    )
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (JobState.FAILED,)
+    assert "must be a bool or None" in (result.error or "")
 
 
 @pytest.mark.parametrize(

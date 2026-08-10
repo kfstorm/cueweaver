@@ -65,7 +65,18 @@ Missing target labels may use an exact structured Wikipedia `langlinks`/
 scraped. Ambiguous or unsupported mappings are dropped, so a series with no
 usable relations continues with an empty Glossary and baseline translation.
 Glossary Terms are cached at the same series scope and seeded into PySubtrans;
-dynamic terminology learning remains enabled for uncovered terms.
+dynamic terminology learning remains enabled for uncovered terms. Use
+`--no-dynamic-terminology` or set
+`CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP=false` to disable it for a Job. The paired
+`--dynamic-terminology` option explicitly enables it, and an explicit CLI value
+overrides the environment variable. The environment variable accepts
+`true`/`false`, `yes`/`no`, and `1`/`0`.
+
+Dynamic terminology discovery can make later prompts grow as new mappings are
+learned, increasing token usage. Disabling it keeps prompts deterministic from
+the static Glossary and User override seeds, which can improve consistency and
+DeepSeek prefix-cache reuse, but uncovered terms will not be learned between
+batches. The two modes use separate Job checkpoints.
 
 User overrides are loaded from one JSON file per scope. By default, files live
 under `$XDG_CONFIG_HOME/cueweaver/overrides` or `~/.config/cueweaver/overrides`;
