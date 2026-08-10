@@ -6,10 +6,12 @@ import pytest
 
 from cueweaver import publishing
 from cueweaver.job import (
+    JobCanceled,
     JobError,
     JobRunner,
     JobState,
     SeconvExtractor,
+    SourceSelectionMode,
     SubtitleCandidate,
     SubtitleFormat,
     SubtitleSubtype,
@@ -188,8 +190,15 @@ def test_embedded_source_is_extracted_only_after_explicit_selection_and_cached(
     translated = SRT.replace("Hello", "你好")
     provider = ProviderContractFixture(translated)
     candidate = discover_subtitles(media)[0]
+    states = []
+    selections = []
 
-    first = JobRunner(translator=provider, extractor=extractor).run(
+    first = JobRunner(
+        translator=provider,
+        extractor=extractor,
+        progress_observer=states.append,
+        selection_observer=selections.append,
+    ).run(
         media,
         target_language="zh",
         source=candidate,
@@ -209,6 +218,11 @@ def test_embedded_source_is_extracted_only_after_explicit_selection_and_cached(
         JobState.PUBLISHING,
         JobState.PUBLISHED,
     )
+    assert states == list(first.lifecycle)
+    assert len(selections) == 1
+    assert selections[0].mode is SourceSelectionMode.EXPLICIT
+    assert selections[0].candidate.subtype is SubtitleSubtype.EMBEDDED
+    assert selections[0].reason is None
     assert first.source is not None
     assert first.source.subtype is SubtitleSubtype.EMBEDDED
     assert first.source.path == extractor.calls[0][2]
@@ -291,6 +305,8 @@ def test_bitmap_only_media_fails_with_no_eligible_source(tmp_path, monkeypatch):
     assert result.state is JobState.FAILED
     assert result.error is not None
     assert "No eligible Source" in result.error
+    assert "Available Sources" in result.error
+    assert "Movie.mp4" in result.error
 
 
 def test_media_primary_language_breaks_external_ties_without_configuration(
@@ -488,16 +504,78 @@ def test_language_priority_breaks_an_external_source_tie(tmp_path):
     first_source.write_text(SRT, encoding="utf-8")
     preferred_source.write_text(SRT, encoding="utf-8")
     provider = ProviderContractFixture(SRT.replace("Hello", "こんにちは"))
+    selections = []
 
     result = JobRunner(
         translator=provider,
         language_priority=("ja", "en"),
+        selection_observer=selections.append,
     ).run(media, target_language="zh")
 
     assert result.state is JobState.PUBLISHED
     assert result.source is not None
     assert result.source.path == preferred_source
     assert provider.calls == [(preferred_source, "zh")]
+    assert selections[0].reason == "configured language priority: ja"
+
+
+def test_automatic_selection_reports_reason_and_lifecycle_progress(tmp_path):
+    media, source = create_media_and_source(tmp_path)
+    provider = ProviderContractFixture(SRT.replace("Hello", "你好"))
+    states = []
+    selections = []
+
+    result = JobRunner(
+        translator=provider,
+        progress_observer=states.append,
+        selection_observer=selections.append,
+    ).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+    assert states == [
+        JobState.DISCOVERED,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.PUBLISHING,
+        JobState.PUBLISHED,
+    ]
+    assert len(selections) == 1
+    assert selections[0].mode is SourceSelectionMode.AUTOMATIC
+    assert selections[0].candidate.path == source
+    assert selections[0].reason == "only eligible Source"
+
+
+def test_observer_failures_do_not_change_job_result(tmp_path):
+    media, _source = create_media_and_source(tmp_path)
+    provider = ProviderContractFixture(SRT.replace("Hello", "你好"))
+
+    def fail_observer(_event):
+        raise RuntimeError("terminal is unavailable")
+
+    result = JobRunner(
+        translator=provider,
+        progress_observer=fail_observer,
+        selection_observer=fail_observer,
+    ).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+
+
+def test_cancel_during_published_notification_keeps_published_result(tmp_path):
+    media, _source = create_media_and_source(tmp_path)
+    provider = ProviderContractFixture(SRT.replace("Hello", "你好"))
+
+    def cancel_on_published(state):
+        if state is JobState.PUBLISHED:
+            raise JobCanceled("Job canceled")
+
+    result = JobRunner(
+        translator=provider,
+        progress_observer=cancel_on_published,
+    ).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+    assert result.published_path is not None
 
 
 def test_ambiguous_sources_use_one_explicit_selection_callback(tmp_path):
@@ -620,8 +698,9 @@ def test_cancel_is_terminal_retains_intermediate_result_and_does_not_publish(
     media.write_bytes(b"media")
     source.write_text(SRT, encoding="utf-8")
     translator = BlockingCancellableTranslator(intermediate, translated)
-    runner = JobRunner(translator=translator)
     results = []
+    states = []
+    runner = JobRunner(translator=translator, progress_observer=states.append)
 
     thread = Thread(
         target=lambda: results.append(
@@ -644,6 +723,7 @@ def test_cancel_is_terminal_retains_intermediate_result_and_does_not_publish(
         JobState.TRANSLATING,
         JobState.CANCELED,
     )
+    assert states == list(result.lifecycle)
     assert result.published_path is None
     assert result.intermediate_path == intermediate
     assert intermediate.read_text(encoding="utf-8") == translated
@@ -1039,7 +1119,8 @@ def test_atomic_publishing_failure_is_recoverable_at_the_job_boundary(
         return real_replace(temporary_path, final_path)
 
     monkeypatch.setattr("cueweaver.publishing.os.replace", fail_first_replace)
-    runner = JobRunner(translator=provider)
+    states = []
+    runner = JobRunner(translator=provider, progress_observer=states.append)
 
     failed = runner.run(media, target_language="zh", source=source)
 
@@ -1051,6 +1132,7 @@ def test_atomic_publishing_failure_is_recoverable_at_the_job_boundary(
         JobState.PUBLISHING,
         JobState.FAILED,
     )
+    assert states == list(failed.lifecycle)
     assert failed.intermediate_path is not None
     assert failed.intermediate_path.read_text(encoding="utf-8") == translated
     assert destination.read_text(encoding="utf-8") == "previous complete artifact"
