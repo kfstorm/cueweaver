@@ -25,6 +25,7 @@ from .metadata import (
     MetadataError,
     MetadataProvider,
     MetadataRequest,
+    MetadataValue,
     SeriesWikidataIdentifierProvider,
     TMDbMetadataProvider,
     WikidataGlossaryProvider,
@@ -835,6 +836,16 @@ class JobRunner:
                 self._raise_if_canceled()
 
             effective_source_language = source_language or selected_source.language
+            if metadata_request is not None:
+                metadata_request = replace(
+                    metadata_request,
+                    source_language=(
+                        normalize_language(effective_source_language)
+                        if effective_source_language is not None
+                        else None
+                    ),
+                    target_language=configured_target,
+                )
             no_op = languages_match(effective_source_language, configured_target)
             source_content = source_path.read_bytes()
             self._raise_if_canceled()
@@ -970,63 +981,120 @@ class JobRunner:
                 self._active_metadata_provider = None
         glossary_provider = self._resolve_glossary_provider(provider)
         cache = self._metadata_cache or MetadataCache(_default_metadata_cache_path())
+        cached_series: dict[str, MetadataValue] = {}
+        cached_episode: dict[str, MetadataValue] = {}
         series_overview: str | None = None
         episode_overview: str | None = None
+        series_title_source = ""
+        series_overview_source = ""
+        series_title_target = ""
+        series_overview_target = ""
+        episode_title_source = ""
+        episode_overview_source = ""
+        episode_title_target = ""
+        episode_overview_target = ""
         glossary: Glossary | None = None
         degradation: list[str] = []
         context_failed = False
         glossary_cached = False
-        if not refresh:
-            series_overview, episode_overview = cache.load(request)
+        if refresh:
+            cache.clear_context(request)
+        else:
+            cached_series, cached_episode = cache.load(request)
             glossary = cache.load_glossary(request, target_language)
             glossary_cached = glossary is not None
 
-        for attempt in range(2):
-            try:
-                with self._state_lock:
-                    self._active_metadata_provider = provider
-                self._raise_if_canceled()
-                if series_overview is None:
-                    series_overview = _fetch_metadata_overview(
-                        lambda: provider.get_series_overview(request.series_id),
-                        "series",
-                    )
-                    cache.store(request, series_overview=series_overview)
-                self._raise_if_canceled()
-                if request.episode_key is not None and episode_overview is None:
-                    season_number = request.season_number
-                    episode_number = request.episode_number
-                    assert season_number is not None
-                    assert episode_number is not None
-
-                    def fetch_episode_overview(
-                        season_number: int = season_number,
-                        episode_number: int = episode_number,
-                    ) -> str:
-                        return provider.get_episode_overview(
-                            request.series_id,
-                            season_number,
-                            episode_number,
+        localized = _supports_localized_metadata(provider)
+        if localized:
+            (
+                series_title_source,
+                series_overview_source,
+                series_title_target,
+                series_overview_target,
+                series_failed,
+            ) = self._gather_localized_entity(
+                provider,
+                cache,
+                request,
+                cached_series,
+                entity="series",
+                degradation=degradation,
+            )
+            context_failed = context_failed or series_failed
+            series_overview = series_overview_source or series_overview_target or None
+            if request.episode_key is not None:
+                (
+                    episode_title_source,
+                    episode_overview_source,
+                    episode_title_target,
+                    episode_overview_target,
+                    episode_failed,
+                ) = self._gather_localized_entity(
+                    provider,
+                    cache,
+                    request,
+                    cached_episode,
+                    entity="episode",
+                    degradation=degradation,
+                )
+                context_failed = context_failed or episode_failed
+                episode_overview = (
+                    episode_overview_source or episode_overview_target or None
+                )
+        else:
+            for attempt in range(2):
+                try:
+                    with self._state_lock:
+                        self._active_metadata_provider = provider
+                    self._raise_if_canceled()
+                    legacy_series = cached_series.get("legacy")
+                    if legacy_series is not None:
+                        series_overview = legacy_series.overview
+                    if series_overview is None:
+                        series_overview = _fetch_metadata_overview(
+                            lambda: provider.get_series_overview(request.series_id),
+                            "series",
                         )
+                        cache.store(request, series_overview=series_overview)
+                    self._raise_if_canceled()
+                    if request.episode_key is not None and episode_overview is None:
+                        season_number = request.season_number
+                        episode_number = request.episode_number
+                        assert season_number is not None
+                        assert episode_number is not None
 
-                    episode_overview = _fetch_metadata_overview(
-                        fetch_episode_overview,
-                        "episode",
-                    )
-                    cache.store(request, episode_overview=episode_overview)
-                self._raise_if_canceled()
-                break
-            except JobCanceled:
-                raise
-            except (MetadataError, OSError) as error:
-                if self._cancel_requested.is_set():
-                    raise JobCanceled("Job canceled") from error
-                if attempt == 1:
-                    context_failed = True
-                    degradation.append(f"Metadata degraded: {error}")
-            finally:
-                with self._state_lock:
-                    self._active_metadata_provider = None
+                        def fetch_episode_overview(
+                            season_number: int = season_number,
+                            episode_number: int = episode_number,
+                        ) -> str:
+                            return provider.get_episode_overview(
+                                request.series_id,
+                                season_number,
+                                episode_number,
+                            )
+
+                        legacy_episode = cached_episode.get("legacy")
+                        if legacy_episode is not None:
+                            episode_overview = legacy_episode.overview
+                        if episode_overview is None:
+                            episode_overview = _fetch_metadata_overview(
+                                fetch_episode_overview,
+                                "episode",
+                            )
+                            cache.store(request, episode_overview=episode_overview)
+                    self._raise_if_canceled()
+                    break
+                except JobCanceled:
+                    raise
+                except (MetadataError, OSError) as error:
+                    if self._cancel_requested.is_set():
+                        raise JobCanceled("Job canceled") from error
+                    if attempt == 1:
+                        context_failed = True
+                        degradation.append(f"Metadata degraded: {error}")
+                finally:
+                    with self._state_lock:
+                        self._active_metadata_provider = None
 
         if (
             glossary is None
@@ -1073,7 +1141,126 @@ class JobRunner:
             episode_overview=episode_overview or "",
             glossary=glossary or Glossary(),
             degradation="; ".join(degradation) or None,
+            series_title_source=series_title_source,
+            series_overview_source=series_overview_source,
+            series_title_target=series_title_target,
+            series_overview_target=series_overview_target,
+            episode_title_source=episode_title_source,
+            episode_overview_source=episode_overview_source,
+            episode_title_target=episode_title_target,
+            episode_overview_target=episode_overview_target,
+            localized=localized,
         )
+
+    def _gather_localized_entity(
+        self,
+        provider: MetadataProvider,
+        cache: MetadataCache,
+        request: MetadataRequest,
+        cached: dict[str, MetadataValue],
+        *,
+        entity: str,
+        degradation: list[str],
+    ) -> tuple[str, str, str, str, bool]:
+        values: list[tuple[str, str]] = []
+        failed = False
+        for role, language in (
+            ("source", request.source_language),
+            ("target", request.target_language),
+        ):
+            if language is None:
+                values.extend((("", ""), ("", "")))
+                continue
+            for metadata_field in ("title", "overview"):
+                cached_metadata = cached.get(language)
+                cached_value = (
+                    getattr(cached_metadata, metadata_field)
+                    if cached_metadata is not None
+                    else ""
+                )
+                if cached_value:
+                    values.append((role, cached_value))
+                    continue
+                method = getattr(provider, f"get_{entity}_{metadata_field}", None)
+                if not callable(method):
+                    failed = True
+                    degradation.append(
+                        "Metadata degraded: Metadata provider does not support "
+                        f"localized {entity} {metadata_field} ({role}: {language})"
+                    )
+                    values.append((role, ""))
+                    continue
+                args: tuple[object, ...] = (request.series_id,)
+                if entity == "episode":
+                    assert request.season_number is not None
+                    assert request.episode_number is not None
+                    args += (request.season_number, request.episode_number)
+                try:
+                    value = self._fetch_localized_metadata_field(
+                        method,
+                        args,
+                        language,
+                        f"{entity} {metadata_field} ({role}: {language})",
+                        provider,
+                    )
+                except JobCanceled:
+                    raise
+                except MetadataError as error:
+                    failed = True
+                    degradation.append(f"Metadata degraded: {error}")
+                    value = ""
+                values.append((role, value))
+                if value:
+                    cache.store(
+                        request,
+                        language=language,
+                        **{
+                            f"{entity}_{metadata_field}": value,
+                        },
+                    )
+
+        source_title = values[0][1]
+        source_overview = values[1][1]
+        target_title = values[2][1]
+        target_overview = values[3][1]
+        return (
+            source_title,
+            source_overview,
+            target_title,
+            target_overview,
+            failed,
+        )
+
+    def _fetch_localized_metadata_field(
+        self,
+        method: Callable[..., object],
+        args: tuple[object, ...],
+        language: str,
+        label: str,
+        provider: object,
+    ) -> str:
+        for attempt in range(2):
+            try:
+                with self._state_lock:
+                    self._active_metadata_provider = provider
+                self._raise_if_canceled()
+                value = _call_metadata_method(method, args, language)
+                if not isinstance(value, str) or not value.strip():
+                    raise MetadataError(
+                        f"Metadata provider returned no localized {label}"
+                    )
+                return value
+            except JobCanceled:
+                raise
+            except Exception as error:
+                if self._cancel_requested.is_set():
+                    raise JobCanceled("Job canceled") from error
+                if attempt == 1:
+                    raise MetadataError(str(error)) from error
+            finally:
+                with self._state_lock:
+                    self._active_metadata_provider = None
+        raise MetadataError(f"Metadata provider returned no {label}")
 
     def _resolve_metadata_cache_request(
         self,
@@ -1294,6 +1481,48 @@ def _fetch_metadata_overview(
     except Exception as error:
         raise MetadataError(str(error)) from error
     return _validate_metadata_overview(value, label)
+
+
+def _supports_localized_metadata(provider: object) -> bool:
+    for entity in ("series", "episode"):
+        for metadata_field in ("title", "overview"):
+            method = getattr(provider, f"get_{entity}_{metadata_field}", None)
+            if callable(method) and _method_accepts_language(method):
+                return True
+    return False
+
+
+def _method_accepts_language(method: Callable[..., object]) -> bool:
+    try:
+        parameters = tuple(inspect.signature(method).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "language"
+        or parameter.kind is parameter.VAR_POSITIONAL
+        or parameter.kind is parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
+def _call_metadata_method(
+    method: Callable[..., object],
+    args: tuple[object, ...],
+    language: str,
+) -> object:
+    try:
+        parameters = tuple(inspect.signature(method).parameters.values())
+    except (TypeError, ValueError):
+        return method(*args, language)
+    language_parameter = next(
+        (parameter for parameter in parameters if parameter.name == "language"),
+        None,
+    )
+    if language_parameter is not None and (
+        language_parameter.kind is language_parameter.KEYWORD_ONLY
+    ):
+        return method(*args, language=language)
+    return method(*args, language)
 
 
 def _validate_metadata_overview(value: object, label: str) -> str:

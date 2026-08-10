@@ -13,3 +13,9 @@ _.translation
 # HTTPServer callback methods are invoked by the standard library.
 ProviderFixtureHandler.do_POST
 ProviderFixtureHandler.log_message
+
+# Metadata methods are selected by entity/field name at runtime.
+MetadataProvider.get_series_title
+MetadataProvider.get_episode_title
+TMDbMetadataProvider.get_series_title
+TMDbMetadataProvider.get_episode_title

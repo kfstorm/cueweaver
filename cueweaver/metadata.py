@@ -145,6 +145,8 @@ class MetadataRequest:
     season_number: int | None = None
     episode_number: int | None = None
     cache_key: str | None = None
+    source_language: str | None = None
+    target_language: str | None = None
 
     def __post_init__(self) -> None:
         series_id = self.series_id.strip()
@@ -156,6 +158,15 @@ class MetadataRequest:
             if not cache_key:
                 raise MetadataConfigurationError("Metadata cache key cannot be empty")
             object.__setattr__(self, "cache_key", cache_key)
+        for field_name in ("source_language", "target_language"):
+            language = getattr(self, field_name)
+            if language is not None:
+                language = _metadata_cache_language(language)
+                if not language:
+                    raise MetadataConfigurationError(
+                        f"Metadata {field_name.replace('_', ' ')} cannot be empty"
+                    )
+                object.__setattr__(self, field_name, language)
         if (self.season_number is None) != (self.episode_number is None):
             raise MetadataConfigurationError(
                 "Both season and episode numbers are required for episode Context"
@@ -177,6 +188,22 @@ class MetadataRequest:
 
         return self.cache_key or self.series_id
 
+    @property
+    def language_pair(self) -> str:
+        """Return the language-pair cache variant for this request."""
+
+        source = self.source_language or "unknown"
+        target = self.target_language or "unknown"
+        return f"{source}->{target}"
+
+
+@dataclass(frozen=True)
+class MetadataValue:
+    """One localized title and overview returned by a metadata provider."""
+
+    title: str = ""
+    overview: str = ""
+
 
 @dataclass(frozen=True)
 class MetadataContext:
@@ -187,10 +214,60 @@ class MetadataContext:
     episode_overview: str = ""
     degradation: str | None = None
     glossary: Glossary = Glossary()
+    series_title_source: str = ""
+    series_overview_source: str = ""
+    series_title_target: str = ""
+    series_overview_target: str = ""
+    episode_title_source: str = ""
+    episode_overview_source: str = ""
+    episode_title_target: str = ""
+    episode_overview_target: str = ""
+    localized: bool = False
 
     @property
     def text(self) -> str:
         sections: list[str] = []
+        source_language = self.request.source_language
+        target_language = self.request.target_language
+        if self.localized and (
+            source_language is not None or target_language is not None
+        ):
+            self._append_localized_sections(
+                sections,
+                "Series",
+                source_language,
+                self.series_title_source,
+                self.series_overview_source,
+                "source",
+            )
+            self._append_localized_sections(
+                sections,
+                "Series",
+                target_language,
+                self.series_title_target,
+                self.series_overview_target,
+                "target",
+            )
+            episode_suffix = self._episode_suffix()
+            self._append_localized_sections(
+                sections,
+                "Episode",
+                source_language,
+                self.episode_title_source,
+                self.episode_overview_source,
+                "source",
+                episode_suffix,
+            )
+            self._append_localized_sections(
+                sections,
+                "Episode",
+                target_language,
+                self.episode_title_target,
+                self.episode_overview_target,
+                "target",
+                episode_suffix,
+            )
+            return "\n\n".join(sections)
         if self.series_overview:
             sections.append(f"TMDb series overview:\n{self.series_overview}")
         if self.episode_overview:
@@ -206,13 +283,53 @@ class MetadataContext:
             sections.append(f"{episode_label}:\n{self.episode_overview}")
         return "\n\n".join(sections)
 
+    def _append_localized_sections(
+        self,
+        sections: list[str],
+        entity: str,
+        language: str | None,
+        title: str,
+        overview: str,
+        role: str,
+        suffix: str = "",
+    ) -> None:
+        if language is None:
+            return
+        if title:
+            sections.append(f"{entity} title ({role}: {language}){suffix}:\n{title}")
+        if overview:
+            sections.append(
+                f"{entity} overview ({role}: {language}){suffix}:\n{overview}"
+            )
+
+    def _episode_suffix(self) -> str:
+        if self.request.season_number is None or self.request.episode_number is None:
+            return ""
+        return f" (S{self.request.season_number:02d}E{self.request.episode_number:02d})"
+
 
 class MetadataProvider(Protocol):
-    def get_series_overview(self, series_id: str) -> str:
+    def get_series_title(self, series_id: str, language: str | None = None) -> str:
+        """Return the localized TMDb series title."""
+
+    def get_series_overview(self, series_id: str, language: str | None = None) -> str:
         """Return the full TMDb series overview."""
 
+    def get_episode_title(
+        self,
+        series_id: str,
+        season_number: int,
+        episode_number: int,
+        language: str | None = None,
+    ) -> str:
+        """Return the localized TMDb episode title."""
+
     def get_episode_overview(
-        self, series_id: str, season_number: int, episode_number: int
+        self,
+        series_id: str,
+        season_number: int,
+        episode_number: int,
+        language: str | None = None,
     ) -> str:
         """Return the full TMDb episode overview."""
 
@@ -234,45 +351,141 @@ class MetadataCache:
         self.directory = Path(directory).expanduser().resolve()
         self._lock = Lock()
 
-    def load(self, request: MetadataRequest) -> tuple[str | None, str | None]:
-        """Return cached series and episode overviews, if present."""
+    def load(
+        self, request: MetadataRequest
+    ) -> tuple[dict[str, MetadataValue], dict[str, MetadataValue]]:
+        """Return cached localized series and episode metadata, if present."""
 
         with self._lock:
             payload = self._read(request.cache_identity)
-            series_overview = payload.get("series_overview")
-            episodes = payload.get("episodes")
-            episode_overview = None
-            if request.episode_key is not None and isinstance(episodes, dict):
-                value = episodes.get(request.episode_key)
-                if isinstance(value, str):
-                    episode_overview = value
-            return (
-                series_overview if isinstance(series_overview, str) else None,
-                episode_overview,
+            variants = payload.get("contexts")
+            if isinstance(variants, dict):
+                variant = variants.get(request.language_pair)
+                if isinstance(variant, dict):
+                    series = _metadata_values(variant.get("series"))
+                    episodes = variant.get("episodes")
+                    episode: dict[str, MetadataValue] = {}
+                    if request.episode_key is not None and isinstance(episodes, dict):
+                        episode = _metadata_values(episodes.get(request.episode_key))
+                    return series, episode
+
+            # Read the pre-language-pair cache format for existing Jobs, but never
+            # write new values into that shared namespace.
+            legacy_series_value = _metadata_value(
+                {"overview": payload.get("series_overview")}
             )
+            legacy_series = (
+                {"legacy": legacy_series_value}
+                if legacy_series_value is not None
+                else {}
+            )
+            legacy_episode: dict[str, MetadataValue] = {}
+            episodes = payload.get("episodes")
+            if request.episode_key is not None and isinstance(episodes, dict):
+                legacy_episode_value = _metadata_value(
+                    {"overview": episodes.get(request.episode_key)}
+                )
+                if legacy_episode_value is not None:
+                    legacy_episode["legacy"] = legacy_episode_value
+            return legacy_series, legacy_episode
 
     def store(
         self,
         request: MetadataRequest,
         *,
+        language: str | None = None,
+        series_title: str | None = None,
         series_overview: str | None = None,
+        episode_title: str | None = None,
         episode_overview: str | None = None,
     ) -> None:
-        """Merge successful provider responses into the series cache."""
+        """Merge successful localized provider responses into the series cache."""
 
         with self._lock:
             payload = self._read(request.cache_identity)
             payload["series_id"] = request.series_id
             if request.cache_key is not None:
                 payload["series_qid"] = request.cache_key
+            variants = payload.setdefault("contexts", {})
+            if not isinstance(variants, dict):
+                variants = {}
+                payload["contexts"] = variants
+            variant = variants.setdefault(request.language_pair, {})
+            if not isinstance(variant, dict):
+                variant = {}
+                variants[request.language_pair] = variant
+            series = variant.setdefault("series", {})
+            if not isinstance(series, dict):
+                series = {}
+                variant["series"] = series
+            if language is not None:
+                language_values = series.setdefault("languages", {})
+                if not isinstance(language_values, dict):
+                    language_values = {}
+                    series["languages"] = language_values
+                series = language_values.setdefault(
+                    _metadata_cache_language(language), {}
+                )
+                if not isinstance(series, dict):
+                    series = {}
+                    language_values[_metadata_cache_language(language)] = series
+            if series_title is not None:
+                series["title"] = series_title
             if series_overview is not None:
-                payload["series_overview"] = series_overview
-            episodes = payload.setdefault("episodes", {})
+                series["overview"] = series_overview
+            episodes = variant.setdefault("episodes", {})
             if not isinstance(episodes, dict):
                 episodes = {}
-                payload["episodes"] = episodes
-            if request.episode_key is not None and episode_overview is not None:
-                episodes[request.episode_key] = episode_overview
+                variant["episodes"] = episodes
+            if request.episode_key is not None and (
+                episode_title is not None or episode_overview is not None
+            ):
+                episode = episodes.setdefault(request.episode_key, {})
+                if not isinstance(episode, dict):
+                    episode = {}
+                    episodes[request.episode_key] = episode
+                if language is not None:
+                    language_values = episode.setdefault("languages", {})
+                    if not isinstance(language_values, dict):
+                        language_values = {}
+                        episode["languages"] = language_values
+                    episode = language_values.setdefault(
+                        _metadata_cache_language(language), {}
+                    )
+                    if not isinstance(episode, dict):
+                        episode = {}
+                        language_values[_metadata_cache_language(language)] = episode
+                if episode_title is not None:
+                    episode["title"] = episode_title
+                if episode_overview is not None:
+                    episode["overview"] = episode_overview
+            self._write(request.cache_identity, payload)
+
+    def clear_context(self, request: MetadataRequest) -> None:
+        """Remove the requested language values before a manual refresh."""
+
+        with self._lock:
+            payload = self._read(request.cache_identity)
+            variants = payload.get("contexts")
+            if not isinstance(variants, dict):
+                return
+            variant = variants.get(request.language_pair)
+            if not isinstance(variant, dict):
+                return
+            languages = {
+                language
+                for language in (request.source_language, request.target_language)
+                if language is not None
+            }
+            series = variant.get("series")
+            if isinstance(series, dict):
+                _clear_metadata_languages(series, languages)
+            if request.episode_key is not None:
+                episodes = variant.get("episodes")
+                if isinstance(episodes, dict):
+                    episode = episodes.get(request.episode_key)
+                    if isinstance(episode, dict):
+                        _clear_metadata_languages(episode, languages)
             self._write(request.cache_identity, payload)
 
     def load_glossary(
@@ -464,8 +677,16 @@ class TMDbMetadataProvider(_CancellableJsonProvider):
         self.base_url = base_url.rstrip("/")
         super().__init__(timeout)
 
-    def get_series_overview(self, series_id: str) -> str:
-        payload = self._get(f"tv/{urllib.parse.quote(series_id, safe='')}")
+    def get_series_title(self, series_id: str, language: str | None = None) -> str:
+        payload = self._get(
+            f"tv/{urllib.parse.quote(series_id, safe='')}", language=language
+        )
+        return _title(payload, "series")
+
+    def get_series_overview(self, series_id: str, language: str | None = None) -> str:
+        payload = self._get(
+            f"tv/{urllib.parse.quote(series_id, safe='')}", language=language
+        )
         return _overview(payload, "series")
 
     def get_series_wikidata_id(self, series_id: str) -> str | None:
@@ -477,23 +698,43 @@ class TMDbMetadataProvider(_CancellableJsonProvider):
         return value if re.fullmatch(r"Q[1-9][0-9]*", value) else None
 
     def get_episode_overview(
-        self, series_id: str, season_number: int, episode_number: int
+        self,
+        series_id: str,
+        season_number: int,
+        episode_number: int,
+        language: str | None = None,
     ) -> str:
         payload = self._get(
             "tv/"
             f"{urllib.parse.quote(series_id, safe='')}/season/{season_number}"
-            f"/episode/{episode_number}"
+            f"/episode/{episode_number}",
+            language=language,
         )
         return _overview(payload, "episode")
 
-    def _get(self, path: str) -> dict[str, object]:
+    def get_episode_title(
+        self,
+        series_id: str,
+        season_number: int,
+        episode_number: int,
+        language: str | None = None,
+    ) -> str:
+        payload = self._get(
+            "tv/"
+            f"{urllib.parse.quote(series_id, safe='')}/season/{season_number}"
+            f"/episode/{episode_number}",
+            language=language,
+        )
+        return _title(payload, "episode")
+
+    def _get(self, path: str, *, language: str | None = None) -> dict[str, object]:
         if not self.api_key:
             raise MetadataConfigurationError(
                 "TMDb API key is missing; set CUEWEAVER_TMDB_API_KEY or TMDB_API_KEY"
             )
         if self._cancel_requested.is_set():
             raise MetadataProviderError("TMDb request canceled")
-        query = urllib.parse.urlencode({"language": self.language})
+        query = urllib.parse.urlencode({"language": language or self.language})
         headers = {"User-Agent": "CueWeaver/0.1"}
         if self.api_key.count(".") == 2:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -514,6 +755,49 @@ def _overview(payload: dict[str, object], label: str) -> str:
     if not isinstance(overview, str):
         raise MetadataProviderError(f"TMDb returned an invalid {label} overview")
     return overview
+
+
+def _title(payload: dict[str, object], label: str) -> str:
+    title = payload.get("name", "")
+    if not isinstance(title, str):
+        raise MetadataProviderError(f"TMDb returned an invalid {label} title")
+    return title
+
+
+def _metadata_value(value: object) -> MetadataValue | None:
+    if not isinstance(value, dict):
+        return None
+    title = value.get("title", "")
+    overview = value.get("overview", "")
+    if not isinstance(title, str) or not isinstance(overview, str):
+        return None
+    if not title and not overview:
+        return None
+    return MetadataValue(title=title, overview=overview)
+
+
+def _metadata_values(value: object) -> dict[str, MetadataValue]:
+    if not isinstance(value, dict):
+        return {}
+    languages = value.get("languages")
+    if isinstance(languages, dict):
+        return {
+            str(language): metadata
+            for language, raw_value in languages.items()
+            if (metadata := _metadata_value(raw_value)) is not None
+        }
+    metadata = _metadata_value(value)
+    return {"legacy": metadata} if metadata is not None else {}
+
+
+def _clear_metadata_languages(value: dict[str, object], languages: set[str]) -> None:
+    raw_languages = value.get("languages")
+    if not isinstance(raw_languages, dict):
+        value.pop("title", None)
+        value.pop("overview", None)
+        return
+    for language in languages:
+        raw_languages.pop(_metadata_cache_language(language), None)
 
 
 class WikidataGlossaryProvider(_CancellableJsonProvider):

@@ -36,6 +36,56 @@ class MetadataFixture:
         return self.episode_overview
 
 
+class BilingualMetadataFixture:
+    def __init__(self) -> None:
+        self.series_calls: list[tuple[str, str, str]] = []
+        self.episode_calls: list[tuple[str, int, int, str, str]] = []
+        self.values = {
+            ("series", "title", "en"): "Dong Yi",
+            ("series", "overview", "en"): "The source series overview.",
+            ("series", "title", "zh"): "同伊",
+            ("series", "overview", "zh"): "目标语言的剧集简介。",
+            ("episode", "title", "en"): "The First Episode",
+            ("episode", "overview", "en"): "The source episode overview.",
+            ("episode", "title", "zh"): "第一集",
+            ("episode", "overview", "zh"): "目标语言的单集简介。",
+        }
+
+    def get_series_wikidata_id(self, series_id: str) -> str | None:
+        return "Q42"
+
+    def get_glossary(self, series_id: str, target_language: str) -> Glossary:
+        return Glossary()
+
+    def get_series_title(self, series_id: str, language: str) -> str:
+        self.series_calls.append(("title", series_id, language))
+        return self.values[("series", "title", language)]
+
+    def get_series_overview(self, series_id: str, language: str) -> str:
+        self.series_calls.append(("overview", series_id, language))
+        return self.values[("series", "overview", language)]
+
+    def get_episode_title(
+        self, series_id: str, season_number: int, episode_number: int, language: str
+    ) -> str:
+        self.episode_calls.append(
+            ("title", series_id, season_number, episode_number, language)
+        )
+        return self.values[("episode", "title", language)]
+
+    def get_episode_overview(
+        self,
+        series_id: str,
+        season_number: int,
+        episode_number: int,
+        language: str,
+    ) -> str:
+        self.episode_calls.append(
+            ("overview", series_id, season_number, episode_number, language)
+        )
+        return self.values[("episode", "overview", language)]
+
+
 class ContextTranslator:
     def __init__(self) -> None:
         self.contexts: list[str] = []
@@ -211,6 +261,88 @@ def test_metadata_context_is_gathered_before_translation(tmp_path):
     assert result.metadata_degradation is None
 
 
+def test_metadata_context_contains_source_and_target_series_and_episode_values(
+    tmp_path,
+):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    translator = ContextTranslator()
+
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert translator.contexts == [
+        (
+            "Series title (source: en):\nDong Yi\n\n"
+            "Series overview (source: en):\nThe source series overview.\n\n"
+            "Series title (target: zh):\n同伊\n\n"
+            "Series overview (target: zh):\n目标语言的剧集简介。\n\n"
+            "Episode title (source: en) (S01E02):\nThe First Episode\n\n"
+            "Episode overview (source: en) (S01E02):\nThe source episode overview.\n\n"
+            "Episode title (target: zh) (S01E02):\n第一集\n\n"
+            "Episode overview (target: zh) (S01E02):\n目标语言的单集简介。"
+        )
+    ]
+    assert result.context == translator.contexts[0]
+    assert result.metadata_request is not None
+    assert result.metadata_request.source_language == "en"
+    assert result.metadata_request.target_language == "zh"
+
+
+def test_bilingual_metadata_cache_reuses_language_pair_and_refreshes_all_variants(
+    tmp_path,
+):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    cache = MetadataCache(tmp_path / "metadata-cache")
+
+    first = run_metadata_job(media, source, metadata, cache)
+    second = run_metadata_job(
+        media,
+        source,
+        metadata,
+        cache,
+        season_number=2,
+        episode_number=1,
+    )
+    metadata.values[("series", "title", "zh")] = "刷新后的同伊"
+    refreshed = run_metadata_job(
+        media,
+        source,
+        metadata,
+        cache,
+        translator=ContextTranslator(),
+        refresh_metadata=True,
+    )
+
+    assert first.state is JobState.PUBLISHED
+    assert second.state is JobState.PUBLISHED
+    assert refreshed.state is JobState.PUBLISHED
+    assert len(metadata.series_calls) == 8
+    assert len(metadata.episode_calls) == 12
+    assert "刷新后的同伊" in refreshed.context
+    cache_payload = json.loads(
+        next((tmp_path / "metadata-cache").glob("*.json")).read_text()
+    )
+    assert set(cache_payload["contexts"]) == {"en->zh"}
+    assert set(cache_payload["contexts"]["en->zh"]["series"]["languages"]) == {
+        "en",
+        "zh",
+    }
+    assert next((tmp_path / "metadata-cache").glob("*.json")).name.startswith("Q42-")
+
+
 def test_tmdb_provider_returns_full_series_and_episode_overviews(monkeypatch):
     requests = []
     responses = iter(
@@ -241,6 +373,86 @@ def test_tmdb_provider_returns_full_series_and_episode_overviews(monkeypatch):
         requests[1][0].full_url
     )
     assert requests[0][1] == 30.0
+
+
+def test_tmdb_provider_requests_titles_and_overviews_in_the_requested_language(
+    monkeypatch,
+):
+    requests = []
+    responses = iter(
+        [
+            {"name": "Dong Yi", "overview": "English overview"},
+            {"name": "Dong Yi", "overview": "English overview"},
+            {"name": "第一集", "overview": "中文单集简介"},
+            {"name": "第一集", "overview": "中文单集简介"},
+        ]
+    )
+
+    def urlopen(request, *, timeout):
+        requests.append((request, timeout))
+        return JsonResponse(json.dumps(next(responses)).encode("utf-8"))
+
+    monkeypatch.setattr("cueweaver.metadata.urllib.request.urlopen", urlopen)
+    provider = TMDbMetadataProvider(api_key="tmdb-key")
+
+    assert provider.get_series_title("1399", "en") == "Dong Yi"
+    assert provider.get_series_overview("1399", "en") == "English overview"
+    assert provider.get_episode_title("1399", 1, 2, "zh-CN") == "第一集"
+    assert provider.get_episode_overview("1399", 1, 2, "zh-CN") == "中文单集简介"
+    assert [
+        request[0].full_url.split("language=", 1)[1].split("&", 1)[0]
+        for request in requests
+    ] == ["en", "en", "zh-CN", "zh-CN"]
+
+
+def test_missing_localized_metadata_is_visible_and_does_not_block_translation(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    metadata.values[("series", "overview", "zh")] = ""
+    translator = ContextTranslator()
+
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.metadata_degradation is not None
+    assert "series overview (target: zh)" in result.metadata_degradation
+    assert "Series title (target: zh):\n同伊" in result.context
+    assert "Series overview (target: zh)" not in result.context
+    assert translator.contexts == [result.context]
+
+
+def test_metadata_refresh_does_not_leave_stale_localized_values_in_cache(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    cache = MetadataCache(tmp_path / "metadata-cache")
+
+    run_metadata_job(media, source, metadata, cache)
+    metadata.values["series", "overview", "zh"] = ""
+    refreshed = run_metadata_job(
+        media,
+        source,
+        metadata,
+        cache,
+        refresh_metadata=True,
+    )
+    metadata.values["series", "overview", "zh"] = "重新获取的中文简介"
+    recovered = run_metadata_job(media, source, metadata, cache)
+
+    assert refreshed.metadata_degradation is not None
+    assert "Series overview (target: zh)" not in refreshed.context
+    assert "重新获取的中文简介" in recovered.context
+    assert metadata.series_calls[-1] == ("overview", "1399", "zh")
 
 
 def test_metadata_cache_reuses_series_context_across_episodes_and_jobs(tmp_path):

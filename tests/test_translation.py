@@ -139,6 +139,31 @@ class SwitchableMetadata:
         return self.glossary
 
 
+class BilingualContextMetadata:
+    def get_series_title(self, series_id: str, language: str) -> str:
+        return "Dong Yi" if language == "en" else "同伊"
+
+    def get_series_overview(self, series_id: str, language: str) -> str:
+        return "English series overview" if language == "en" else "中文剧集简介"
+
+    def get_episode_title(
+        self, series_id: str, season_number: int, episode_number: int, language: str
+    ) -> str:
+        return "Episode One" if language == "en" else "第一集"
+
+    def get_episode_overview(
+        self,
+        series_id: str,
+        season_number: int,
+        episode_number: int,
+        language: str,
+    ) -> str:
+        return "English episode overview" if language == "en" else "中文单集简介"
+
+    def get_glossary(self, series_id: str, target_language: str) -> Glossary:
+        return Glossary()
+
+
 def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypatch):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
@@ -182,6 +207,48 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         assert "fixture scene 1" in second_prompt
         assert ProviderFixtureHandler.requests[0]["thinking"] == {"type": "disabled"}
         assert ProviderFixtureHandler.requests[0]["model"] == "fixture-model"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_bilingual_metadata_is_passed_to_pysubtrans_description(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server()
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+        result = JobRunner(
+            translator=translator,
+            metadata_provider=BilingualContextMetadata(),
+            metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+        ).run(
+            media,
+            target_language="zh",
+            source=source,
+            series_id="1399",
+            season_number=1,
+            episode_number=1,
+        )
+
+        assert result.state is JobState.PUBLISHED
+        prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[0]["messages"]
+        )
+        assert "Series title (source: en)" in prompt
+        assert "Series title (target: zh)" in prompt
+        assert "Episode overview (source: en)" in prompt
+        assert "Episode overview (target: zh)" in prompt
     finally:
         server.shutdown()
         server.server_close()
