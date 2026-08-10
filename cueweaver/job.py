@@ -38,6 +38,7 @@ from .subtitles import (
     validate_subtitle,
     validate_subtitle_pair,
 )
+from .trace import TraceWriteError, TraceWriter
 from .translation import PySubtransTranslator
 from .workspaces import extraction_cache_path, job_work_directory
 
@@ -259,6 +260,7 @@ class JobResult:
     metadata_request: MetadataRequest | None = None
     glossary: Glossary = field(default_factory=Glossary)
     user_overrides: dict[str, str] = field(default_factory=dict)
+    trace_path: Path | None = None
 
     @property
     def status(self) -> str:
@@ -642,6 +644,8 @@ class JobRunner:
         self._intermediate_path: Path | None = None
         self._translated_content: bytes | None = None
         self._job_work_directory: Path | None = None
+        self._trace_writer: TraceWriter | None = None
+        self._trace_path: Path | None = None
 
     def cancel(self) -> None:
         """Cancel the active Job without publishing its partial translation."""
@@ -795,12 +799,15 @@ class JobRunner:
         season_number: int | None = None,
         episode_number: int | None = None,
         refresh_metadata: bool = False,
+        debug: bool = False,
         dynamic_terminology_enabled: bool | None = None,
     ) -> JobResult:
         self._cancel_requested.clear()
         self._intermediate_path = None
         self._translated_content = None
         self._job_work_directory = None
+        self._trace_writer = None
+        self._trace_path = None
         self._reset_translator_for_job()
         self._reset_metadata_provider_for_job()
         media_path = Path(media).expanduser().resolve()
@@ -822,6 +829,14 @@ class JobRunner:
 
         effective_dynamic_terminology_enabled = True
         try:
+            if (
+                debug
+                and self._translator is not None
+                and not isinstance(self._translator, PySubtransTranslator)
+            ):
+                raise JobError(
+                    "Debug tracing requires the built-in PySubtransTranslator"
+                )
             effective_dynamic_terminology_enabled = (
                 _resolve_dynamic_terminology_enabled(dynamic_terminology_enabled)
             )
@@ -861,6 +876,12 @@ class JobRunner:
                 selected_source.selection_id,
                 dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
             )
+            if debug:
+                try:
+                    self._trace_writer = TraceWriter.create(self._job_work_directory)
+                    self._trace_path = self._trace_writer.path
+                except TraceWriteError as error:
+                    raise JobError(str(error)) from error
             self._raise_if_canceled()
 
             source_path = selected_source.path
@@ -947,6 +968,7 @@ class JobRunner:
             self._intermediate_path = None
             self._translated_content = None
             record_state(JobState.PUBLISHED)
+            self._finish_trace("completed")
             return JobResult(
                 state=JobState.PUBLISHED,
                 lifecycle=tuple(lifecycle),
@@ -971,12 +993,26 @@ class JobRunner:
                     else Glossary()
                 ),
                 user_overrides=user_overrides,
+                trace_path=self._trace_path,
             )
         except (JobCanceled, JobError, OSError, SubtitleValidationError) as error:
             terminal_state = (
                 JobState.CANCELED if isinstance(error, JobCanceled) else JobState.FAILED
             )
             record_state(terminal_state)
+            trace_error: TraceWriteError | None = None
+            if self._trace_writer is not None:
+                try:
+                    self._finish_trace(
+                        "canceled" if terminal_state is JobState.CANCELED else "failed",
+                        error=str(error),
+                        error_type=type(error).__name__,
+                    )
+                except TraceWriteError as finish_error:
+                    trace_error = finish_error
+            result_error = str(error)
+            if trace_error is not None:
+                result_error = f"{result_error}; debug trace failed: {trace_error}"
             return JobResult(
                 state=terminal_state,
                 lifecycle=tuple(lifecycle),
@@ -986,7 +1022,7 @@ class JobRunner:
                 published_path=None,
                 no_op=no_op,
                 dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
-                error=str(error),
+                error=result_error,
                 intermediate_path=self._intermediate_path,
                 translated_content=self._translated_content,
                 context=metadata_context.text if metadata_context else "",
@@ -1004,7 +1040,25 @@ class JobRunner:
                     else Glossary()
                 ),
                 user_overrides=user_overrides,
+                trace_path=self._trace_path,
             )
+        finally:
+            if self._trace_writer is not None:
+                try:
+                    self._finish_trace(
+                        "failed",
+                        error="Job terminated unexpectedly",
+                        error_type="UnexpectedJobError",
+                    )
+                except TraceWriteError:
+                    self._trace_writer = None
+
+    def _finish_trace(self, state: str, **payload: object) -> None:
+        writer = self._trace_writer
+        if writer is None:
+            return
+        self._trace_writer = None
+        writer.finish(state, **payload)
 
     def _gather_metadata(
         self,
@@ -1403,6 +1457,7 @@ class JobRunner:
                 glossary=glossary or Glossary(),
                 user_overrides=user_overrides or {},
                 work_directory=self._job_work_directory,
+                trace_writer=self._trace_writer,
                 dynamic_terminology_enabled=dynamic_terminology_enabled,
             )
         except Exception as error:
@@ -1620,6 +1675,7 @@ def _call_translator(
     glossary: Glossary,
     user_overrides: dict[str, str],
     work_directory: Path | None,
+    trace_writer: TraceWriter | None,
     dynamic_terminology_enabled: bool,
 ) -> bytes | str | PathLike[str]:
     method = cast(
@@ -1635,6 +1691,8 @@ def _call_translator(
         kwargs["user_overrides"] = user_overrides
     if work_directory is not None and _accepts_parameter(method, "work_directory"):
         kwargs["work_directory"] = work_directory
+    if trace_writer is not None and _accepts_parameter(method, "trace_writer"):
+        kwargs["trace_writer"] = trace_writer
     if _accepts_parameter(method, "dynamic_terminology_enabled"):
         kwargs["dynamic_terminology_enabled"] = dynamic_terminology_enabled
     return method(source, target_language, **kwargs)

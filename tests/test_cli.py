@@ -30,6 +30,39 @@ def test_terminal_flow_publishes_a_target_language_source(tmp_path, capsys):
     assert "[progress] published" in captured.err
 
 
+def test_terminal_flow_passes_debug_and_reports_trace_path(tmp_path, capsys):
+    media = tmp_path / "Movie.mkv"
+    trace = tmp_path / "trace.jsonl"
+    candidate = SubtitleCandidate(
+        path=tmp_path / "Movie.en.srt",
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+    )
+
+    class DebugRunner:
+        def run(self, media, *, target_language, source, source_language, debug):
+            assert debug is True
+            return JobResult(
+                state=JobState.PUBLISHED,
+                lifecycle=(JobState.DISCOVERED, JobState.PUBLISHED),
+                media=media,
+                target_language=target_language,
+                source=candidate,
+                published_path=tmp_path / "Movie.zh.srt",
+                no_op=False,
+                trace_path=trace,
+            )
+
+    exit_code = main(
+        ["run", str(media), "--target-language", "zh", "--debug"],
+        runner=DebugRunner(),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"  trace: {trace}" in captured.out
+
+
 def test_terminal_flow_reports_missing_target_language(tmp_path, monkeypatch, capsys):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"

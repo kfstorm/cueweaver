@@ -32,12 +32,14 @@ def srt_with_cues(count: int) -> str:
 def start_provider_server(
     *,
     fail_after_first_request: bool = False,
+    fail_transport_first_request: bool = False,
     block_scene: str | None = None,
     use_terminology: bool = False,
     include_dynamic_terminology: bool = False,
 ) -> tuple[ThreadingHTTPServer, Thread]:
     ProviderFixtureHandler.requests = []
     ProviderFixtureHandler.fail_after_first_request = fail_after_first_request
+    ProviderFixtureHandler.fail_transport_first_request = fail_transport_first_request
     ProviderFixtureHandler.block_scene = block_scene
     ProviderFixtureHandler.use_terminology = use_terminology
     ProviderFixtureHandler.include_dynamic_terminology = include_dynamic_terminology
@@ -66,6 +68,7 @@ def provider_request_numbers(max_number: int | None = None) -> list[list[str]]:
 class ProviderFixtureHandler(BaseHTTPRequestHandler):
     requests: ClassVar[list[dict]] = []
     fail_after_first_request: ClassVar[bool] = False
+    fail_transport_first_request: ClassVar[bool] = False
     block_scene: ClassVar[str | None] = None
     use_terminology: ClassVar[bool] = False
     include_dynamic_terminology: ClassVar[bool] = False
@@ -78,6 +81,12 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
         self.requests.append(request)
         messages = request.get("messages", [])
         prompt = "\n".join(message.get("content", "") for message in messages)
+        if type(self).fail_transport_first_request and len(type(self).requests) == 1:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"temporary provider failure"}')
+            return
         numbers = re.findall(r"^#(\d+)$", prompt, flags=re.MULTILINE)
         if self.fail_after_first_request and len(type(self).requests) > 1:
             translation = "#999\nTranslation>\n失败"
@@ -110,6 +119,34 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
             ],
             "usage": {},
         }
+        if request.get("stream"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            split_at = max(1, len(translation) // 2)
+            chunks = [translation[:split_at], translation[split_at:]]
+            for index, chunk in enumerate(chunks):
+                payload = {
+                    "model": "fixture-model",
+                    "choices": [
+                        {
+                            "delta": {"content": chunk},
+                            "finish_reason": "stop"
+                            if index == len(chunks) - 1
+                            else None,
+                        }
+                    ],
+                }
+                if index == len(chunks) - 1:
+                    payload["usage"] = {
+                        "prompt_tokens": 2,
+                        "completion_tokens": 3,
+                        "total_tokens": 5,
+                    }
+                self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
+
         encoded = json.dumps(response).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -226,6 +263,7 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         assert not (tmp_path / "Movie.en.subtrans").exists()
         assert list(work_directory.rglob("*.subtrans"))
         assert len(ProviderFixtureHandler.requests) == 2
+        assert not list(work_directory.rglob("trace-*.jsonl"))
         second_prompt = "\n".join(
             message.get("content", "")
             for message in ProviderFixtureHandler.requests[1]["messages"]
@@ -233,6 +271,159 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         assert "fixture scene 1" in second_prompt
         assert ProviderFixtureHandler.requests[0]["thinking"] == {"type": "disabled"}
         assert ProviderFixtureHandler.requests[0]["model"] == "fixture-model"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server()
+
+    try:
+        translator = PySubtransTranslator(
+            provider="deepseek",
+            api_key="fixture-secret",
+            api_base=f"http://127.0.0.1:{server.server_port}",
+            model="fixture-model",
+        )
+
+        result = JobRunner(translator=translator).run(
+            media,
+            target_language="zh",
+            source=source,
+            debug=True,
+        )
+
+        assert result.state is JobState.PUBLISHED
+        assert result.trace_path is not None
+        events = [
+            json.loads(line)
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        ]
+        chunks = [event for event in events if event["event"] == "response_chunk"]
+        completed = [
+            event for event in events if event["event"] == "response_completed"
+        ]
+        assert chunks
+        assert completed
+        assert all(
+            event["request_body"]["stream"] is True
+            for event in events
+            if event["event"] == "attempt_started"
+        )
+        assert completed[-1]["token_usage"] == {
+            "prompt_tokens": 2,
+            "output_tokens": 3,
+            "total_tokens": 5,
+            "reasoning_tokens": None,
+        }
+        assert completed[-1]["response"]["text"]
+        assert "fixture-secret" not in result.trace_path.read_text(encoding="utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_debug_trace_correlates_transport_retry(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server(fail_transport_first_request=True)
+    monkeypatch.setattr(
+        "PySubtrans.Providers.Clients.CustomClient.time.sleep",
+        lambda _seconds: None,
+    )
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+        result = JobRunner(translator=translator).run(
+            media,
+            target_language="zh",
+            source=source,
+            debug=True,
+        )
+
+        assert result.state is JobState.PUBLISHED
+        assert result.trace_path is not None
+        events = [
+            json.loads(line)
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        ]
+        failed = [event for event in events if event["event"] == "attempt_failed"]
+        retries = [event for event in events if event["event"] == "retry_scheduled"]
+        retry_attempts = [
+            event
+            for event in events
+            if event["event"] == "attempt_started"
+            and event.get("attempt_kind") == "transport_retry"
+        ]
+        assert failed
+        assert retries
+        assert retry_attempts
+        assert retries[0]["failed_request_id"] == failed[0]["request_id"]
+        assert retry_attempts[0]["operation_id"] == failed[0]["operation_id"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_debug_trace_records_non_streaming_request_response_and_final_state(
+    tmp_path,
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server()
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            api_key="fixture-secret",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+
+        result = JobRunner(translator=translator).run(
+            media,
+            target_language="zh",
+            source=source,
+            debug=True,
+        )
+
+        assert result.state is JobState.PUBLISHED
+        assert result.trace_path is not None
+        events = [
+            json.loads(line)
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert events[0]["event"] == "run_started"
+        assert events[-1]["event"] == "run_finished"
+        assert [event["event"] for event in events[1:-1]] == [
+            item
+            for _ in ProviderFixtureHandler.requests
+            for item in ("attempt_started", "response_completed")
+        ]
+        attempt = events[1]
+        assert attempt["request_body"]["thinking"] == {"type": "disabled"}
+        assert attempt["prompt"] == ProviderFixtureHandler.requests[0]["messages"]
+        assert events[2]["response"]["text"]
+        assert events[-1]["state"] == "completed"
+        assert "fixture-secret" not in result.trace_path.read_text(encoding="utf-8")
     finally:
         server.shutdown()
         server.server_close()
