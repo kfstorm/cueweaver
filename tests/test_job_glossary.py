@@ -60,6 +60,16 @@ class MetadataGlossaryFixture:
         return self.glossary
 
 
+class MetadataMustNotBeRequested(MetadataGlossaryFixture):
+    def get_series_overview(self, series_id: str) -> str:
+        raise AssertionError("Context must not be requested")
+
+    def get_episode_overview(
+        self, series_id: str, season_number: int, episode_number: int
+    ) -> str:
+        raise AssertionError("Context must not be requested")
+
+
 class RetryableGlossaryFixture(MetadataGlossaryFixture):
     def __init__(self, glossary: Glossary):
         super().__init__(glossary)
@@ -471,6 +481,67 @@ def test_job_reuses_series_glossary_cache_and_seeds_translation(tmp_path):
     assert second.glossary == glossary
     assert first.published_path is not None
     assert first.published_path.read_text(encoding="utf-8") == TRANSLATED
+
+
+def test_no_metadata_fetch_ignores_cache_and_provider_but_keeps_user_override(
+    tmp_path,
+):
+    media, source = create_media_and_source(tmp_path)
+    automatic = Glossary.from_terms(
+        [
+            Term(
+                source="Jon Snow",
+                target="琼恩·雪诺",
+                provider="wikidata",
+                source_url="https://www.wikidata.org/wiki/Q1",
+                entity_id="Q1",
+            )
+        ]
+    )
+    metadata = MetadataMustNotBeRequested(automatic)
+    cache = MetadataCache(tmp_path / "metadata-cache")
+    cache.store(
+        MetadataRequest("1399", 1, 1),
+        series_overview="Cached series overview",
+        episode_overview="Cached episode overview",
+    )
+    cache.store_glossary(MetadataRequest("1399", 1, 1), automatic, target_language="zh")
+    translator = UserOverrideTranslator()
+    overrides, _ = write_user_override(
+        tmp_path / "overrides",
+        "1399",
+        {"Jon Snow": "用户名称"},
+    )
+
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=cache,
+        user_override_store=overrides,
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=1,
+        no_metadata_fetch=True,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.lifecycle == (
+        JobState.DISCOVERED,
+        JobState.TRANSLATING,
+        JobState.VALIDATING,
+        JobState.PUBLISHING,
+        JobState.PUBLISHED,
+    )
+    assert result.context == ""
+    assert result.glossary.is_empty
+    assert result.metadata_degradation is None
+    assert metadata.glossary_calls == 0
+    assert translator.glossaries == [Glossary()]
+    assert translator.overrides == [{"Jon Snow": "用户名称"}]
 
 
 def test_series_glossary_cache_keeps_target_language_variants(tmp_path):

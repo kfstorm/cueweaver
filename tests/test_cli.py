@@ -124,6 +124,48 @@ def test_dynamic_terminology_cli_switches_are_mutually_exclusive():
         )
 
 
+def test_cli_passes_no_metadata_fetch_to_the_job(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    candidate = SubtitleCandidate(
+        path=tmp_path / "Movie.en.srt",
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+    )
+
+    class RecordingRunner:
+        no_metadata_fetch = None
+
+        def run(
+            self,
+            media,
+            *,
+            target_language,
+            source,
+            source_language,
+            no_metadata_fetch,
+        ):
+            self.no_metadata_fetch = no_metadata_fetch
+            return JobResult(
+                state=JobState.PUBLISHED,
+                lifecycle=(JobState.PUBLISHED,),
+                media=media,
+                target_language=target_language,
+                source=candidate,
+                published_path=media,
+                no_op=True,
+            )
+
+    runner = RecordingRunner()
+    assert (
+        main(
+            [str(media), "--target-language", "zh", "--no-metadata-fetch"],
+            runner=runner,
+        )
+        == 0
+    )
+    assert runner.no_metadata_fetch is True
+
+
 @pytest.mark.parametrize(
     ("option", "environment_value", "expected"),
     [
