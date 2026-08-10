@@ -150,6 +150,7 @@ class PySubtransTranslator:
         user_overrides: Mapping[str, str] | None = None,
         work_directory: PathLike[str] | None = None,
         trace_writer: TraceWriter | None = None,
+        dynamic_terminology_enabled: bool = True,
     ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
@@ -175,7 +176,7 @@ class PySubtransTranslator:
             "max_context_summaries": 10,
             "preprocess_subtitles": False,
             "postprocess_translation": False,
-            "build_terminology_map": True,
+            "build_terminology_map": dynamic_terminology_enabled,
             "stop_on_error": True,
             "project_file": True,
         }
@@ -198,7 +199,11 @@ class PySubtransTranslator:
         )
         project.write_translation = False
         provider = init_translation_provider(self.provider, options)
-        persisted_terminology = getattr(project.subtitles, "terminology_map", None)
+        persisted_terminology = (
+            getattr(project.subtitles, "terminology_map", None)
+            if dynamic_terminology_enabled
+            else None
+        )
         terminology_map, static_terminology = _build_terminology_seed(
             persisted_terminology,
             glossary,

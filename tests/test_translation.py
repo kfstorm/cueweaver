@@ -7,6 +7,7 @@ from typing import ClassVar
 from cueweaver.job import JobRunner, JobState
 from cueweaver.metadata import Glossary, MetadataCache, Term
 from cueweaver.translation import PySubtransTranslator
+from cueweaver.workspaces import job_work_directory
 from tests.test_helpers import write_user_override
 
 SRT = """1
@@ -176,6 +177,29 @@ class SwitchableMetadata:
         return self.glossary
 
 
+class StaticTerminologyMetadata:
+    def get_series_overview(self, series_id: str) -> str:
+        return "Series overview"
+
+    def get_episode_overview(
+        self, series_id: str, season_number: int, episode_number: int
+    ) -> str:
+        return "Episode overview"
+
+    def get_glossary(self, series_id: str, target_language: str) -> Glossary:
+        return Glossary.from_terms(
+            [
+                Term(
+                    source="Jon Snow",
+                    target="琼恩·雪诺",
+                    provider="wikidata",
+                    source_url="https://www.wikidata.org/wiki/Q1",
+                    entity_id="Q1",
+                )
+            ]
+        )
+
+
 class BilingualContextMetadata:
     def get_series_title(self, series_id: str, language: str) -> str:
         return "Dong Yi" if language == "en" else "同伊"
@@ -231,6 +255,8 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
 
         assert first_result.state is JobState.PUBLISHED
         assert second_result.state is JobState.PUBLISHED
+        assert first_result.dynamic_terminology_enabled is True
+        assert second_result.dynamic_terminology_enabled is True
         assert (
             first_result.published_path.read_text(encoding="utf-8").count("你好") == 2
         )
@@ -432,6 +458,7 @@ def test_bilingual_metadata_is_passed_to_pysubtrans_description(tmp_path):
         )
 
         assert result.state is JobState.PUBLISHED
+        assert result.dynamic_terminology_enabled is True
         prompt = "\n".join(
             message.get("content", "")
             for message in ProviderFixtureHandler.requests[0]["messages"]
@@ -466,28 +493,6 @@ def test_job_seeds_pysubtrans_with_override_precedence_and_keeps_dynamic_learnin
         {"Jon Snow": "用户名称"},
     )
 
-    class MetadataGlossary:
-        def get_series_overview(self, series_id: str) -> str:
-            return "Series overview"
-
-        def get_episode_overview(
-            self, series_id: str, season_number: int, episode_number: int
-        ) -> str:
-            return "Episode overview"
-
-        def get_glossary(self, series_id: str, target_language: str) -> Glossary:
-            return Glossary.from_terms(
-                [
-                    Term(
-                        source="Jon Snow",
-                        target="琼恩·雪诺",
-                        provider="wikidata",
-                        source_url="https://www.wikidata.org/wiki/Q1",
-                        entity_id="Q1",
-                    )
-                ]
-            )
-
     try:
         translator = PySubtransTranslator(
             provider="openai-compatible",
@@ -497,7 +502,7 @@ def test_job_seeds_pysubtrans_with_override_precedence_and_keeps_dynamic_learnin
         )
         result = JobRunner(
             translator=translator,
-            metadata_provider=MetadataGlossary(),
+            metadata_provider=StaticTerminologyMetadata(),
             metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
             user_override_store=overrides,
         ).run(
@@ -533,6 +538,131 @@ def test_job_seeds_pysubtrans_with_override_precedence_and_keeps_dynamic_learnin
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_disabling_dynamic_terminology_uses_a_fresh_checkpoint(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    work_directory = tmp_path / "job-work"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    monkeypatch.setenv("CUEWEAVER_WORK_DIRECTORY", str(work_directory))
+    server, thread = start_provider_server(include_dynamic_terminology=True)
+
+    try:
+        first = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            )
+        ).run(media, target_language="zh", source=source)
+        second = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            )
+        ).run(
+            media,
+            target_language="zh",
+            source=source,
+            dynamic_terminology_enabled=False,
+        )
+
+        assert first.state is JobState.PUBLISHED
+        assert second.state is JobState.PUBLISHED
+        assert first.dynamic_terminology_enabled is True
+        assert second.dynamic_terminology_enabled is False
+        assert len(ProviderFixtureHandler.requests) == 4
+        second_job_prompts = [
+            "\n".join(message.get("content", "") for message in request["messages"])
+            for request in ProviderFixtureHandler.requests[2:]
+        ]
+        assert all("Pinellia::半夏" not in prompt for prompt in second_job_prompts)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_disabled_dynamic_terminology_preserves_static_seeds(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(
+        SRT.replace("Hello", "Pinellia").replace("Goodbye", "Jon Snow"),
+        encoding="utf-8",
+    )
+    server, thread = start_provider_server(
+        use_terminology=True,
+        include_dynamic_terminology=True,
+    )
+    overrides, _ = write_user_override(
+        tmp_path / "overrides",
+        "1399",
+        {"Jon Snow": "用户名称"},
+    )
+
+    try:
+        result = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            ),
+            metadata_provider=StaticTerminologyMetadata(),
+            metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+            user_override_store=overrides,
+        ).run(
+            media,
+            target_language="zh",
+            source=source,
+            series_id="1399",
+            season_number=1,
+            episode_number=1,
+            dynamic_terminology_enabled=False,
+        )
+
+        assert result.state is JobState.PUBLISHED
+        first_prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[0]["messages"]
+        )
+        second_prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[1]["messages"]
+        )
+        assert "Jon Snow::用户名称" in first_prompt
+        assert "琼恩·雪诺" not in first_prompt
+        assert "Pinellia::半夏" not in second_prompt
+        assert result.published_path is not None
+        assert result.published_path.read_text(encoding="utf-8").count("用户名称") == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_dynamic_terminology_setting_is_part_of_job_workspace_identity(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"media")
+    monkeypatch.setenv("CUEWEAVER_WORK_DIRECTORY", str(tmp_path / "jobs"))
+
+    enabled = job_work_directory(media, "zh", "Movie.en.srt")
+    disabled = job_work_directory(
+        media,
+        "zh",
+        "Movie.en.srt",
+        dynamic_terminology_enabled=False,
+    )
+
+    assert enabled != disabled
 
 
 def test_changed_user_override_does_not_resume_an_old_translation(tmp_path):

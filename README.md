@@ -55,6 +55,19 @@ Job files are kept outside the Media directory under
 Use `--language-priority en,ja` or `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` to
 break same-cost Source ties without content sniffing.
 
+The terminal lists every discovered Source with its label, subtype, I/O cost,
+and availability. It then reports the selected Source exactly once, including
+whether the choice was explicit, automatic, or interactive. Automatic choices
+also state the primary reason, such as the lowest I/O cost or a language
+priority. Candidate lists, selection messages, and lifecycle progress are
+written to stderr; the final successful Job summary is written to stdout.
+During a Job, progress reports each lifecycle transition once: `discovered`,
+`extracting`, `metadata`, `translating`, `validating`, `publishing`, and the
+terminal `published`, `failed`, or `canceled` state when applicable. Progress
+does not include prompts, API keys, or subtitle payloads. A canceled Job is not
+published automatically; when an intermediate result is retained, its path is
+reported for an explicit follow-up decision.
+
 For an episode Job, pass `--tmdb-series-id`, `--season`, and `--episode` to
 gather the full TMDb series and episode overviews as Context before
 translation. Set `CUEWEAVER_TMDB_API_KEY` (or `TMDB_API_KEY`) for TMDb access.
@@ -78,7 +91,18 @@ Missing target labels may use an exact structured Wikipedia `langlinks`/
 scraped. Ambiguous or unsupported mappings are dropped, so a series with no
 usable relations continues with an empty Glossary and baseline translation.
 Glossary Terms are cached at the same series scope and seeded into PySubtrans;
-dynamic terminology learning remains enabled for uncovered terms.
+dynamic terminology learning remains enabled for uncovered terms. Use
+`--no-dynamic-terminology` or set
+`CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP=false` to disable it for a Job. The paired
+`--dynamic-terminology` option explicitly enables it, and an explicit CLI value
+overrides the environment variable. The environment variable accepts
+`true`/`false`, `yes`/`no`, and `1`/`0`.
+
+Dynamic terminology discovery can make later prompts grow as new mappings are
+learned, increasing token usage. Disabling it keeps prompts deterministic from
+the static Glossary and User override seeds, which can improve consistency and
+DeepSeek prefix-cache reuse, but uncovered terms will not be learned between
+batches. The two modes use separate Job checkpoints.
 
 User overrides are loaded from one JSON file per scope. By default, files live
 under `$XDG_CONFIG_HOME/cueweaver/overrides` or `~/.config/cueweaver/overrides`;
