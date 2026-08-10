@@ -237,6 +237,7 @@ class JobResult:
     source: SubtitleCandidate | None
     published_path: Path | None
     no_op: bool
+    dynamic_terminology_enabled: bool = True
     error: str | None = None
     intermediate_path: Path | None = None
     translated_content: bytes | None = None
@@ -713,6 +714,7 @@ class JobRunner:
                         result.media,
                         result.target_language,
                         result.source.selection_id,
+                        dynamic_terminology_enabled=result.dynamic_terminology_enabled,
                     ),
                 )
             self._intermediate_path = staged_path
@@ -775,6 +777,7 @@ class JobRunner:
         season_number: int | None = None,
         episode_number: int | None = None,
         refresh_metadata: bool = False,
+        dynamic_terminology_enabled: bool | None = None,
     ) -> JobResult:
         self._cancel_requested.clear()
         self._intermediate_path = None
@@ -790,7 +793,11 @@ class JobRunner:
         metadata_context: MetadataContext | None = None
         metadata_request: MetadataRequest | None = None
         user_overrides: dict[str, str] = {}
+        effective_dynamic_terminology_enabled = True
         try:
+            effective_dynamic_terminology_enabled = (
+                _resolve_dynamic_terminology_enabled(dynamic_terminology_enabled)
+            )
             configured_target = normalize_language(
                 target_language
                 if target_language is not None
@@ -820,6 +827,7 @@ class JobRunner:
                 media_path,
                 configured_target,
                 selected_source.selection_id,
+                dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
             )
             self._raise_if_canceled()
 
@@ -876,6 +884,7 @@ class JobRunner:
                         else Glossary()
                     ),
                     user_overrides=user_overrides,
+                    dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
                 )
                 self._raise_if_canceled()
 
@@ -914,6 +923,7 @@ class JobRunner:
                 source=selected_source,
                 published_path=published_path,
                 no_op=no_op,
+                dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
                 context=metadata_context.text if metadata_context else "",
                 metadata_degradation=(
                     metadata_context.degradation if metadata_context else None
@@ -943,6 +953,7 @@ class JobRunner:
                 source=selected_source,
                 published_path=None,
                 no_op=no_op,
+                dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
                 error=str(error),
                 intermediate_path=self._intermediate_path,
                 translated_content=self._translated_content,
@@ -1340,6 +1351,7 @@ class JobRunner:
         context: str = "",
         glossary: Glossary | None = None,
         user_overrides: dict[str, str] | None = None,
+        dynamic_terminology_enabled: bool = True,
     ) -> bytes:
         try:
             translator = self._translator
@@ -1359,6 +1371,7 @@ class JobRunner:
                 glossary=glossary or Glossary(),
                 user_overrides=user_overrides or {},
                 work_directory=self._job_work_directory,
+                dynamic_terminology_enabled=dynamic_terminology_enabled,
             )
         except Exception as error:
             if isinstance(error, JobCanceled):
@@ -1461,6 +1474,25 @@ def _default_metadata_cache_path() -> Path:
     return root / "cueweaver" / "metadata"
 
 
+def _resolve_dynamic_terminology_enabled(value: bool | None) -> bool:
+    if value is not None:
+        if type(value) is not bool:
+            raise JobError("dynamic_terminology_enabled must be a bool or None")
+        return value
+
+    configured = os.environ.get("CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP")
+    if configured is None:
+        return True
+    normalized = configured.strip().casefold()
+    if normalized in {"true", "yes", "1"}:
+        return True
+    if normalized in {"false", "no", "0"}:
+        return False
+    raise JobError(
+        "CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP must be one of true, false, yes, no, 1, or 0"
+    )
+
+
 def _default_user_override_directory() -> Path:
     configured = os.environ.get("CUEWEAVER_USER_OVERRIDE_DIRECTORY")
     if configured:
@@ -1556,6 +1588,7 @@ def _call_translator(
     glossary: Glossary,
     user_overrides: dict[str, str],
     work_directory: Path | None,
+    dynamic_terminology_enabled: bool,
 ) -> bytes | str | PathLike[str]:
     method = cast(
         Callable[..., bytes | str | PathLike[str]],
@@ -1570,6 +1603,8 @@ def _call_translator(
         kwargs["user_overrides"] = user_overrides
     if work_directory is not None and _accepts_parameter(method, "work_directory"):
         kwargs["work_directory"] = work_directory
+    if _accepts_parameter(method, "dynamic_terminology_enabled"):
+        kwargs["dynamic_terminology_enabled"] = dynamic_terminology_enabled
     return method(source, target_language, **kwargs)
 
 

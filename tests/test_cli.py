@@ -1,7 +1,9 @@
 import json
 from types import SimpleNamespace
 
-from cueweaver.cli import main
+import pytest
+
+from cueweaver.cli import build_parser, main
 from cueweaver.job import JobResult, JobState, SubtitleCandidate, SubtitleFormat
 
 SRT = """1
@@ -58,6 +60,88 @@ def test_terminal_flow_accepts_the_global_target_language_environment_setting(
     assert exit_code == 0
     assert "Job published" in captured.out
     assert captured.err == ""
+
+
+def test_dynamic_terminology_cli_switches_are_mutually_exclusive():
+    parser = build_parser()
+
+    assert (
+        parser.parse_args(
+            ["Movie.mkv", "--dynamic-terminology"]
+        ).dynamic_terminology_enabled
+        is True
+    )
+    assert (
+        parser.parse_args(
+            ["Movie.mkv", "--no-dynamic-terminology"]
+        ).dynamic_terminology_enabled
+        is False
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "Movie.mkv",
+                "--dynamic-terminology",
+                "--no-dynamic-terminology",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("option", "environment_value", "expected"),
+    [
+        ("--dynamic-terminology", "false", True),
+        ("--no-dynamic-terminology", "true", False),
+    ],
+)
+def test_cli_passes_explicit_dynamic_terminology_setting_to_the_job(
+    tmp_path, monkeypatch, option, environment_value, expected
+):
+    media = tmp_path / "Movie.mkv"
+    monkeypatch.setenv("CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP", environment_value)
+    candidate = SubtitleCandidate(
+        path=tmp_path / "Movie.en.srt",
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+    )
+
+    class RecordingRunner:
+        dynamic_terminology_enabled = None
+
+        def run(
+            self,
+            media,
+            *,
+            target_language,
+            source,
+            source_language,
+            dynamic_terminology_enabled,
+        ):
+            self.dynamic_terminology_enabled = dynamic_terminology_enabled
+            return JobResult(
+                state=JobState.PUBLISHED,
+                lifecycle=(JobState.PUBLISHED,),
+                media=media,
+                target_language=target_language,
+                source=candidate,
+                published_path=media,
+                no_op=True,
+            )
+
+    runner = RecordingRunner()
+    assert (
+        main(
+            [
+                str(media),
+                "--target-language",
+                "zh",
+                option,
+            ],
+            runner=runner,
+        )
+        == 0
+    )
+    assert runner.dynamic_terminology_enabled is expected
 
 
 def test_terminal_flow_reports_cancellation_without_asserting_a_published_path(

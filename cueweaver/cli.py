@@ -66,6 +66,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore cached TMDb Context and fetch it again",
     )
+    dynamic_terminology = parser.add_mutually_exclusive_group()
+    dynamic_terminology.add_argument(
+        "--dynamic-terminology",
+        dest="dynamic_terminology_enabled",
+        action="store_true",
+        help="Enable dynamic terminology discovery (default)",
+    )
+    dynamic_terminology.add_argument(
+        "--no-dynamic-terminology",
+        dest="dynamic_terminology_enabled",
+        action="store_false",
+        help="Disable dynamic terminology discovery",
+    )
+    parser.set_defaults(dynamic_terminology_enabled=None)
     parser.add_argument(
         "--user-override-directory",
         "--override-directory",
@@ -117,6 +131,10 @@ def main(
             "source": args.source,
             "source_language": args.source_language,
         }
+        if args.dynamic_terminology_enabled is not None:
+            run_options["dynamic_terminology_enabled"] = (
+                args.dynamic_terminology_enabled
+            )
         if args.series_id is not None:
             run_options.update(
                 series_id=args.series_id,
