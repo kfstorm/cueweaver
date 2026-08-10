@@ -267,21 +267,24 @@ class MetadataContext:
                 "target",
                 episode_suffix,
             )
-            return "\n\n".join(sections)
-        if self.series_overview:
-            sections.append(f"TMDb series overview:\n{self.series_overview}")
-        if self.episode_overview:
-            episode_label = "TMDb episode overview"
-            if (
-                self.request.season_number is not None
-                and self.request.episode_number is not None
-            ):
-                episode_label += (
-                    f" (S{self.request.season_number:02d}"
-                    f"E{self.request.episode_number:02d})"
-                )
-            sections.append(f"{episode_label}:\n{self.episode_overview}")
-        return "\n\n".join(sections)
+        else:
+            if self.series_overview:
+                sections.append(f"TMDb series overview:\n{self.series_overview}")
+            if self.episode_overview:
+                episode_label = "TMDb episode overview"
+                if (
+                    self.request.season_number is not None
+                    and self.request.episode_number is not None
+                ):
+                    episode_label += (
+                        f" (S{self.request.season_number:02d}"
+                        f"E{self.request.episode_number:02d})"
+                    )
+                sections.append(f"{episode_label}:\n{self.episode_overview}")
+
+        if not sections:
+            return ""
+        return f"{_TRANSLATION_CONTEXT_INSTRUCTIONS}\n\n---\n\n" + "\n\n".join(sections)
 
     def _append_localized_sections(
         self,
@@ -306,6 +309,30 @@ class MetadataContext:
         if self.request.season_number is None or self.request.episode_number is None:
             return ""
         return f" (S{self.request.season_number:02d}E{self.request.episode_number:02d})"
+
+
+_TRANSLATION_CONTEXT_INSTRUCTIONS = """## Translation Context
+
+The following metadata is supplemental context for understanding the series and episode.
+
+### How to use this context
+
+- Source-language metadata is provided primarily for understanding the plot, characters, relationships, identities, and events.
+- Target-language metadata is provided primarily as a reference for established localized names and terminology.
+- Target-language metadata may be incomplete, inaccurate, written from an omniscient perspective, or describe information that characters do not yet know.
+- Do not copy titles, ranks, relationships, institutions, or other terms from the target-language metadata unless they clearly refer to the same entity or concept in the current subtitle.
+- Do not reveal a character's true identity, title, relationship, or future status unless the speaker knows it at this point in the story.
+- Do not merge different people, institutions, ranks, or concepts merely because they have similar meanings.
+- When metadata conflicts with the source subtitle or the immediate dialogue context, the source subtitle and dialogue context take precedence.
+
+Use the following priority when resolving ambiguity:
+
+1. Current source subtitle
+2. Immediate subtitle/dialogue context
+3. Source-language episode metadata
+4. Source-language series metadata
+5. Target-language episode metadata
+6. Target-language series metadata"""
 
 
 class MetadataProvider(Protocol):

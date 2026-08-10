@@ -18,6 +18,34 @@ TRANSLATED = """1
 """
 
 
+TRANSLATION_CONTEXT_INSTRUCTIONS = """## Translation Context
+
+The following metadata is supplemental context for understanding the series and episode.
+
+### How to use this context
+
+- Source-language metadata is provided primarily for understanding the plot, characters, relationships, identities, and events.
+- Target-language metadata is provided primarily as a reference for established localized names and terminology.
+- Target-language metadata may be incomplete, inaccurate, written from an omniscient perspective, or describe information that characters do not yet know.
+- Do not copy titles, ranks, relationships, institutions, or other terms from the target-language metadata unless they clearly refer to the same entity or concept in the current subtitle.
+- Do not reveal a character's true identity, title, relationship, or future status unless the speaker knows it at this point in the story.
+- Do not merge different people, institutions, ranks, or concepts merely because they have similar meanings.
+- When metadata conflicts with the source subtitle or the immediate dialogue context, the source subtitle and dialogue context take precedence.
+
+Use the following priority when resolving ambiguity:
+
+1. Current source subtitle
+2. Immediate subtitle/dialogue context
+3. Source-language episode metadata
+4. Source-language series metadata
+5. Target-language episode metadata
+6. Target-language series metadata"""
+
+
+def expected_context(*sections: str) -> str:
+    return f"{TRANSLATION_CONTEXT_INSTRUCTIONS}\n\n---\n\n" + "\n\n".join(sections)
+
+
 class MetadataFixture:
     def __init__(self) -> None:
         self.series_calls: list[str] = []
@@ -252,9 +280,9 @@ def test_metadata_context_is_gathered_before_translation(tmp_path):
     assert metadata.series_calls == ["1399"]
     assert metadata.episode_calls == [("1399", 1, 2)]
     assert translator.contexts == [
-        (
-            "TMDb series overview:\nThe complete series overview.\n\n"
-            "TMDb episode overview (S01E02):\nThe complete episode overview."
+        expected_context(
+            "TMDb series overview:\nThe complete series overview.",
+            "TMDb episode overview (S01E02):\nThe complete episode overview.",
         )
     ]
     assert result.context == translator.contexts[0]
@@ -283,21 +311,103 @@ def test_metadata_context_contains_source_and_target_series_and_episode_values(
 
     assert result.state is JobState.PUBLISHED
     assert translator.contexts == [
-        (
-            "Series title (source: en):\nDong Yi\n\n"
-            "Series overview (source: en):\nThe source series overview.\n\n"
-            "Series title (target: zh):\n同伊\n\n"
-            "Series overview (target: zh):\n目标语言的剧集简介。\n\n"
-            "Episode title (source: en) (S01E02):\nThe First Episode\n\n"
-            "Episode overview (source: en) (S01E02):\nThe source episode overview.\n\n"
-            "Episode title (target: zh) (S01E02):\n第一集\n\n"
-            "Episode overview (target: zh) (S01E02):\n目标语言的单集简介。"
+        expected_context(
+            "Series title (source: en):\nDong Yi",
+            "Series overview (source: en):\nThe source series overview.",
+            "Series title (target: zh):\n同伊",
+            "Series overview (target: zh):\n目标语言的剧集简介。",
+            "Episode title (source: en) (S01E02):\nThe First Episode",
+            "Episode overview (source: en) (S01E02):\nThe source episode overview.",
+            "Episode title (target: zh) (S01E02):\n第一集",
+            "Episode overview (target: zh) (S01E02):\n目标语言的单集简介。",
         )
     ]
     assert result.context == translator.contexts[0]
     assert result.metadata_request is not None
     assert result.metadata_request.source_language == "en"
     assert result.metadata_request.target_language == "zh"
+
+
+def test_source_only_metadata_context_omits_target_fields(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    for key in (
+        ("series", "title", "zh"),
+        ("series", "overview", "zh"),
+        ("episode", "title", "zh"),
+        ("episode", "overview", "zh"),
+    ):
+        metadata.values[key] = ""
+    translator = ContextTranslator()
+
+    result = run_metadata_job(
+        media,
+        source,
+        metadata,
+        MetadataCache(tmp_path / "metadata-cache"),
+        translator=translator,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.context == expected_context(
+        "Series title (source: en):\nDong Yi",
+        "Series overview (source: en):\nThe source series overview.",
+        "Episode title (source: en) (S01E02):\nThe First Episode",
+        "Episode overview (source: en) (S01E02):\nThe source episode overview.",
+    )
+
+
+def test_target_only_metadata_context_omits_source_fields(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    for key in (
+        ("series", "title", "en"),
+        ("series", "overview", "en"),
+        ("episode", "title", "en"),
+        ("episode", "overview", "en"),
+    ):
+        metadata.values[key] = ""
+    translator = ContextTranslator()
+
+    result = run_metadata_job(
+        media,
+        source,
+        metadata,
+        MetadataCache(tmp_path / "metadata-cache"),
+        translator=translator,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.context == expected_context(
+        "Series title (target: zh):\n同伊",
+        "Series overview (target: zh):\n目标语言的剧集简介。",
+        "Episode title (target: zh) (S01E02):\n第一集",
+        "Episode overview (target: zh) (S01E02):\n目标语言的单集简介。",
+    )
+
+
+def test_mixed_metadata_context_only_renders_available_fields(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = BilingualMetadataFixture()
+    for key in tuple(metadata.values):
+        metadata.values[key] = ""
+    metadata.values[("series", "overview", "en")] = "The source series overview."
+    metadata.values[("episode", "overview", "zh")] = "目标语言的单集简介。"
+    translator = ContextTranslator()
+
+    result = run_metadata_job(
+        media,
+        source,
+        metadata,
+        MetadataCache(tmp_path / "metadata-cache"),
+        translator=translator,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.context == expected_context(
+        "Series overview (source: en):\nThe source series overview.",
+        "Episode overview (target: zh) (S01E02):\n目标语言的单集简介。",
+    )
 
 
 def test_bilingual_metadata_cache_reuses_language_pair_and_refreshes_all_variants(
@@ -547,9 +657,9 @@ def test_manual_metadata_refresh_bypasses_the_long_lived_cache(tmp_path):
     assert metadata.series_calls == ["1399", "1399"]
     assert metadata.episode_calls == [("1399", 1, 2), ("1399", 1, 2)]
     assert translator.contexts == [
-        (
-            "TMDb series overview:\nThe refreshed series overview.\n\n"
-            "TMDb episode overview (S01E02):\nThe refreshed episode overview."
+        expected_context(
+            "TMDb series overview:\nThe refreshed series overview.",
+            "TMDb episode overview (S01E02):\nThe refreshed episode overview.",
         )
     ]
 
@@ -652,9 +762,9 @@ def test_metadata_provider_hiccup_retries_before_translation(tmp_path):
     assert result.state is JobState.PUBLISHED
     assert result.metadata_degradation is None
     assert translator.contexts == [
-        (
-            "TMDb series overview:\nThe complete series overview.\n\n"
-            "TMDb episode overview (S01E02):\nThe complete episode overview."
+        expected_context(
+            "TMDb series overview:\nThe complete series overview.",
+            "TMDb episode overview (S01E02):\nThe complete episode overview.",
         )
     ]
 
@@ -687,9 +797,9 @@ def test_metadata_retry_refreshes_context_without_repeating_translation(tmp_path
     assert first.metadata_degradation == "Metadata degraded: temporary TMDb outage"
     assert retried.state is JobState.PUBLISHED
     assert retried.metadata_degradation is None
-    assert retried.context == (
-        "TMDb series overview:\nThe complete series overview.\n\n"
-        "TMDb episode overview (S01E02):\nThe complete episode overview."
+    assert retried.context == expected_context(
+        "TMDb series overview:\nThe complete series overview.",
+        "TMDb episode overview (S01E02):\nThe complete episode overview.",
     )
     assert translator.contexts == [""]
     assert retried.published_path is not None
