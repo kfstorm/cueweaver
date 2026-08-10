@@ -23,6 +23,8 @@ def job_work_directory(
     media: PathLike[str] | str,
     target_language: str,
     source_identity: str,
+    *,
+    dynamic_terminology_enabled: bool = True,
 ) -> Path:
     """Return the stable workspace for one Media/Source/Target Job."""
 
@@ -33,7 +35,13 @@ def job_work_directory(
     except OSError:
         media_version = "unknown"
     key_material = "\0".join(
-        (str(media_path), media_version, target_language, source_identity)
+        (
+            str(media_path),
+            media_version,
+            target_language,
+            source_identity,
+            str(dynamic_terminology_enabled),
+        )
     ).encode("utf-8")
     digest = hashlib.sha256(key_material).hexdigest()[:16]
     return default_work_root() / digest
