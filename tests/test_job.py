@@ -241,6 +241,33 @@ def test_job_work_files_do_not_pollute_the_media_directory(tmp_path, monkeypatch
     ]
 
 
+def test_debug_no_op_writes_a_trace_without_calling_translation(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.zh.srt"
+    media.write_bytes(b"container")
+    source.write_text(SRT, encoding="utf-8")
+
+    result = JobRunner().run(
+        media,
+        target_language="zh",
+        source=source,
+        debug=True,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.no_op is True
+    assert result.trace_path is not None
+    events = [
+        json.loads(line)
+        for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["event"] for event in events] == [
+        "run_started",
+        "run_finished",
+    ]
+    assert events[-1]["state"] == "completed"
+
+
 def test_embedded_source_without_confirmation_does_not_extract(tmp_path, monkeypatch):
     media = tmp_path / "Movie.mkv"
     media.write_bytes(b"container")

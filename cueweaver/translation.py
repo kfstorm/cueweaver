@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from collections.abc import Mapping
 from os import PathLike
 from pathlib import Path
@@ -20,6 +21,7 @@ from PySubtrans import (
 )
 
 from .metadata import Glossary
+from .trace import TraceWriter
 from .workspaces import default_work_root
 
 
@@ -147,6 +149,7 @@ class PySubtransTranslator:
         glossary: Glossary | None = None,
         user_overrides: Mapping[str, str] | None = None,
         work_directory: PathLike[str] | None = None,
+        trace_writer: TraceWriter | None = None,
     ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
@@ -208,6 +211,9 @@ class PySubtransTranslator:
             terminology_map=terminology_map,
         )
         _disable_thinking(engine)
+        trace_session: _TraceSession | None = None
+        if trace_writer is not None:
+            trace_session = _install_trace_hooks(engine, trace_writer)
 
         with self._state_lock:
             self._active_engine = engine
@@ -224,7 +230,13 @@ class PySubtransTranslator:
                     _overlay_terminology(engine.terminology_map, source, target)
                 update.terminology_map = dict(engine.terminology_map)
 
+        def record_batch_errors(_sender: Any, batch: Any) -> None:
+            if trace_session is not None:
+                trace_session.record_batch_errors(batch)
+
         engine.events.batch_translated.connect(save_checkpoint, weak=False)
+        if trace_session is not None:
+            engine.events.batch_translated.connect(record_batch_errors, weak=False)
         if static_terminology:
             engine.events.terminology_updated.connect(
                 preserve_static_terminology,
@@ -256,6 +268,8 @@ class PySubtransTranslator:
                 project.SaveProjectFile()
             finally:
                 engine.events.batch_translated.disconnect(save_checkpoint)
+                if trace_session is not None:
+                    engine.events.batch_translated.disconnect(record_batch_errors)
                 if static_terminology:
                     engine.events.terminology_updated.disconnect(
                         preserve_static_terminology
@@ -302,6 +316,423 @@ def _disable_thinking(engine: SubtitleTranslator) -> None:
         return request_body
 
     client._generate_request_body = generate_request_body
+
+
+class _TraceSession:
+    def __init__(self, writer: TraceWriter) -> None:
+        self.writer = writer
+        self._operation_number = 0
+        self._request_number = 0
+        self._operations: dict[Any, dict[str, Any]] = {}
+        self._requests: dict[int, dict[str, Any]] = {}
+        self._current_request: Any | None = None
+        self._current_batch: Any | None = None
+        self._current_kind = "initial"
+        self._current_parent: str | None = None
+
+    def bind_batch(self, batch: Any) -> tuple[Any | None, str, str | None]:
+        previous = self._current_batch, self._current_kind, self._current_parent
+        self._current_batch = batch
+        self._current_kind = "initial"
+        self._current_parent = None
+        return previous
+
+    def restore_batch(self, previous: tuple[Any | None, str, str | None]) -> None:
+        self._current_batch, self._current_kind, self._current_parent = previous
+
+    def use_kind(self, kind: str) -> tuple[str, str | None]:
+        previous = self._current_kind, self._current_parent
+        self._current_kind = kind
+        self._current_parent = self._current_operation_id()
+        return previous
+
+    def restore_kind(self, previous: tuple[str, str | None]) -> None:
+        self._current_kind, self._current_parent = previous
+
+    def set_current_request(self, request: Any | None) -> Any | None:
+        previous = self._current_request
+        self._current_request = request
+        return previous
+
+    def start_request(self, request: Any, request_body: Mapping[str, Any]) -> None:
+        operation = self._operation_for(request)
+        self._request_number += 1
+        request_id = f"request-{self._request_number}"
+        request_data = {
+            "operation_id": operation["operation_id"],
+            "request_id": request_id,
+            "attempt": operation["attempt"] + 1,
+            "attempt_kind": operation["kind"],
+            "started_at": time.monotonic(),
+        }
+        operation["attempt"] += 1
+        self._requests[id(request)] = request_data
+        self.writer.write(
+            "attempt_started",
+            operation_id=operation["operation_id"],
+            request_id=request_id,
+            attempt=request_data["attempt"],
+            attempt_kind=operation["kind"],
+            parent_operation_id=operation.get("parent_operation_id"),
+            **self._batch_fields(),
+            prompt=list(getattr(request.prompt, "messages", [])),
+            request_body=dict(request_body),
+        )
+
+    def complete_request(
+        self, request: Any, response: Mapping[str, Any] | None
+    ) -> None:
+        request_data = self._requests.get(id(request))
+        if request_data is None:
+            return
+        if response is None:
+            self.writer.write(
+                "attempt_failed",
+                operation_id=request_data["operation_id"],
+                request_id=request_data["request_id"],
+                attempt=request_data["attempt"],
+                error_type="TranslationCanceled",
+                error="The provider returned no response because translation was canceled",
+                canceled=True,
+                retryable=False,
+                duration_ms=round(
+                    (time.monotonic() - request_data["started_at"]) * 1000, 3
+                ),
+            )
+            return
+        response_data = dict(response) if isinstance(response, Mapping) else response
+        self.writer.write(
+            "response_completed",
+            operation_id=request_data["operation_id"],
+            request_id=request_data["request_id"],
+            attempt=request_data["attempt"],
+            response=response_data,
+            token_usage=_token_usage(response_data),
+            duration_ms=round(
+                (time.monotonic() - request_data["started_at"]) * 1000, 3
+            ),
+        )
+
+    def fail_request(self, request: Any, error: BaseException) -> None:
+        request_data = self._requests.get(id(request))
+        if request_data is None:
+            return
+        response = getattr(error, "response", None)
+        self.writer.write(
+            "attempt_failed",
+            operation_id=request_data["operation_id"],
+            request_id=request_data["request_id"],
+            attempt=request_data["attempt"],
+            error_type=type(error).__name__,
+            error=str(error),
+            http_status=getattr(response, "status_code", None),
+            retryable=type(error).__name__
+            in {"ServerResponseError", "ConnectError", "NetworkError", "ReadTimeout"},
+            canceled=bool(getattr(error, "aborted", False)),
+            duration_ms=round(
+                (time.monotonic() - request_data["started_at"]) * 1000, 3
+            ),
+        )
+
+    def record_chunk(self, request: Any, chunk: Mapping[str, Any]) -> None:
+        request_data = self._requests.get(id(request))
+        if request_data is None:
+            return
+        self.writer.write(
+            "response_chunk",
+            operation_id=request_data["operation_id"],
+            request_id=request_data["request_id"],
+            attempt=request_data["attempt"],
+            chunk=dict(chunk),
+            token_usage=_token_usage(chunk),
+        )
+
+    def record_retry(self, message: str) -> None:
+        request = self._current_request
+        if request is None:
+            return
+        request_data = self._requests.get(id(request))
+        if request_data is None:
+            return
+        delay = _retry_delay(message)
+        operation = self._operations.get(request.prompt)
+        if operation is not None:
+            operation["kind"] = "transport_retry"
+        self.writer.write(
+            "retry_scheduled",
+            operation_id=request_data["operation_id"],
+            failed_request_id=request_data["request_id"],
+            attempt_kind="transport_retry",
+            reason="transport",
+            retry_delay_seconds=delay,
+            **self._batch_fields(),
+        )
+
+    def after_translation(self, request: Any, translation: Any) -> None:
+        if getattr(translation, "reached_token_limit", False):
+            operation = self._operations.get(request.prompt)
+            if operation is not None:
+                self.record_logical_retry(
+                    operation["operation_id"],
+                    reason="token_limit",
+                    attempt_kind="token_limit_retry",
+                )
+                operation["kind"] = "token_limit_retry"
+
+    def _operation_for(self, request: Any) -> dict[str, Any]:
+        prompt_key = request.prompt
+        existing = self._operations.get(prompt_key)
+        if existing is not None and self._current_kind in {
+            "initial",
+            "transport_retry",
+        }:
+            if (
+                self._current_kind == "initial"
+                and existing["kind"] != "token_limit_retry"
+            ):
+                return existing
+            if self._current_kind == "transport_retry":
+                existing["kind"] = "transport_retry"
+                return existing
+            self._current_kind = existing["kind"]
+            self._current_parent = existing["operation_id"]
+
+        self._operation_number += 1
+        operation = {
+            "operation_id": f"operation-{self._operation_number}",
+            "attempt": 0,
+            "kind": self._current_kind,
+            "batch_number": getattr(self._current_batch, "number", None),
+            "scene": getattr(self._current_batch, "scene", None),
+        }
+        self._operations[prompt_key] = operation
+        if self._current_kind != "initial":
+            operation["parent_operation_id"] = (
+                self._current_parent or self._current_operation_id()
+            )
+        return operation
+
+    def _current_operation_id(self) -> str | None:
+        if self._current_batch is None:
+            return None
+        for operation in self._operations.values():
+            if operation.get("batch_number") == getattr(
+                self._current_batch, "number", None
+            ) and operation.get("scene") == getattr(self._current_batch, "scene", None):
+                return str(operation["operation_id"])
+        return None
+
+    def record_logical_retry(
+        self,
+        operation_id: str | None,
+        *,
+        reason: str,
+        attempt_kind: str,
+        errors: list[object] | None = None,
+    ) -> None:
+        if operation_id is None:
+            return
+        self.writer.write(
+            "retry_scheduled",
+            operation_id=operation_id,
+            attempt_kind=attempt_kind,
+            reason=reason,
+            validation_errors=[str(error) for error in errors] if errors else None,
+            **self._batch_fields(),
+        )
+
+    def record_batch_errors(self, batch: Any) -> None:
+        errors = list(getattr(batch, "errors", []))
+        if not errors:
+            return
+        matching_operations = [
+            operation
+            for operation in self._operations.values()
+            if operation.get("batch_number") == getattr(batch, "number", None)
+            and operation.get("scene") == getattr(batch, "scene", None)
+        ]
+        if not matching_operations:
+            return
+        operation = matching_operations[-1]
+        matching_requests = [
+            request
+            for request in self._requests.values()
+            if request.get("operation_id") == operation["operation_id"]
+        ]
+        request_data = matching_requests[-1] if matching_requests else {}
+        self.writer.write(
+            "attempt_failed",
+            operation_id=operation["operation_id"],
+            request_id=request_data.get("request_id"),
+            attempt=request_data.get("attempt"),
+            error_type="ValidationError",
+            error="; ".join(str(error) for error in errors),
+            validation_errors=[str(error) for error in errors],
+            retryable=False,
+            canceled=False,
+        )
+
+    def _batch_fields(self) -> dict[str, Any]:
+        if self._current_batch is None:
+            return {}
+        return {
+            "scene": getattr(self._current_batch, "scene", None),
+            "batch_number": getattr(self._current_batch, "number", None),
+        }
+
+
+def _install_trace_hooks(
+    engine: SubtitleTranslator, writer: TraceWriter
+) -> _TraceSession:
+    """Observe PySubtrans 1.6.0's private request seams without changing defaults."""
+
+    trace = _TraceSession(writer)
+    client = engine.client
+
+    original_translate_batch = engine.TranslateBatch
+
+    def translate_batch(batch: Any, *args: Any, **kwargs: Any) -> Any:
+        previous = trace.bind_batch(batch)
+        try:
+            return original_translate_batch(batch, *args, **kwargs)
+        finally:
+            trace.restore_batch(previous)
+
+    engine.TranslateBatch = translate_batch
+
+    original_retranslation = engine.RequestRetranslation
+
+    def request_retranslation(batch: Any, *args: Any, **kwargs: Any) -> Any:
+        previous = trace.use_kind("validation_retry")
+        trace.record_logical_retry(
+            trace._current_parent,
+            reason="validation",
+            attempt_kind="validation_retry",
+            errors=list(getattr(batch, "errors", [])),
+        )
+        try:
+            return original_retranslation(batch, *args, **kwargs)
+        finally:
+            trace.restore_kind(previous)
+
+    engine.RequestRetranslation = request_retranslation
+
+    original_split = engine._translate_split_batch
+
+    def translate_split(batch: Any, *args: Any, **kwargs: Any) -> Any:
+        previous = trace.use_kind("batch_split")
+        trace.record_logical_retry(
+            trace._current_parent,
+            reason="batch_split",
+            attempt_kind="batch_split",
+            errors=list(getattr(batch, "errors", [])),
+        )
+        try:
+            return original_split(batch, *args, **kwargs)
+        finally:
+            trace.restore_kind(previous)
+
+    engine._translate_split_batch = translate_split
+
+    original_make_request = client._make_request
+
+    original_request_translation = client.RequestTranslation
+
+    def request_translation(request: Any, *args: Any, **kwargs: Any) -> Any:
+        translation = original_request_translation(request, *args, **kwargs)
+        trace.after_translation(request, translation)
+        return translation
+
+    client.RequestTranslation = request_translation
+
+    def make_request(request: Any, *args: Any, **kwargs: Any) -> Any:
+        previous = trace.set_current_request(request)
+        try:
+            return original_make_request(request, *args, **kwargs)
+        finally:
+            trace.set_current_request(previous)
+
+    client._make_request = make_request
+
+    original_non_streaming = client._handle_non_streaming_request
+
+    def handle_non_streaming(request_body: Mapping[str, Any]) -> Any:
+        request = trace._current_request
+        if request is None:
+            return original_non_streaming(request_body)
+        trace.start_request(request, request_body)
+        try:
+            response = original_non_streaming(request_body)
+        except Exception as error:
+            trace.fail_request(request, error)
+            raise
+        trace.complete_request(request, response)
+        return response
+
+    client._handle_non_streaming_request = handle_non_streaming
+
+    original_streaming = client._handle_streaming_request
+
+    def handle_streaming(request: Any, request_body: dict[str, Any]) -> Any:
+        request_body["stream"] = True
+        trace.start_request(request, request_body)
+        try:
+            response = original_streaming(request, request_body)
+        except Exception as error:
+            trace.fail_request(request, error)
+            raise
+        trace.complete_request(request, response)
+        return response
+
+    client._handle_streaming_request = handle_streaming
+
+    original_chunk = client._process_streaming_chunk
+
+    def process_chunk(
+        request: Any,
+        chunk: Mapping[str, Any],
+        accumulated_response: dict[str, Any],
+    ) -> None:
+        trace.record_chunk(request, chunk)
+        original_chunk(request, chunk, accumulated_response)
+
+    client._process_streaming_chunk = process_chunk
+
+    original_warning = client._emit_warning
+
+    def emit_warning(message: str, *args: Any, **kwargs: Any) -> None:
+        if message.startswith("Retrying in "):
+            trace.record_retry(message)
+        original_warning(message, *args, **kwargs)
+
+    client._emit_warning = emit_warning
+    return trace
+
+
+def _token_usage(response: object) -> dict[str, object]:
+    if not isinstance(response, Mapping):
+        response = {}
+    usage = response.get("usage")
+    if isinstance(usage, Mapping):
+        return {
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
+            "total_tokens": usage.get("total_tokens"),
+            "reasoning_tokens": usage.get("reasoning_tokens"),
+        }
+    return {
+        "prompt_tokens": response.get("prompt_tokens"),
+        "output_tokens": response.get("output_tokens"),
+        "total_tokens": response.get("total_tokens"),
+        "reasoning_tokens": response.get("reasoning_tokens"),
+    }
+
+
+def _retry_delay(message: str) -> float | None:
+    try:
+        return float(message.removeprefix("Retrying in ").removesuffix(" seconds..."))
+    except ValueError:
+        return None
 
 
 def _build_terminology_seed(

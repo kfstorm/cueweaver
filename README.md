@@ -12,6 +12,32 @@ uv sync
 uv run cueweaver run /path/to/Movie.mkv --target-language zh
 ```
 
+Add `--debug` to record the PySubtrans translation interaction:
+
+```bash
+uv run cueweaver run /path/to/Movie.mkv --target-language zh --debug
+```
+
+CueWeaver writes one durable `trace-<UTC timestamp>-<random suffix>.jsonl`
+file in the Job workspace and reports its path when the Job succeeds, fails,
+or is canceled. Trace files are retained with the workspace and are not
+automatically cleaned up. Debug tracing covers the built-in PySubtrans
+translation requests only; metadata requests and custom translators are not
+traced.
+
+Trace files use schema version 1. Each line has `schema_version`, `event`,
+`timestamp`, and `run_id`. Events are `run_started`, `attempt_started`,
+`response_chunk`, `response_completed`, `attempt_failed`,
+`retry_scheduled`, and `run_finished`. Request attempts can be correlated
+with `operation_id`, `request_id`, `batch_number`, `scene`, `attempt`, and
+`attempt_kind`; logical retries and batch splits include a parent operation.
+Request bodies, prompts, parsed responses, streaming chunks, final assembled
+responses, token usage, and structured errors may be recorded. API keys,
+authorization headers, settings, and other transport credentials are
+excluded. The trace is not a redacted subtitle copy: subtitle content,
+Context, Glossary, and provider response text may be written to it. Protect
+trace files with the same care as the source subtitles.
+
 The Target language is required and has no product default. It can also be
 configured for a shell session with `CUEWEAVER_TARGET_LANGUAGE`. A subtitle
 named after the Media, such as `Movie.zh.srt`, `Movie.en.ass`, or

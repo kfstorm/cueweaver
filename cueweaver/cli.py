@@ -67,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ignore cached TMDb Context and fetch it again",
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Write a durable JSONL trace of PySubtrans translation requests",
+    )
+    parser.add_argument(
         "--user-override-directory",
         "--override-directory",
         dest="user_override_directory",
@@ -124,6 +129,8 @@ def main(
                 episode_number=args.episode_number,
                 refresh_metadata=args.refresh_metadata,
             )
+        if args.debug:
+            run_options["debug"] = True
         result = active_runner.run(args.media, **run_options)
     finally:
         if handler_installed:
@@ -136,6 +143,8 @@ def main(
         )
         if result.intermediate_path is not None:
             print(f"  intermediate: {result.intermediate_path}", file=sys.stderr)
+        if result.trace_path is not None:
+            print(f"  trace: {result.trace_path}", file=sys.stderr)
         return 1
     if result.state is JobState.FAILED:
         print(f"Job failed: {result.error}", file=sys.stderr)
@@ -143,6 +152,8 @@ def main(
             f"  lifecycle: {' -> '.join(state.value for state in result.lifecycle)}",
             file=sys.stderr,
         )
+        if result.trace_path is not None:
+            print(f"  trace: {result.trace_path}", file=sys.stderr)
         return 1
 
     if result.metadata_degradation is not None:
@@ -159,6 +170,8 @@ def main(
     print(f"  lifecycle: {' -> '.join(state.value for state in result.lifecycle)}")
     print(f"  output: {result.published_path}")
     print(f"  no-op: {'yes' if result.no_op else 'no'}")
+    if result.trace_path is not None:
+        print(f"  trace: {result.trace_path}")
     return 0
 
 
