@@ -19,9 +19,13 @@ named after the Media, such as `Movie.zh.srt`, `Movie.en.ass`, or
 External subtitle. MKV and MP4 Embedded subtitles are listed from container
 metadata with `ffprobe`; install FFmpeg so `ffprobe` is available. Text
 Embedded Sources require an explicit selection and are
-materialized lazily through `seconv` into `.cueweaver/extraction`. Bitmap
-Sources are listed as disabled because Subtitle OCR is outside v0.1. Set
-`CUEWEAVER_SECONV` when `seconv` is not on `PATH`.
+materialized lazily through `seconv` into the configured Job work directory's
+Extraction cache. Bitmap
+Sources are listed as disabled because Subtitle OCR is outside v0.1. Durable
+Job files are kept outside the Media directory under
+`$XDG_CACHE_HOME/cueweaver/jobs` or `~/.cache/cueweaver/jobs`; set
+`CUEWEAVER_WORK_DIRECTORY` to choose another root. Set `CUEWEAVER_SECONV` when
+`seconv` is not on `PATH`.
 Use `--language-priority en,ja` or `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` to
 break same-cost Source ties without content sniffing.
 
@@ -86,8 +90,9 @@ server can be selected with `CUEWEAVER_TRANSLATION_PROVIDER=openai-compatible`,
 `CUEWEAVER_TRANSLATION_ENDPOINT`, `CUEWEAVER_TRANSLATION_MODEL`, and
 `CUEWEAVER_TRANSLATION_API_KEY`. CueWeaver sends
 `thinking: {"type": "disabled"}` for the v0.1 fast/low-cost seam. PySubtrans
-checkpoint files are kept in CueWeaver's per-Job `.cueweaver` work directory so
-a completed batch is not sent again on a later Job.
+checkpoint files are kept in CueWeaver's per-Job user cache workspace so a
+completed batch is not sent again on a later Job. No temporary CueWeaver files
+are written beside the Media.
 
 The adapter also accepts PySubtrans's provider-native settings when present:
 `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, and `DEEPSEEK_API_BASE` for DeepSeek, or

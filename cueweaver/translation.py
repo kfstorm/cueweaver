@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
+from os import PathLike
 from pathlib import Path
 from threading import Event, Lock
 from typing import Any, ClassVar
@@ -19,6 +20,7 @@ from PySubtrans import (
 )
 
 from .metadata import Glossary
+from .workspaces import default_work_root
 
 
 class TranslationProviderConfigurationError(ValueError):
@@ -144,6 +146,7 @@ class PySubtransTranslator:
         context: str = "",
         glossary: Glossary | None = None,
         user_overrides: Mapping[str, str] | None = None,
+        work_directory: PathLike[str] | None = None,
     ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
@@ -154,6 +157,7 @@ class PySubtransTranslator:
             source,
             target_language,
             user_overrides,
+            work_directory=work_directory,
         )
         settings: dict[str, Any] = {
             "provider": self.provider,
@@ -344,6 +348,8 @@ def _prepare_working_source(
     source: Path,
     target_language: str,
     user_overrides: Mapping[str, str] | None = None,
+    *,
+    work_directory: PathLike[str] | None = None,
 ) -> Path:
     """Place a stable Source copy in the Job work directory used by PySubtrans."""
 
@@ -365,9 +371,14 @@ def _prepare_working_source(
             ensure_ascii=False,
         ).encode("utf-8")
     job_key = hashlib.sha256(key_material).hexdigest()[:16]
-    work_directory = source.parent / ".cueweaver" / job_key
-    work_directory.mkdir(parents=True, exist_ok=True)
-    working_source = work_directory / source.name
+    work_root = (
+        Path(work_directory).expanduser().resolve()
+        if work_directory is not None
+        else default_work_root()
+    )
+    translation_directory = work_root / "translation" / job_key
+    translation_directory.mkdir(parents=True, exist_ok=True)
+    working_source = translation_directory / source.name
     if not working_source.exists() or not _same_file_content(
         working_source, source_content
     ):

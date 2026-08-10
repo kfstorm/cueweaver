@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 import os
@@ -39,6 +38,7 @@ from .subtitles import (
     validate_subtitle_pair,
 )
 from .translation import PySubtransTranslator
+from .workspaces import extraction_cache_path, job_work_directory
 
 
 class JobState(str, Enum):
@@ -91,6 +91,7 @@ class Translator(Protocol):
         context: str = "",
         glossary: Glossary | None = None,
         user_overrides: dict[str, str] | None = None,
+        work_directory: PathLike[str] | None = None,
     ) -> bytes | str | PathLike[str]:
         """Return translated subtitle content with explicit terminology seeds."""
 
@@ -620,6 +621,7 @@ class JobRunner:
         self._active_metadata_provider: object | None = None
         self._intermediate_path: Path | None = None
         self._translated_content: bytes | None = None
+        self._job_work_directory: Path | None = None
 
     def cancel(self) -> None:
         """Cancel the active Job without publishing its partial translation."""
@@ -703,7 +705,15 @@ class JobRunner:
                 result.source.subtitle_format,
             )
             if staged_path is None:
-                staged_path = _stage_translation(content, destination)
+                staged_path = _stage_translation(
+                    content,
+                    destination,
+                    work_directory=job_work_directory(
+                        result.media,
+                        result.target_language,
+                        result.source.selection_id,
+                    ),
+                )
             self._intermediate_path = staged_path
             publish_atomically(content, destination)
         except (OSError, SubtitleValidationError) as error:
@@ -768,6 +778,7 @@ class JobRunner:
         self._cancel_requested.clear()
         self._intermediate_path = None
         self._translated_content = None
+        self._job_work_directory = None
         self._reset_translator_for_job()
         self._reset_metadata_provider_for_job()
         media_path = Path(media).expanduser().resolve()
@@ -803,6 +814,11 @@ class JobRunner:
                 media_path.parent,
                 language_priority=language_priority,
                 source_selector=self._source_selector,
+            )
+            self._job_work_directory = job_work_directory(
+                media_path,
+                configured_target,
+                selected_source.selection_id,
             )
             self._raise_if_canceled()
 
@@ -868,7 +884,11 @@ class JobRunner:
                 configured_target,
                 selected_source.subtitle_format,
             )
-            staged_path = _stage_translation(delivered_content, published_path)
+            staged_path = _stage_translation(
+                delivered_content,
+                published_path,
+                work_directory=self._job_work_directory,
+            )
             self._intermediate_path = staged_path
             publish_atomically(delivered_content, published_path)
             _discard_staged_translation(staged_path)
@@ -1151,6 +1171,7 @@ class JobRunner:
                 context=context,
                 glossary=glossary or Glossary(),
                 user_overrides=user_overrides or {},
+                work_directory=self._job_work_directory,
             )
         except Exception as error:
             if isinstance(error, JobCanceled):
@@ -1305,6 +1326,7 @@ def _call_translator(
     context: str,
     glossary: Glossary,
     user_overrides: dict[str, str],
+    work_directory: Path | None,
 ) -> bytes | str | PathLike[str]:
     method = cast(
         Callable[..., bytes | str | PathLike[str]],
@@ -1317,6 +1339,8 @@ def _call_translator(
         kwargs["glossary"] = glossary
     if _accepts_parameter(method, "user_overrides"):
         kwargs["user_overrides"] = user_overrides
+    if work_directory is not None and _accepts_parameter(method, "work_directory"):
+        kwargs["work_directory"] = work_directory
     return method(source, target_language, **kwargs)
 
 
@@ -1514,26 +1538,11 @@ def _format_rank(subtitle_format: SubtitleFormat) -> int:
 
 
 def _extraction_cache_path(media: Path, candidate: SubtitleCandidate) -> Path:
-    try:
-        stat = media.stat()
-        media_version = f"{stat.st_size}:{stat.st_mtime_ns}"
-    except OSError:
-        media_version = "unknown"
-    key_material = "\0".join(
-        (
-            str(media),
-            media_version,
-            str(candidate.container_number or candidate.container_index),
-            candidate.codec or "",
-            candidate.subtitle_format.value,
-        )
-    ).encode("utf-8")
-    digest = hashlib.sha256(key_material).hexdigest()[:16]
-    return (
-        media.parent
-        / ".cueweaver"
-        / "extraction"
-        / f"{media.stem}.{digest}{candidate.subtitle_format.extension}"
+    return extraction_cache_path(
+        media,
+        track_identity=str(candidate.container_number or candidate.container_index),
+        codec=candidate.codec,
+        extension=candidate.subtitle_format.extension,
     )
 
 
@@ -1575,18 +1584,30 @@ def _get_intermediate_path(
     return None
 
 
-def _stage_translation(content: bytes, destination: Path) -> Path:
-    """Persist a complete translation outside the Media directory for retry."""
+def _stage_translation(
+    content: bytes,
+    destination: Path,
+    *,
+    work_directory: Path | None,
+) -> Path:
+    """Persist a complete translation in the Job workspace for retry."""
 
-    work_directory = destination.parent / ".cueweaver" / "publishing"
-    work_directory.mkdir(parents=True, exist_ok=True)
-    staged_path = work_directory / f"{destination.name}.pending"
+    publishing_directory = (
+        work_directory
+        or job_work_directory(
+            destination,
+            "unknown",
+            destination.name,
+        )
+    ) / "publishing"
+    publishing_directory.mkdir(parents=True, exist_ok=True)
+    staged_path = publishing_directory / f"{destination.name}.pending"
     temporary_path: Path | None = None
     try:
         file_descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{staged_path.name}.",
             suffix=".tmp",
-            dir=work_directory,
+            dir=publishing_directory,
         )
         temporary_path = Path(temporary_name)
         with os.fdopen(file_descriptor, "wb") as temporary_file:

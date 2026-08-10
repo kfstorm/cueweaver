@@ -139,11 +139,13 @@ class SwitchableMetadata:
         return self.glossary
 
 
-def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path):
+def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypatch):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
+    work_directory = tmp_path / "job-work"
     media.write_bytes(b"media")
     source.write_text(SRT, encoding="utf-8")
+    monkeypatch.setenv("CUEWEAVER_WORK_DIRECTORY", str(work_directory))
     server, thread = start_provider_server()
 
     try:
@@ -171,7 +173,7 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path):
             first_result.published_path.read_text(encoding="utf-8").count("你好") == 2
         )
         assert not (tmp_path / "Movie.en.subtrans").exists()
-        assert list((tmp_path / ".cueweaver").glob("*/*.subtrans"))
+        assert list(work_directory.rglob("*.subtrans"))
         assert len(ProviderFixtureHandler.requests) == 2
         second_prompt = "\n".join(
             message.get("content", "")

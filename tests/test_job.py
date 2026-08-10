@@ -207,6 +207,40 @@ def test_embedded_source_is_extracted_only_after_explicit_selection_and_cached(
     assert second.published_path.read_text(encoding="utf-8") == translated
 
 
+def test_job_work_files_do_not_pollute_the_media_directory(tmp_path, monkeypatch):
+    media_directory = tmp_path / "media"
+    cache_home = tmp_path / "cache"
+    work_directory = cache_home / "cueweaver" / "jobs"
+    media_directory.mkdir()
+    media = media_directory / "Movie.mkv"
+    media.write_bytes(b"container")
+    monkeypatch.delenv("CUEWEAVER_WORK_DIRECTORY", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    ffprobe_subtitle_streams(
+        monkeypatch,
+        [{"index": 1, "codec_name": "subrip", "tags": {"language": "eng"}}],
+    )
+    extractor = ExtractionFixture()
+    translated = SRT.replace("Hello", "你好")
+
+    result = JobRunner(
+        translator=ProviderContractFixture(translated),
+        extractor=extractor,
+    ).run(
+        media,
+        target_language="zh",
+        source=discover_subtitles(media)[0],
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert extractor.calls[0][2].is_relative_to(work_directory)
+    assert not (media_directory / ".cueweaver").exists()
+    assert sorted(path.name for path in media_directory.iterdir()) == [
+        "Movie.mkv",
+        "Movie.zh.srt",
+    ]
+
+
 def test_embedded_source_without_confirmation_does_not_extract(tmp_path, monkeypatch):
     media = tmp_path / "Movie.mkv"
     media.write_bytes(b"container")
