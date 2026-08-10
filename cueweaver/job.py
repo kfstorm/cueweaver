@@ -1415,14 +1415,8 @@ def _source_needs_confirmation(
     if first.io_cost != second.io_cost:
         return False
     priorities = _normalise_language_priority(language_priority)
-    if _language_rank(first.language, priorities) != _language_rank(
+    return _language_rank(first.language, priorities) == _language_rank(
         second.language, priorities
-    ):
-        return False
-    return not (
-        first.subtitle_format is not second.subtitle_format
-        and {first.subtitle_format, second.subtitle_format}
-        == {SubtitleFormat.SRT, SubtitleFormat.ASS}
     )
 
 

@@ -476,6 +476,32 @@ def test_ambiguous_sources_use_one_explicit_selection_callback(tmp_path):
     assert result.source.path == french
 
 
+def test_same_cost_sources_with_different_languages_require_selection(
+    tmp_path,
+):
+    media = tmp_path / "Movie.mkv"
+    english = tmp_path / "Movie.en.srt"
+    french = tmp_path / "Movie.fr.ass"
+    media.write_bytes(b"media")
+    english.write_text(SRT, encoding="utf-8")
+    french.write_text(ASS_TEMPLATE.format(text="Bonjour"), encoding="utf-8")
+    selections = []
+
+    def select(candidates):
+        selections.append(candidates)
+        return candidates[1]
+
+    result = JobRunner(
+        translator=ProviderContractFixture(ASS_TEMPLATE.format(text="你好")),
+        source_selector=select,
+    ).run(media, target_language="zh")
+
+    assert result.state is JobState.PUBLISHED
+    assert len(selections) == 1
+    assert result.source is not None
+    assert result.source.path == french
+
+
 def test_seconv_extractor_materializes_the_confirmed_embedded_source(
     tmp_path, monkeypatch
 ):
