@@ -799,6 +799,7 @@ class JobRunner:
         season_number: int | None = None,
         episode_number: int | None = None,
         refresh_metadata: bool = False,
+        no_metadata_fetch: bool = False,
         debug: bool = False,
         dynamic_terminology_enabled: bool | None = None,
     ) -> JobResult:
@@ -912,7 +913,7 @@ class JobRunner:
             self._raise_if_canceled()
             if not no_op:
                 self._validate_translation_configuration()
-            if not no_op and metadata_request is not None:
+            if not no_op and metadata_request is not None and not no_metadata_fetch:
                 record_state(JobState.METADATA)
                 metadata_context = self._gather_metadata(
                     metadata_request,

@@ -68,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore cached TMDb Context and fetch it again",
     )
+    parser.add_argument(
+        "--no-metadata-fetch",
+        action="store_true",
+        help="Skip automatic Context and Glossary fetching, including the cache",
+    )
     dynamic_terminology = parser.add_mutually_exclusive_group()
     dynamic_terminology.add_argument(
         "--dynamic-terminology",
@@ -154,6 +159,8 @@ def main(
             )
         if args.debug:
             run_options["debug"] = True
+        if args.no_metadata_fetch:
+            run_options["no_metadata_fetch"] = True
         result = active_runner.run(args.media, **run_options)
     finally:
         if handler_installed:

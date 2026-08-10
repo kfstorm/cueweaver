@@ -75,9 +75,12 @@ Successful Context is cached by the resolved series QID when available (with
 the provider series ID as a fallback) in the long-lived user cache at
 `$XDG_CACHE_HOME/cueweaver/metadata` or `~/.cache/cueweaver/metadata`; set
 `CUEWEAVER_METADATA_CACHE` to choose another location. The cache has no expiry
-or polling. Use `--refresh-metadata` for an explicit refresh. A missing key or
-provider failure is reported as a metadata degradation hint and the Job
-continues with baseline translation and an empty Context.
+or polling. Use `--refresh-metadata` for an explicit refresh. Use
+`--no-metadata-fetch` to skip the entire automatic metadata stage; this ignores
+both cached and provider-supplied Context and Glossary Terms while preserving
+User overrides. A missing key or provider failure is reported as a metadata
+degradation hint and the Job continues with baseline translation and an empty
+Context.
 For an already-published degraded Job, `JobRunner.retry_metadata` refreshes the
 metadata cache without invoking translation again or changing the published
 baseline artifact.
