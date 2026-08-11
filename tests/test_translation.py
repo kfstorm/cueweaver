@@ -352,6 +352,7 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
             "completion_tokens_details": {"reasoning_tokens": 3},
             "prompt_cache_hit_tokens": 4,
             "prompt_cache_miss_tokens": 6,
+            "prompt_cache_write_tokens": 99,
         },
         usage_only_terminal=True,
     )

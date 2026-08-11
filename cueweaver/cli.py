@@ -264,13 +264,14 @@ def _display_usage(
     if token_usage is None:
         return
     output = sys.stdout if file is None else file
-    common = {
+    usage_labels = {
         "prompt_tokens": "input",
         "output_tokens": "output",
         "reasoning_tokens": "reasoning",
     }
     fields = [
-        f"{label}={token_usage.get(key, 'unknown')}" for key, label in common.items()
+        f"{label}={token_usage.get(key, 'unknown')}"
+        for key, label in usage_labels.items()
     ]
     fields.extend(
         f"{key}={value}"

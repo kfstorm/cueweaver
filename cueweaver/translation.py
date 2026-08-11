@@ -788,6 +788,8 @@ def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
 
 def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) -> None:
     for key, value in usage.items():
+        if str(key).casefold() == "prompt_cache_write_tokens":
+            continue
         if (
             "cache" in str(key).casefold()
             and isinstance(value, (int, float))
