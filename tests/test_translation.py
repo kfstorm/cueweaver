@@ -394,6 +394,9 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
             "prompt_cache_miss_tokens": 6,
         }
         assert "prompt_cache_write_tokens" not in completed["token_usage"]
+        assert (
+            "prompt_tokens_details.cache_write_tokens" not in completed["token_usage"]
+        )
         assert "response_chunk" not in [event["event"] for event in events]
         assert events[-1]["token_usage"] == result.token_usage
     finally:
@@ -437,6 +440,7 @@ def test_debug_trace_preserves_non_streaming_output_usage(tmp_path):
             "total_tokens": 36,
             "reasoning_tokens": 4,
             "prompt_tokens_details.cached_tokens": 10,
+            "prompt_tokens_details.cache_write_tokens": 198,
         }
         assert result.trace_path is not None
         events = [
@@ -449,7 +453,7 @@ def test_debug_trace_preserves_non_streaming_output_usage(tmp_path):
         assert len(completed) == 2
         assert all(event["token_usage"]["output_tokens"] == 7 for event in completed)
         assert all(
-            "cache_write_tokens" not in json.dumps(event["token_usage"])
+            event["token_usage"]["prompt_tokens_details.cache_write_tokens"] == 99
             for event in completed
         )
     finally:

@@ -221,7 +221,9 @@ class PySubtransTranslator:
         _disable_thinking(engine)
         trace_session: _TraceSession | None = None
         if trace_writer is not None:
-            trace_session = _install_trace_hooks(engine, trace_writer)
+            trace_session = _install_trace_hooks(
+                engine, trace_writer, provider=self.provider
+            )
 
         with self._state_lock:
             self._active_engine = engine
@@ -329,8 +331,9 @@ def _disable_thinking(engine: SubtitleTranslator) -> None:
 
 
 class _TraceSession:
-    def __init__(self, writer: TraceWriter) -> None:
+    def __init__(self, writer: TraceWriter, provider: str) -> None:
         self.writer = writer
+        self.provider = provider
         self._operation_number = 0
         self._request_number = 0
         self._operations: dict[Any, dict[str, Any]] = {}
@@ -418,12 +421,12 @@ class _TraceSession:
             request_id=request_data["request_id"],
             attempt=request_data["attempt"],
             response=response_data,
-            token_usage=_token_usage(response_data),
+            token_usage=_token_usage(response_data, provider=self.provider),
             duration_ms=round(
                 (time.monotonic() - request_data["started_at"]) * 1000, 3
             ),
         )
-        self._add_usage(_token_usage(response_data))
+        self._add_usage(_token_usage(response_data, provider=self.provider))
 
     def fail_request(self, request: Any, error: BaseException) -> None:
         request_data = self._requests.get(id(request))
@@ -604,11 +607,11 @@ class _TraceSession:
 
 
 def _install_trace_hooks(
-    engine: SubtitleTranslator, writer: TraceWriter
+    engine: SubtitleTranslator, writer: TraceWriter, *, provider: str
 ) -> _TraceSession:
     """Observe PySubtrans 1.6.0's private request seams without changing defaults."""
 
-    trace = _TraceSession(writer)
+    trace = _TraceSession(writer, provider)
     client = engine.client
 
     original_translate_batch = engine.TranslateBatch
@@ -682,7 +685,7 @@ def _install_trace_hooks(
 
     def process_api_response(content: Mapping[str, Any], response: Any) -> Any:
         processed = original_process_api_response(content, response)
-        _merge_provider_usage(processed, content)
+        _merge_provider_usage(processed, content, provider=provider)
         return processed
 
     client._process_api_response = process_api_response
@@ -725,7 +728,7 @@ def _install_trace_hooks(
         accumulated_response: dict[str, Any],
     ) -> None:
         original_chunk(request, chunk, accumulated_response)
-        _merge_provider_usage(accumulated_response, chunk)
+        _merge_provider_usage(accumulated_response, chunk, provider=provider)
 
     client._process_streaming_chunk = process_chunk
 
@@ -740,7 +743,7 @@ def _install_trace_hooks(
     return trace
 
 
-def _token_usage(response: object) -> dict[str, object]:
+def _token_usage(response: object, *, provider: str | None = None) -> dict[str, object]:
     if not isinstance(response, Mapping):
         response = {}
     usage = response.get("usage")
@@ -754,7 +757,7 @@ def _token_usage(response: object) -> dict[str, object]:
             "total_tokens": usage.get("total_tokens"),
             "reasoning_tokens": _reasoning_tokens(usage),
         }
-        _copy_cache_usage(token_usage, usage)
+        _copy_cache_usage(token_usage, usage, provider=provider)
         return token_usage
     token_usage = {
         "prompt_tokens": response.get("prompt_tokens"),
@@ -762,17 +765,20 @@ def _token_usage(response: object) -> dict[str, object]:
         "total_tokens": response.get("total_tokens"),
         "reasoning_tokens": response.get("reasoning_tokens"),
     }
-    _copy_cache_usage(token_usage, response)
+    _copy_cache_usage(token_usage, response, provider=provider)
     return token_usage
 
 
 def _merge_provider_usage(
-    response: dict[str, Any], provider_response: Mapping[str, Any]
+    response: dict[str, Any],
+    provider_response: Mapping[str, Any],
+    *,
+    provider: str,
 ) -> None:
     usage = provider_response.get("usage")
     if not isinstance(usage, Mapping):
         return
-    response.update(_token_usage(provider_response))
+    response.update(_token_usage(provider_response, provider=provider))
 
 
 def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
@@ -786,9 +792,11 @@ def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
     return None
 
 
-def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) -> None:
+def _copy_cache_usage(
+    token_usage: dict[str, object], usage: Mapping[str, Any], *, provider: str | None
+) -> None:
     for key, value in usage.items():
-        if _is_cache_write_field(str(key)):
+        if provider == "DeepSeek" and _is_cache_write_field(str(key)):
             continue
         if (
             "cache" in str(key).casefold()
@@ -801,7 +809,7 @@ def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) 
         if not isinstance(details, Mapping):
             continue
         for key, value in details.items():
-            if _is_cache_write_field(str(key)):
+            if provider == "DeepSeek" and _is_cache_write_field(str(key)):
                 continue
             if (
                 "cache" in str(key).casefold()
