@@ -277,7 +277,7 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         thread.join(timeout=5)
 
 
-def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
+def test_debug_trace_records_default_deepseek_streaming_response(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
@@ -305,12 +305,11 @@ def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
             json.loads(line)
             for line in result.trace_path.read_text(encoding="utf-8").splitlines()
         ]
-        chunks = [event for event in events if event["event"] == "response_chunk"]
         completed = [
             event for event in events if event["event"] == "response_completed"
         ]
-        assert chunks
         assert completed
+        assert "response_chunk" not in [event["event"] for event in events]
         assert all(
             event["request_body"]["stream"] is True
             for event in events
@@ -322,7 +321,11 @@ def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
             "total_tokens": 5,
             "reasoning_tokens": None,
         }
-        assert completed[-1]["response"]["text"]
+        response_text = completed[-1]["response"]["text"]
+        assert response_text.count("Translation>\n你好") == 3
+        assert response_text.endswith(
+            "<summary>fixture summary 2</summary>\n<scene>fixture scene 2</scene>"
+        )
         assert "fixture-secret" not in result.trace_path.read_text(encoding="utf-8")
     finally:
         server.shutdown()

@@ -439,19 +439,6 @@ class _TraceSession:
             ),
         )
 
-    def record_chunk(self, request: Any, chunk: Mapping[str, Any]) -> None:
-        request_data = self._requests.get(id(request))
-        if request_data is None:
-            return
-        self.writer.write(
-            "response_chunk",
-            operation_id=request_data["operation_id"],
-            request_id=request_data["request_id"],
-            attempt=request_data["attempt"],
-            chunk=dict(chunk),
-            token_usage=_token_usage(chunk),
-        )
-
     def record_retry(self, message: str) -> None:
         request = self._current_request
         if request is None:
@@ -690,18 +677,6 @@ def _install_trace_hooks(
         return response
 
     client._handle_streaming_request = handle_streaming
-
-    original_chunk = client._process_streaming_chunk
-
-    def process_chunk(
-        request: Any,
-        chunk: Mapping[str, Any],
-        accumulated_response: dict[str, Any],
-    ) -> None:
-        trace.record_chunk(request, chunk)
-        original_chunk(request, chunk, accumulated_response)
-
-    client._process_streaming_chunk = process_chunk
 
     original_warning = client._emit_warning
 

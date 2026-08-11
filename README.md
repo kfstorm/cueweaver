@@ -27,12 +27,12 @@ traced.
 
 Trace files use schema version 1. Each line has `schema_version`, `event`,
 `timestamp`, and `run_id`. Events are `run_started`, `attempt_started`,
-`response_chunk`, `response_completed`, `attempt_failed`,
-`retry_scheduled`, and `run_finished`. Request attempts can be correlated
+`response_completed`, `attempt_failed`, `retry_scheduled`, and `run_finished`.
+Request attempts can be correlated
 with `operation_id`, `request_id`, `batch_number`, `scene`, `attempt`, and
 `attempt_kind`; logical retries and batch splits include a parent operation.
-Request bodies, prompts, parsed responses, streaming chunks, final assembled
-responses, token usage, and structured errors may be recorded. API keys,
+Request bodies, prompts, parsed responses, final assembled responses, token
+usage, and structured errors may be recorded. API keys,
 authorization headers, settings, and other transport credentials are
 excluded. The trace is not a redacted subtitle copy: subtitle content,
 Context, Glossary, and provider response text may be written to it. Protect
