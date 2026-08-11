@@ -285,8 +285,9 @@ class MetadataContext:
 
         if not sections:
             return translation_context_instructions()
-        return f"{translation_context_instructions()}\n\n---\n\n" + "\n\n".join(
-            sections
+        return (
+            f"{translation_context_instructions(metadata_available=True)}\n\n---\n\n"
+            + "\n\n".join(sections)
         )
 
     def _append_localized_sections(

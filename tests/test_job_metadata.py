@@ -35,15 +35,19 @@ The following metadata is supplemental context for understanding the series and 
 Use the following priority when resolving ambiguity:
 
 1. Current source subtitle
-2. Immediate subtitle/dialogue context
-3. Source-language episode metadata
+2. Immediate subtitle/dialogue context"""
+
+TRANSLATION_METADATA_PRIORITY = """3. Source-language episode metadata
 4. Source-language series metadata
 5. Target-language episode metadata
 6. Target-language series metadata"""
 
 
 def expected_context(*sections: str) -> str:
-    return f"{TRANSLATION_CONTEXT_INSTRUCTIONS}\n\n---\n\n" + "\n\n".join(sections)
+    instructions = (
+        f"{TRANSLATION_CONTEXT_INSTRUCTIONS}\n{TRANSLATION_METADATA_PRIORITY}"
+    )
+    return f"{instructions}\n\n---\n\n" + "\n\n".join(sections)
 
 
 class MetadataFixture:
@@ -310,6 +314,7 @@ def test_no_metadata_fetch_keeps_translation_context_instructions(tmp_path):
     assert result.state is JobState.PUBLISHED
     assert result.context == TRANSLATION_CONTEXT_INSTRUCTIONS
     assert translator.contexts == [TRANSLATION_CONTEXT_INSTRUCTIONS]
+    assert "3. Source-language episode metadata" not in result.context
     assert metadata.series_calls == []
     assert metadata.episode_calls == []
     assert result.metadata_degradation is None

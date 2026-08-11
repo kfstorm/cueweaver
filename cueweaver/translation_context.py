@@ -17,14 +17,17 @@ The following metadata is supplemental context for understanding the series and 
 Use the following priority when resolving ambiguity:
 
 1. Current source subtitle
-2. Immediate subtitle/dialogue context
-3. Source-language episode metadata
+2. Immediate subtitle/dialogue context"""
+
+_METADATA_PRIORITY_INSTRUCTIONS = """3. Source-language episode metadata
 4. Source-language series metadata
 5. Target-language episode metadata
 6. Target-language series metadata"""
 
 
-def translation_context_instructions() -> str:
-    """Return fixed translation guidance independent of fetched metadata."""
+def translation_context_instructions(*, metadata_available: bool = False) -> str:
+    """Return guidance, adding metadata priorities only when metadata exists."""
 
-    return _TRANSLATION_CONTEXT_INSTRUCTIONS
+    if not metadata_available:
+        return _TRANSLATION_CONTEXT_INSTRUCTIONS
+    return f"{_TRANSLATION_CONTEXT_INSTRUCTIONS}\n{_METADATA_PRIORITY_INSTRUCTIONS}"
