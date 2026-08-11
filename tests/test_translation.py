@@ -508,12 +508,14 @@ def test_debug_trace_preserves_openai_compatible_cache_usage(tmp_path):
 
 
 def test_openai_compatible_translation_without_api_key_omits_authorization(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
     source.write_text(SRT, encoding="utf-8")
+    monkeypatch.delenv("CUEWEAVER_TRANSLATION_API_KEY", raising=False)
+    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
     server, thread = start_provider_server()
 
     try:
