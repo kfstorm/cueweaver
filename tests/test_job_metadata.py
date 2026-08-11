@@ -286,6 +286,32 @@ def test_metadata_context_is_gathered_before_translation(tmp_path):
         )
     ]
     assert result.context == translator.contexts[0]
+
+
+def test_no_metadata_fetch_keeps_translation_context_instructions(tmp_path):
+    media, source = create_metadata_fixture(tmp_path)
+    metadata = MetadataFixture()
+    translator = ContextTranslator()
+
+    result = JobRunner(
+        translator=translator,
+        metadata_provider=metadata,
+        metadata_cache=MetadataCache(tmp_path / "metadata-cache"),
+    ).run(
+        media,
+        target_language="zh",
+        source=source,
+        series_id="1399",
+        season_number=1,
+        episode_number=2,
+        no_metadata_fetch=True,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.context == TRANSLATION_CONTEXT_INSTRUCTIONS
+    assert translator.contexts == [TRANSLATION_CONTEXT_INSTRUCTIONS]
+    assert metadata.series_calls == []
+    assert metadata.episode_calls == []
     assert result.metadata_degradation is None
 
 
@@ -690,8 +716,8 @@ def test_missing_tmdb_credentials_degrade_to_baseline_translation(
     assert result.state is JobState.PUBLISHED
     assert result.metadata_degradation is not None
     assert "TMDb API key is missing" in result.metadata_degradation
-    assert result.context == ""
-    assert translator.contexts == [""]
+    assert result.context == TRANSLATION_CONTEXT_INSTRUCTIONS
+    assert translator.contexts == [TRANSLATION_CONTEXT_INSTRUCTIONS]
     assert result.published_path is not None
     assert result.published_path.read_text(encoding="utf-8") == TRANSLATED
 
@@ -738,7 +764,7 @@ def test_metadata_provider_failure_is_visible_without_blocking_translation(tmp_p
 
     assert result.state is JobState.PUBLISHED
     assert result.metadata_degradation == "Metadata degraded: TMDb is unavailable"
-    assert translator.contexts == [""]
+    assert translator.contexts == [TRANSLATION_CONTEXT_INSTRUCTIONS]
 
 
 def test_metadata_provider_hiccup_retries_before_translation(tmp_path):
@@ -801,7 +827,7 @@ def test_metadata_retry_refreshes_context_without_repeating_translation(tmp_path
         "TMDb series overview:\nThe complete series overview.",
         "TMDb episode overview (S01E02):\nThe complete episode overview.",
     )
-    assert translator.contexts == [""]
+    assert translator.contexts == [TRANSLATION_CONTEXT_INSTRUCTIONS]
     assert retried.published_path is not None
     assert retried.published_path.read_text(encoding="utf-8") == TRANSLATED
 

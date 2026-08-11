@@ -13,6 +13,7 @@ from cueweaver.metadata import (
     Term,
     TermPriority,
     WikidataGlossaryProvider,
+    translation_context_instructions,
 )
 from cueweaver.overrides import UserOverrideError
 from tests.test_helpers import write_user_override
@@ -537,7 +538,7 @@ def test_no_metadata_fetch_ignores_cache_and_provider_but_keeps_user_override(
         JobState.PUBLISHING,
         JobState.PUBLISHED,
     )
-    assert result.context == ""
+    assert result.context == translation_context_instructions()
     assert result.glossary.is_empty
     assert result.metadata_degradation is None
     assert metadata.glossary_calls == 0

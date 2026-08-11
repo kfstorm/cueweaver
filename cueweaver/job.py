@@ -29,6 +29,7 @@ from .metadata import (
     SeriesWikidataIdentifierProvider,
     TMDbMetadataProvider,
     WikidataGlossaryProvider,
+    translation_context_instructions,
 )
 from .overrides import UserOverrideError, UserOverrideStore
 from .publishing import publish_atomically
@@ -819,6 +820,7 @@ class JobRunner:
         metadata_context: MetadataContext | None = None
         metadata_request: MetadataRequest | None = None
         user_overrides: dict[str, str] = {}
+        translation_context = translation_context_instructions()
 
         def record_state(state: JobState) -> None:
             lifecycle.append(state)
@@ -921,6 +923,11 @@ class JobRunner:
                     refresh=refresh_metadata,
                 )
                 self._raise_if_canceled()
+            translation_context = (
+                metadata_context.text
+                if metadata_context is not None
+                else translation_context_instructions()
+            )
             user_overrides = self._load_user_overrides(
                 metadata_request.series_id if metadata_request else media_path.stem
             )
@@ -931,7 +938,7 @@ class JobRunner:
                 delivered_content = self._translate(
                     source_path,
                     configured_target,
-                    context=(metadata_context.text if metadata_context else ""),
+                    context=translation_context,
                     glossary=(
                         metadata_context.glossary
                         if metadata_context is not None
@@ -979,7 +986,7 @@ class JobRunner:
                 published_path=published_path,
                 no_op=no_op,
                 dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
-                context=metadata_context.text if metadata_context else "",
+                context=translation_context,
                 metadata_degradation=(
                     metadata_context.degradation if metadata_context else None
                 ),
@@ -1026,7 +1033,7 @@ class JobRunner:
                 error=result_error,
                 intermediate_path=self._intermediate_path,
                 translated_content=self._translated_content,
-                context=metadata_context.text if metadata_context else "",
+                context=translation_context,
                 metadata_degradation=(
                     metadata_context.degradation if metadata_context else None
                 ),

@@ -283,8 +283,10 @@ class MetadataContext:
                 sections.append(f"{episode_label}:\n{self.episode_overview}")
 
         if not sections:
-            return ""
-        return f"{_TRANSLATION_CONTEXT_INSTRUCTIONS}\n\n---\n\n" + "\n\n".join(sections)
+            return translation_context_instructions()
+        return f"{translation_context_instructions()}\n\n---\n\n" + "\n\n".join(
+            sections
+        )
 
     def _append_localized_sections(
         self,
@@ -333,6 +335,12 @@ Use the following priority when resolving ambiguity:
 4. Source-language series metadata
 5. Target-language episode metadata
 6. Target-language series metadata"""
+
+
+def translation_context_instructions() -> str:
+    """Return the fixed translation guidance independent of fetched metadata."""
+
+    return _TRANSLATION_CONTEXT_INSTRUCTIONS
 
 
 class MetadataProvider(Protocol):
