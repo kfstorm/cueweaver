@@ -353,6 +353,7 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
             "prompt_cache_hit_tokens": 4,
             "prompt_cache_miss_tokens": 6,
             "prompt_cache_write_tokens": 99,
+            "prompt_tokens_details": {"cache_write_tokens": 99},
         },
         usage_only_terminal=True,
     )
@@ -395,6 +396,62 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
         assert "prompt_cache_write_tokens" not in completed["token_usage"]
         assert "response_chunk" not in [event["event"] for event in events]
         assert events[-1]["token_usage"] == result.token_usage
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_debug_trace_preserves_non_streaming_output_usage(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server(
+        usage={
+            "prompt_tokens": 11,
+            "output_tokens": 7,
+            "total_tokens": 18,
+            "reasoning_tokens": 2,
+            "prompt_tokens_details": {
+                "cached_tokens": 5,
+                "cache_write_tokens": 99,
+            },
+        }
+    )
+
+    try:
+        result = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            )
+        ).run(media, target_language="zh", source=source, debug=True)
+
+        assert result.state is JobState.PUBLISHED
+        assert result.token_usage == {
+            "prompt_tokens": 22,
+            "output_tokens": 14,
+            "total_tokens": 36,
+            "reasoning_tokens": 4,
+            "prompt_tokens_details.cached_tokens": 10,
+        }
+        assert result.trace_path is not None
+        events = [
+            json.loads(line)
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        ]
+        completed = [
+            event for event in events if event["event"] == "response_completed"
+        ]
+        assert len(completed) == 2
+        assert all(event["token_usage"]["output_tokens"] == 7 for event in completed)
+        assert all(
+            "cache_write_tokens" not in json.dumps(event["token_usage"])
+            for event in completed
+        )
     finally:
         server.shutdown()
         server.server_close()

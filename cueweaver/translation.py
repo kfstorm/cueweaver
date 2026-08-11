@@ -788,7 +788,7 @@ def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
 
 def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) -> None:
     for key, value in usage.items():
-        if str(key).casefold() == "prompt_cache_write_tokens":
+        if _is_cache_write_field(str(key)):
             continue
         if (
             "cache" in str(key).casefold()
@@ -801,12 +801,19 @@ def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) 
         if not isinstance(details, Mapping):
             continue
         for key, value in details.items():
+            if _is_cache_write_field(str(key)):
+                continue
             if (
                 "cache" in str(key).casefold()
                 and isinstance(value, (int, float))
                 and not isinstance(value, bool)
             ):
                 token_usage[f"{details_key}.{key}"] = value
+
+
+def _is_cache_write_field(key: str) -> bool:
+    normalized = key.casefold()
+    return "cache" in normalized and ("write" in normalized or "creation" in normalized)
 
 
 def _retry_delay(message: str) -> float | None:
