@@ -27,16 +27,30 @@ traced.
 
 Trace files use schema version 1. Each line has `schema_version`, `event`,
 `timestamp`, and `run_id`. Events are `run_started`, `attempt_started`,
-`response_completed`, `attempt_failed`, `retry_scheduled`, and `run_finished`.
-Request attempts can be correlated
+`response_completed`, `attempt_failed`,
+`retry_scheduled`, and `run_finished`. Request attempts can be correlated
 with `operation_id`, `request_id`, `batch_number`, `scene`, `attempt`, and
 `attempt_kind`; logical retries and batch splits include a parent operation.
-Request bodies, prompts, parsed responses, final assembled responses, token
-usage, and structured errors may be recorded. API keys,
+Request bodies, prompts, parsed responses, complete assembled streaming
+responses, token usage, and structured errors may be recorded. Streaming
+usage-only terminal chunks are folded into the complete response; individual
+chunks are not recorded. API keys,
 authorization headers, settings, and other transport credentials are
 excluded. The trace is not a redacted subtitle copy: subtitle content,
 Context, Glossary, and provider response text may be written to it. Protect
 trace files with the same care as the source subtitles.
+
+CLI summaries report aggregate usage from completed provider attempts whenever
+the provider reports token usage; this does not depend on `--debug`. The
+`--debug` flag additionally retains the request trace described above. Input
+and output counts use the provider's
+`prompt_tokens` and `completion_tokens`/`output_tokens` values; reasoning
+tokens are a subset of output and are never added to output again. Retries
+are counted once per completed API attempt, while streaming chunks are never
+counted separately. Provider-specific cache fields, such as DeepSeek's
+`prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`, are preserved only
+when returned by the provider. Missing fields, including cache write counts,
+are not inferred.
 
 The Target language is required and has no product default. It can also be
 configured for a shell session with `CUEWEAVER_TARGET_LANGUAGE`. A subtitle
