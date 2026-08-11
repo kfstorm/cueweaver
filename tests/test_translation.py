@@ -339,6 +339,43 @@ def test_debug_trace_records_default_deepseek_streaming_response(tmp_path):
         thread.join(timeout=5)
 
 
+def test_non_debug_translation_preserves_usage_without_creating_trace(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server(
+        usage={
+            "prompt_tokens": 2,
+            "completion_tokens": 3,
+            "total_tokens": 5,
+        }
+    )
+
+    try:
+        result = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            )
+        ).run(media, target_language="zh", source=source)
+
+        assert result.state is JobState.PUBLISHED
+        assert result.token_usage == {
+            "prompt_tokens": 4,
+            "output_tokens": 6,
+            "total_tokens": 10,
+            "reasoning_tokens": None,
+        }
+        assert result.trace_path is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"

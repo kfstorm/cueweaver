@@ -219,11 +219,9 @@ class PySubtransTranslator:
             terminology_map=terminology_map,
         )
         _disable_thinking(engine)
-        trace_session: _TraceSession | None = None
-        if trace_writer is not None:
-            trace_session = _install_trace_hooks(
-                engine, trace_writer, provider=self.provider
-            )
+        trace_session = _install_trace_hooks(
+            engine, trace_writer, provider=self.provider
+        )
 
         with self._state_lock:
             self._active_engine = engine
@@ -241,12 +239,10 @@ class PySubtransTranslator:
                 update.terminology_map = dict(engine.terminology_map)
 
         def record_batch_errors(_sender: Any, batch: Any) -> None:
-            if trace_session is not None:
-                trace_session.record_batch_errors(batch)
+            trace_session.record_batch_errors(batch)
 
         engine.events.batch_translated.connect(save_checkpoint, weak=False)
-        if trace_session is not None:
-            engine.events.batch_translated.connect(record_batch_errors, weak=False)
+        engine.events.batch_translated.connect(record_batch_errors, weak=False)
         if static_terminology:
             engine.events.terminology_updated.connect(
                 preserve_static_terminology,
@@ -274,14 +270,12 @@ class PySubtransTranslator:
                 )
             raise
         finally:
-            if trace_session is not None:
-                self.token_usage = trace_session.aggregate_usage()
+            self.token_usage = trace_session.aggregate_usage()
             try:
                 project.SaveProjectFile()
             finally:
                 engine.events.batch_translated.disconnect(save_checkpoint)
-                if trace_session is not None:
-                    engine.events.batch_translated.disconnect(record_batch_errors)
+                engine.events.batch_translated.disconnect(record_batch_errors)
                 if static_terminology:
                     engine.events.terminology_updated.disconnect(
                         preserve_static_terminology
@@ -331,7 +325,7 @@ def _disable_thinking(engine: SubtitleTranslator) -> None:
 
 
 class _TraceSession:
-    def __init__(self, writer: TraceWriter, provider: str) -> None:
+    def __init__(self, writer: TraceWriter | None, provider: str) -> None:
         self.writer = writer
         self.provider = provider
         self._operation_number = 0
@@ -381,7 +375,7 @@ class _TraceSession:
         }
         operation["attempt"] += 1
         self._requests[id(request)] = request_data
-        self.writer.write(
+        self._write(
             "attempt_started",
             operation_id=operation["operation_id"],
             request_id=request_id,
@@ -400,7 +394,7 @@ class _TraceSession:
         if request_data is None:
             return
         if response is None:
-            self.writer.write(
+            self._write(
                 "attempt_failed",
                 operation_id=request_data["operation_id"],
                 request_id=request_data["request_id"],
@@ -415,7 +409,7 @@ class _TraceSession:
             )
             return
         response_data = dict(response) if isinstance(response, Mapping) else response
-        self.writer.write(
+        self._write(
             "response_completed",
             operation_id=request_data["operation_id"],
             request_id=request_data["request_id"],
@@ -433,7 +427,7 @@ class _TraceSession:
         if request_data is None:
             return
         response = getattr(error, "response", None)
-        self.writer.write(
+        self._write(
             "attempt_failed",
             operation_id=request_data["operation_id"],
             request_id=request_data["request_id"],
@@ -472,6 +466,10 @@ class _TraceSession:
                 else value
             )
 
+    def _write(self, event: str, **payload: Any) -> None:
+        if self.writer is not None:
+            self.writer.write(event, **payload)
+
     def record_retry(self, message: str) -> None:
         request = self._current_request
         if request is None:
@@ -483,7 +481,7 @@ class _TraceSession:
         operation = self._operations.get(request.prompt)
         if operation is not None:
             operation["kind"] = "transport_retry"
-        self.writer.write(
+        self._write(
             "retry_scheduled",
             operation_id=request_data["operation_id"],
             failed_request_id=request_data["request_id"],
@@ -557,7 +555,7 @@ class _TraceSession:
     ) -> None:
         if operation_id is None:
             return
-        self.writer.write(
+        self._write(
             "retry_scheduled",
             operation_id=operation_id,
             attempt_kind=attempt_kind,
@@ -585,7 +583,7 @@ class _TraceSession:
             if request.get("operation_id") == operation["operation_id"]
         ]
         request_data = matching_requests[-1] if matching_requests else {}
-        self.writer.write(
+        self._write(
             "attempt_failed",
             operation_id=operation["operation_id"],
             request_id=request_data.get("request_id"),
@@ -607,7 +605,7 @@ class _TraceSession:
 
 
 def _install_trace_hooks(
-    engine: SubtitleTranslator, writer: TraceWriter, *, provider: str
+    engine: SubtitleTranslator, writer: TraceWriter | None, *, provider: str
 ) -> _TraceSession:
     """Observe PySubtrans 1.6.0's private request seams without changing defaults."""
 

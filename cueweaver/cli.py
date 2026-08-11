@@ -176,8 +176,7 @@ def main(
             print(f"  intermediate: {result.intermediate_path}", file=sys.stderr)
         if result.trace_path is not None:
             print(f"  trace: {result.trace_path}", file=sys.stderr)
-        if args.debug:
-            _display_usage(result.token_usage, file=sys.stderr)
+        _display_usage(result.token_usage, file=sys.stderr)
         print("  published: no", file=sys.stderr)
         return 1
     if result.state is JobState.FAILED:
@@ -188,8 +187,7 @@ def main(
         )
         if result.trace_path is not None:
             print(f"  trace: {result.trace_path}", file=sys.stderr)
-        if args.debug:
-            _display_usage(result.token_usage, file=sys.stderr)
+        _display_usage(result.token_usage, file=sys.stderr)
         return 1
 
     if result.metadata_degradation is not None:
@@ -208,8 +206,7 @@ def main(
     print(f"  no-op: {'yes' if result.no_op else 'no'}")
     if result.trace_path is not None:
         print(f"  trace: {result.trace_path}")
-    if args.debug:
-        _display_usage(result.token_usage)
+    _display_usage(result.token_usage)
     return 0
 
 

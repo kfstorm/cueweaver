@@ -40,8 +40,10 @@ excluded. The trace is not a redacted subtitle copy: subtitle content,
 Context, Glossary, and provider response text may be written to it. Protect
 trace files with the same care as the source subtitles.
 
-With `--debug`, the successful CLI summary also reports aggregate usage from
-completed provider attempts. Input and output counts use the provider's
+CLI summaries report aggregate usage from completed provider attempts whenever
+the provider reports token usage; this does not depend on `--debug`. The
+`--debug` flag additionally retains the request trace described above. Input
+and output counts use the provider's
 `prompt_tokens` and `completion_tokens`/`output_tokens` values; reasoning
 tokens are a subset of output and are never added to output again. Retries
 are counted once per completed API attempt, while streaming chunks are never

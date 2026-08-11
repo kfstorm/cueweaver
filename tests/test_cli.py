@@ -75,6 +75,41 @@ def test_terminal_flow_passes_debug_and_reports_trace_path(tmp_path, capsys):
     ) in captured.out
 
 
+def test_terminal_flow_reports_usage_without_debug(tmp_path, capsys):
+    media = tmp_path / "Movie.mkv"
+    candidate = SubtitleCandidate(
+        path=tmp_path / "Movie.en.srt",
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+    )
+
+    class UsageRunner:
+        def run(self, media, *, target_language, source, source_language):
+            return JobResult(
+                state=JobState.PUBLISHED,
+                lifecycle=(JobState.DISCOVERED, JobState.PUBLISHED),
+                media=media,
+                target_language=target_language,
+                source=candidate,
+                published_path=tmp_path / "Movie.zh.srt",
+                no_op=False,
+                token_usage={
+                    "prompt_tokens": 10,
+                    "output_tokens": 8,
+                    "reasoning_tokens": 3,
+                },
+            )
+
+    exit_code = main(
+        [str(media), "--target-language", "zh"],
+        runner=UsageRunner(),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "  usage: input=10 output=8 reasoning=3" in captured.out
+
+
 def test_terminal_flow_reports_missing_target_language(tmp_path, monkeypatch, capsys):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
