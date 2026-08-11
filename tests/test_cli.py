@@ -390,7 +390,8 @@ def test_terminal_flow_prompts_for_ambiguous_sources_and_marks_bitmap_disabled(
     media.write_bytes(b"container")
     english.write_text(SRT, encoding="utf-8")
     french.write_text(SRT, encoding="utf-8")
-    monkeypatch.setenv("CUEWEAVER_TRANSLATION_API_KEY", "fixture-key")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_SERVER_ADDRESS", "http://fixture")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_ENDPOINT", "/v1/chat/completions")
     monkeypatch.setattr(
         "cueweaver.job.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -429,7 +430,8 @@ def test_terminal_flow_reports_explicit_embedded_selection_before_extraction(
 ):
     media = tmp_path / "Movie.mkv"
     media.write_bytes(b"container")
-    monkeypatch.setenv("CUEWEAVER_TRANSLATION_API_KEY", "fixture-key")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_SERVER_ADDRESS", "http://fixture")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_ENDPOINT", "/v1/chat/completions")
     monkeypatch.setattr(
         "cueweaver.job.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -518,7 +520,8 @@ def test_terminal_flow_reports_publishing_failure_progress(
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
     source.write_text(SRT, encoding="utf-8")
-    monkeypatch.setenv("CUEWEAVER_TRANSLATION_API_KEY", "fixture-key")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_SERVER_ADDRESS", "http://fixture")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_ENDPOINT", "/v1/chat/completions")
     monkeypatch.setattr(
         "cueweaver.translation.PySubtransTranslator.translate",
         lambda _self, _source, _target_language: SRT.replace("Hello", "你好"),
