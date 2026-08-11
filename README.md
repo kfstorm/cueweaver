@@ -121,6 +121,16 @@ the static Glossary and User override seeds, which can improve consistency and
 DeepSeek prefix-cache reuse, but uncovered terms will not be learned between
 batches. The two modes use separate Job checkpoints.
 
+Subtitle terminology filtering is enabled by default. Before translation,
+CueWeaver passes PySubtrans only the Glossary and User override Terms whose
+source phrases occur lexically in the complete Source subtitle document. This
+applies to both episode and film Sources; filtering is not performed per
+translation batch. Use `--no-subtitle-terminology-filter` or set
+`CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER=false` to pass the full terminology map
+instead. The paired `--subtitle-terminology-filter` option explicitly enables
+filtering, and an explicit CLI value overrides the environment variable. The
+environment variable accepts `true`/`false`, `yes`/`no`, and `1`/`0`.
+
 User overrides are loaded from one JSON file per scope. By default, files live
 under `$XDG_CONFIG_HOME/cueweaver/overrides` or `~/.config/cueweaver/overrides`;
 set `CUEWEAVER_USER_OVERRIDE_DIRECTORY` or pass
