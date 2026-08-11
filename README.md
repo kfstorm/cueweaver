@@ -79,8 +79,8 @@ or polling. Use `--refresh-metadata` for an explicit refresh. Use
 `--no-metadata-fetch` to skip the entire automatic metadata stage; this ignores
 both cached and provider-supplied Context and Glossary Terms while preserving
 User overrides. A missing key or provider failure is reported as a metadata
-degradation hint and the Job continues with baseline translation and an empty
-Context.
+degradation hint and the Job continues with baseline translation and no fetched
+metadata.
 For an already-published degraded Job, `JobRunner.retry_metadata` refreshes the
 metadata cache without invoking translation again or changing the published
 baseline artifact.
