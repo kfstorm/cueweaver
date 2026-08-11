@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import time
@@ -21,8 +22,11 @@ from PySubtrans import (
 )
 
 from .metadata import Glossary
+from .terminology import filter_terminology_for_text
 from .trace import TraceWriter
 from .workspaces import default_work_root
+
+logger = logging.getLogger(__name__)
 
 
 class TranslationProviderConfigurationError(ValueError):
@@ -156,7 +160,7 @@ class PySubtransTranslator:
 
         self.intermediate_path = None
         source = Path(source).expanduser().resolve()
-        static_terminology = _build_static_terminology(glossary, user_overrides)
+        source_text = source.read_text(encoding="utf-8-sig")
         working_source = _prepare_working_source(
             source,
             target_language,
@@ -209,11 +213,33 @@ class PySubtransTranslator:
             glossary,
             user_overrides,
         )
+        master_terminology_count = len(terminology_map)
+        filtered_terminology = filter_terminology_for_text(
+            terminology_map,
+            source_text,
+        )
+        static_terminology = {
+            source_key: target
+            for source_key, target in static_terminology.items()
+            if filtered_terminology.terminology.get(source_key) == target
+        }
+        logger.info("Master terminology entries: %d", master_terminology_count)
+        logger.info(
+            "Episode terminology entries: %d",
+            len(filtered_terminology.terminology),
+        )
+        for source_key, target in filtered_terminology.terminology.items():
+            logger.debug(
+                "%s -> %s (%d)",
+                source_key,
+                target,
+                filtered_terminology.occurrences[source_key],
+            )
         engine = SubtitleTranslator(
             options,
             provider,
             resume=True,
-            terminology_map=terminology_map,
+            terminology_map=filtered_terminology.terminology,
         )
         _disable_thinking(engine)
         trace_session: _TraceSession | None = None

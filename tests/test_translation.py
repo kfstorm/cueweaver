@@ -195,7 +195,14 @@ class StaticTerminologyMetadata:
                     provider="wikidata",
                     source_url="https://www.wikidata.org/wiki/Q1",
                     entity_id="Q1",
-                )
+                ),
+                Term(
+                    source="Unrelated Office",
+                    target="无关机构",
+                    provider="wikidata",
+                    source_url="https://www.wikidata.org/wiki/Q2",
+                    entity_id="Q2",
+                ),
             ]
         )
 
@@ -522,6 +529,8 @@ def test_job_seeds_pysubtrans_with_override_precedence_and_keeps_dynamic_learnin
         assert "Jon Snow" in prompt
         assert "用户名称" in prompt
         assert "琼恩·雪诺" not in prompt
+        assert "Unrelated Office" not in prompt
+        assert "无关机构" not in prompt
         second_prompt = "\n".join(
             message.get("content", "")
             for message in ProviderFixtureHandler.requests[1]["messages"]
@@ -669,7 +678,10 @@ def test_changed_user_override_does_not_resume_an_old_translation(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
-    source.write_text(SRT.split("\n\n", 1)[0] + "\n", encoding="utf-8")
+    source.write_text(
+        SRT.split("\n\n", 1)[0].replace("Hello", "Jon Snow") + "\n",
+        encoding="utf-8",
+    )
     server, thread = start_provider_server()
     overrides, override_path = write_user_override(
         tmp_path / "overrides",
