@@ -41,9 +41,6 @@ class PySubtransTranslator:
     """Adapt one CueWeaver Source to PySubtrans's persistent engine contract."""
 
     _PROVIDER_ALIASES: ClassVar[dict[str, str]] = {
-        "deepseek": "DeepSeek",
-        "deepseek v4": "DeepSeek",
-        "deepseek-v4": "DeepSeek",
         "custom server": "Custom Server",
         "openai-compatible": "Custom Server",
         "openai compatible": "Custom Server",
@@ -55,52 +52,30 @@ class PySubtransTranslator:
         provider: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
-        api_base: str | None = None,
         server_address: str | None = None,
         endpoint: str | None = None,
     ) -> None:
         configured_provider = provider or os.environ.get(
             "CUEWEAVER_TRANSLATION_PROVIDER",
-            "DeepSeek",
+            "openai-compatible",
         )
         self.provider = self._normalize_provider(configured_provider)
-        self.api_key: str | None = None
-        self.model: str | None = None
-        self.api_base: str | None = None
-        self.server_address: str | None = None
-        self.endpoint: str | None = None
-
-        if self.provider == "DeepSeek":
-            self.api_key = api_key or os.environ.get(
-                "CUEWEAVER_TRANSLATION_API_KEY",
-                os.environ.get("DEEPSEEK_API_KEY"),
-            )
-            self.model = model or os.environ.get(
-                "CUEWEAVER_TRANSLATION_MODEL",
-                os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-            )
-            self.api_base = api_base or os.environ.get(
-                "CUEWEAVER_TRANSLATION_API_BASE",
-                os.environ.get("DEEPSEEK_API_BASE"),
-            )
-            self.server_address = None
-        else:
-            self.api_key = api_key or os.environ.get(
-                "CUEWEAVER_TRANSLATION_API_KEY",
-                os.environ.get("CUSTOM_API_KEY"),
-            )
-            self.model = model or os.environ.get(
-                "CUEWEAVER_TRANSLATION_MODEL",
-                os.environ.get("CUSTOM_MODEL"),
-            )
-            self.api_base = None
-            self.server_address = server_address or os.environ.get(
-                "CUEWEAVER_TRANSLATION_SERVER_ADDRESS",
-                os.environ.get("CUSTOM_SERVER_ADDRESS"),
-            )
-        self.endpoint = endpoint or os.environ.get("CUEWEAVER_TRANSLATION_ENDPOINT")
-        if self.endpoint is None and self.provider == "Custom Server":
-            self.endpoint = os.environ.get("CUSTOM_ENDPOINT")
+        self.api_key = api_key or os.environ.get(
+            "CUEWEAVER_TRANSLATION_API_KEY",
+            os.environ.get("CUSTOM_API_KEY"),
+        )
+        self.model = model or os.environ.get(
+            "CUEWEAVER_TRANSLATION_MODEL",
+            os.environ.get("CUSTOM_MODEL"),
+        )
+        self.server_address = server_address or os.environ.get(
+            "CUEWEAVER_TRANSLATION_SERVER_ADDRESS",
+            os.environ.get("CUSTOM_SERVER_ADDRESS"),
+        )
+        self.endpoint = endpoint or os.environ.get(
+            "CUEWEAVER_TRANSLATION_ENDPOINT",
+            os.environ.get("CUSTOM_ENDPOINT"),
+        )
         self.intermediate_path: Path | None = None
         self.token_usage: dict[str, object] | None = None
         self._cancel_requested = Event()
@@ -129,22 +104,16 @@ class PySubtransTranslator:
     def validate_configuration(self) -> None:
         """Fail before a Job gathers metadata when provider credentials are absent."""
 
-        if self.provider == "DeepSeek" and not self.api_key:
+        if not self.server_address:
             raise TranslationProviderConfigurationError(
-                "DeepSeek API key is required; set CUEWEAVER_TRANSLATION_API_KEY "
-                "or DEEPSEEK_API_KEY"
+                "Custom Server address is required; set "
+                "CUEWEAVER_TRANSLATION_SERVER_ADDRESS or CUSTOM_SERVER_ADDRESS"
             )
-        if self.provider == "Custom Server":
-            if not self.server_address:
-                raise TranslationProviderConfigurationError(
-                    "Custom Server address is required; set "
-                    "CUEWEAVER_TRANSLATION_SERVER_ADDRESS or CUSTOM_SERVER_ADDRESS"
-                )
-            if not self.endpoint:
-                raise TranslationProviderConfigurationError(
-                    "Custom Server endpoint is required; set "
-                    "CUEWEAVER_TRANSLATION_ENDPOINT or CUSTOM_ENDPOINT"
-                )
+        if not self.endpoint:
+            raise TranslationProviderConfigurationError(
+                "Custom Server endpoint is required; set "
+                "CUEWEAVER_TRANSLATION_ENDPOINT or CUSTOM_ENDPOINT"
+            )
 
     def translate(
         self,
@@ -192,8 +161,6 @@ class PySubtransTranslator:
             settings["api_key"] = self.api_key
         if self.model is not None:
             settings["model"] = self.model
-        if self.api_base is not None:
-            settings["api_base"] = self.api_base
         if self.server_address is not None:
             settings["server_address"] = self.server_address
         if self.endpoint is not None:
@@ -207,6 +174,12 @@ class PySubtransTranslator:
         )
         project.write_translation = False
         provider = init_translation_provider(self.provider, options)
+        provider.settings.update(
+            {
+                "supports_streaming": True,
+                "stream_responses": True,
+            }
+        )
         persisted_terminology = (
             getattr(project.subtitles, "terminology_map", None)
             if dynamic_terminology_enabled
@@ -252,9 +225,7 @@ class PySubtransTranslator:
             terminology_map=episode_terminology,
         )
         _disable_thinking(engine)
-        trace_session = _install_trace_hooks(
-            engine, trace_writer, provider=self.provider
-        )
+        trace_session = _install_trace_hooks(engine, trace_writer)
 
         with self._state_lock:
             self._active_engine = engine
@@ -323,8 +294,8 @@ class PySubtransTranslator:
             return cls._PROVIDER_ALIASES[normalized]
         except KeyError as error:
             raise TranslationProviderConfigurationError(
-                "Unsupported translation provider; v0.1 supports DeepSeek "
-                "and OpenAI-compatible providers"
+                "Unsupported translation provider; v0.1 supports OpenAI-compatible "
+                "providers"
             ) from error
 
     def _save_intermediate_result(
@@ -358,9 +329,8 @@ def _disable_thinking(engine: SubtitleTranslator) -> None:
 
 
 class _TraceSession:
-    def __init__(self, writer: TraceWriter | None, provider: str) -> None:
+    def __init__(self, writer: TraceWriter | None) -> None:
         self.writer = writer
-        self.provider = provider
         self._operation_number = 0
         self._request_number = 0
         self._operations: dict[Any, dict[str, Any]] = {}
@@ -448,12 +418,12 @@ class _TraceSession:
             request_id=request_data["request_id"],
             attempt=request_data["attempt"],
             response=response_data,
-            token_usage=_token_usage(response_data, provider=self.provider),
+            token_usage=_token_usage(response_data),
             duration_ms=round(
                 (time.monotonic() - request_data["started_at"]) * 1000, 3
             ),
         )
-        self._add_usage(_token_usage(response_data, provider=self.provider))
+        self._add_usage(_token_usage(response_data))
 
     def fail_request(self, request: Any, error: BaseException) -> None:
         request_data = self._requests.get(id(request))
@@ -638,11 +608,11 @@ class _TraceSession:
 
 
 def _install_trace_hooks(
-    engine: SubtitleTranslator, writer: TraceWriter | None, *, provider: str
+    engine: SubtitleTranslator, writer: TraceWriter | None
 ) -> _TraceSession:
     """Observe PySubtrans 1.6.0's private request seams without changing defaults."""
 
-    trace = _TraceSession(writer, provider)
+    trace = _TraceSession(writer)
     client = engine.client
 
     original_translate_batch = engine.TranslateBatch
@@ -716,7 +686,7 @@ def _install_trace_hooks(
 
     def process_api_response(content: Mapping[str, Any], response: Any) -> Any:
         processed = original_process_api_response(content, response)
-        _merge_provider_usage(processed, content, provider=provider)
+        _merge_provider_usage(processed, content)
         return processed
 
     client._process_api_response = process_api_response
@@ -759,7 +729,7 @@ def _install_trace_hooks(
         accumulated_response: dict[str, Any],
     ) -> None:
         original_chunk(request, chunk, accumulated_response)
-        _merge_provider_usage(accumulated_response, chunk, provider=provider)
+        _merge_provider_usage(accumulated_response, chunk)
 
     client._process_streaming_chunk = process_chunk
     original_warning = client._emit_warning
@@ -773,7 +743,7 @@ def _install_trace_hooks(
     return trace
 
 
-def _token_usage(response: object, *, provider: str | None = None) -> dict[str, object]:
+def _token_usage(response: object) -> dict[str, object]:
     if not isinstance(response, Mapping):
         response = {}
     usage = response.get("usage")
@@ -787,7 +757,7 @@ def _token_usage(response: object, *, provider: str | None = None) -> dict[str, 
             "total_tokens": usage.get("total_tokens"),
             "reasoning_tokens": _reasoning_tokens(usage),
         }
-        _copy_cache_usage(token_usage, usage, provider=provider)
+        _copy_cache_usage(token_usage, usage)
         return token_usage
     token_usage = {
         "prompt_tokens": response.get("prompt_tokens"),
@@ -795,20 +765,18 @@ def _token_usage(response: object, *, provider: str | None = None) -> dict[str, 
         "total_tokens": response.get("total_tokens"),
         "reasoning_tokens": response.get("reasoning_tokens"),
     }
-    _copy_cache_usage(token_usage, response, provider=provider)
+    _copy_cache_usage(token_usage, response)
     return token_usage
 
 
 def _merge_provider_usage(
     response: dict[str, Any],
     provider_response: Mapping[str, Any],
-    *,
-    provider: str,
 ) -> None:
     usage = provider_response.get("usage")
     if not isinstance(usage, Mapping):
         return
-    response.update(_token_usage(provider_response, provider=provider))
+    response.update(_token_usage(provider_response))
 
 
 def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
@@ -822,12 +790,8 @@ def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
     return None
 
 
-def _copy_cache_usage(
-    token_usage: dict[str, object], usage: Mapping[str, Any], *, provider: str | None
-) -> None:
+def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) -> None:
     for key, value in usage.items():
-        if provider == "DeepSeek" and _is_cache_write_field(str(key)):
-            continue
         if (
             "cache" in str(key).casefold()
             and isinstance(value, (int, float))
@@ -839,19 +803,12 @@ def _copy_cache_usage(
         if not isinstance(details, Mapping):
             continue
         for key, value in details.items():
-            if provider == "DeepSeek" and _is_cache_write_field(str(key)):
-                continue
             if (
                 "cache" in str(key).casefold()
                 and isinstance(value, (int, float))
                 and not isinstance(value, bool)
             ):
                 token_usage[f"{details_key}.{key}"] = value
-
-
-def _is_cache_write_field(key: str) -> bool:
-    normalized = key.casefold()
-    return "cache" in normalized and ("write" in normalized or "creation" in normalized)
 
 
 def _retry_delay(message: str) -> float | None:

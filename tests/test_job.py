@@ -475,11 +475,6 @@ def test_bitmap_only_failure_reports_completed_discovery(tmp_path, monkeypatch):
     ("provider", "missing_settings", "expected_error"),
     [
         (
-            "DeepSeek",
-            ("CUEWEAVER_TRANSLATION_API_KEY", "DEEPSEEK_API_KEY"),
-            "DeepSeek API key is required",
-        ),
-        (
             "openai-compatible",
             (
                 "CUEWEAVER_TRANSLATION_SERVER_ADDRESS",
@@ -490,7 +485,7 @@ def test_bitmap_only_failure_reports_completed_discovery(tmp_path, monkeypatch):
             "Custom Server address is required",
         ),
     ],
-    ids=["deepseek", "custom-server"],
+    ids=["custom-server"],
 )
 def test_missing_provider_configuration_fails_before_translation(
     tmp_path, monkeypatch, provider, missing_settings, expected_error
@@ -506,6 +501,27 @@ def test_missing_provider_configuration_fails_before_translation(
     assert result.lifecycle == (JobState.DISCOVERED, JobState.FAILED)
     assert result.error is not None
     assert expected_error in result.error
+
+
+def test_default_provider_requires_openai_compatible_server_configuration(
+    tmp_path, monkeypatch
+):
+    media, source = create_media_and_source(tmp_path)
+    monkeypatch.delenv("CUEWEAVER_TRANSLATION_PROVIDER", raising=False)
+    for name in (
+        "CUEWEAVER_TRANSLATION_SERVER_ADDRESS",
+        "CUSTOM_SERVER_ADDRESS",
+        "CUEWEAVER_TRANSLATION_ENDPOINT",
+        "CUSTOM_ENDPOINT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    result = JobRunner().run(media, target_language="zh", source=source)
+
+    assert result.state is JobState.FAILED
+    assert result.lifecycle == (JobState.DISCOVERED, JobState.FAILED)
+    assert result.error is not None
+    assert "Custom Server address is required" in result.error
 
 
 def test_external_source_without_language_signal_requires_confirmation(tmp_path):
@@ -824,7 +840,8 @@ def test_non_target_source_uses_the_default_pysubtrans_adapter(tmp_path, monkeyp
 你好
 """
     )
-    monkeypatch.setenv("CUEWEAVER_TRANSLATION_API_KEY", "fixture-key")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_SERVER_ADDRESS", "http://fixture")
+    monkeypatch.setenv("CUEWEAVER_TRANSLATION_ENDPOINT", "/v1/chat/completions")
 
     monkeypatch.setattr(
         "cueweaver.translation.PySubtransTranslator.translate",

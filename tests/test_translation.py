@@ -40,6 +40,7 @@ def start_provider_server(
     usage_only_terminal: bool = False,
 ) -> tuple[ThreadingHTTPServer, Thread]:
     ProviderFixtureHandler.requests = []
+    ProviderFixtureHandler.request_headers = []
     ProviderFixtureHandler.fail_after_first_request = fail_after_first_request
     ProviderFixtureHandler.fail_transport_first_request = fail_transport_first_request
     ProviderFixtureHandler.block_scene = block_scene
@@ -71,6 +72,7 @@ def provider_request_numbers(max_number: int | None = None) -> list[list[str]]:
 
 class ProviderFixtureHandler(BaseHTTPRequestHandler):
     requests: ClassVar[list[dict]] = []
+    request_headers: ClassVar[list[dict[str, str]]] = []
     fail_after_first_request: ClassVar[bool] = False
     fail_transport_first_request: ClassVar[bool] = False
     block_scene: ClassVar[str | None] = None
@@ -82,6 +84,7 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
     release_block: ClassVar[Event] = Event()
 
     def do_POST(self):
+        type(self).request_headers.append(dict(self.headers))
         length = int(self.headers["Content-Length"])
         request = json.loads(self.rfile.read(length))
         self.requests.append(request)
@@ -343,7 +346,7 @@ def test_subtitle_terminology_filter_can_be_disabled(tmp_path):
         thread.join(timeout=5)
 
 
-def test_debug_trace_records_default_deepseek_streaming_response(tmp_path):
+def test_debug_trace_records_openai_compatible_streaming_response(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
@@ -352,9 +355,10 @@ def test_debug_trace_records_default_deepseek_streaming_response(tmp_path):
 
     try:
         translator = PySubtransTranslator(
-            provider="deepseek",
+            provider="openai-compatible",
             api_key="fixture-secret",
-            api_base=f"http://127.0.0.1:{server.server_port}",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
             model="fixture-model",
         )
 
@@ -436,7 +440,7 @@ def test_non_debug_translation_preserves_usage_without_creating_trace(tmp_path):
         thread.join(timeout=5)
 
 
-def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp_path):
+def test_debug_trace_preserves_openai_compatible_cache_usage(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
@@ -458,9 +462,10 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
     try:
         result = JobRunner(
             translator=PySubtransTranslator(
-                provider="deepseek",
+                provider="openai-compatible",
                 api_key="fixture-secret",
-                api_base=f"http://127.0.0.1:{server.server_port}",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
                 model="fixture-model",
             )
         ).run(media, target_language="zh", source=source, debug=True)
@@ -473,6 +478,8 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
             "reasoning_tokens": 6,
             "prompt_cache_hit_tokens": 8,
             "prompt_cache_miss_tokens": 12,
+            "prompt_cache_write_tokens": 198,
+            "prompt_tokens_details.cache_write_tokens": 198,
         }
         assert result.trace_path is not None
         events = [
@@ -489,13 +496,44 @@ def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp
             "reasoning_tokens": 3,
             "prompt_cache_hit_tokens": 4,
             "prompt_cache_miss_tokens": 6,
+            "prompt_cache_write_tokens": 99,
+            "prompt_tokens_details.cache_write_tokens": 99,
         }
-        assert "prompt_cache_write_tokens" not in completed["token_usage"]
-        assert (
-            "prompt_tokens_details.cache_write_tokens" not in completed["token_usage"]
-        )
         assert "response_chunk" not in [event["event"] for event in events]
         assert events[-1]["token_usage"] == result.token_usage
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_openai_compatible_translation_without_api_key_omits_authorization(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    monkeypatch.delenv("CUEWEAVER_TRANSLATION_API_KEY", raising=False)
+    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
+    server, thread = start_provider_server()
+
+    try:
+        result = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            )
+        ).run(media, target_language="zh", source=source)
+
+        assert result.state is JobState.PUBLISHED
+        assert ProviderFixtureHandler.request_headers
+        assert not any(
+            name.casefold() == "authorization"
+            for name in ProviderFixtureHandler.request_headers[0]
+        )
     finally:
         server.shutdown()
         server.server_close()

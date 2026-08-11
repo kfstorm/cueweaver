@@ -47,10 +47,9 @@ and output counts use the provider's
 `prompt_tokens` and `completion_tokens`/`output_tokens` values; reasoning
 tokens are a subset of output and are never added to output again. Retries
 are counted once per completed API attempt, while streaming chunks are never
-counted separately. Provider-specific cache fields, such as DeepSeek's
-`prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`, are preserved only
-when returned by the provider. Missing fields, including cache write counts,
-are not inferred.
+counted separately. Cache usage fields, such as `prompt_cache_hit_tokens` and
+`prompt_cache_miss_tokens`, are preserved only when returned by the provider.
+Missing fields are not inferred.
 
 The Target language is required and has no product default. It can also be
 configured for a shell session with `CUEWEAVER_TARGET_LANGUAGE`. A subtitle
@@ -118,8 +117,8 @@ overrides the environment variable. The environment variable accepts
 Dynamic terminology discovery can make later prompts grow as new mappings are
 learned, increasing token usage. Disabling it keeps prompts deterministic from
 the static Glossary and User override seeds, which can improve consistency and
-DeepSeek prefix-cache reuse, but uncovered terms will not be learned between
-batches. The two modes use separate Job checkpoints.
+prefix-cache reuse, but uncovered terms will not be learned between batches.
+The two modes use separate Job checkpoints.
 
 Subtitle terminology filtering is enabled by default. Before translation,
 CueWeaver passes PySubtrans only the Glossary and User override Terms whose
@@ -160,24 +159,23 @@ result beside the Media. SRT, ASS, and VTT are supported. A non-Target-language
 Source uses PySubtrans 1.6.0 with scene/batch translation, rolling context, and
 resume checkpoints before the same Validation and Publishing stages.
 
-The default provider is DeepSeek V4 flash. Set `DEEPSEEK_API_KEY`, or use the
-CueWeaver-specific `CUEWEAVER_TRANSLATION_*` variables. An OpenAI-compatible
-server can be selected with `CUEWEAVER_TRANSLATION_PROVIDER=openai-compatible`,
-`CUEWEAVER_TRANSLATION_SERVER_ADDRESS`, and optionally
-`CUEWEAVER_TRANSLATION_ENDPOINT`, `CUEWEAVER_TRANSLATION_MODEL`, and
-`CUEWEAVER_TRANSLATION_API_KEY`. CueWeaver sends
+The default provider is an OpenAI-compatible server. Set
+`CUEWEAVER_TRANSLATION_SERVER_ADDRESS` and
+`CUEWEAVER_TRANSLATION_ENDPOINT`, or select it explicitly with
+`CUEWEAVER_TRANSLATION_PROVIDER=openai-compatible`. The model and API key are
+optional; when no API key is configured, CueWeaver does not send an
+`Authorization` header. CueWeaver sends
 `thinking: {"type": "disabled"}` for the v0.1 fast/low-cost seam. PySubtrans
 checkpoint files are kept in CueWeaver's per-Job user cache workspace so a
 completed batch is not sent again on a later Job. No temporary CueWeaver files
 are written beside the Media.
 
-The adapter also accepts PySubtrans's provider-native settings when present:
-`DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, and `DEEPSEEK_API_BASE` for DeepSeek, or
+The adapter also accepts PySubtrans's Custom Server settings through
 `CUSTOM_API_KEY`, `CUSTOM_MODEL`, `CUSTOM_SERVER_ADDRESS`, and
-`CUSTOM_ENDPOINT` for an OpenAI-compatible server.
+`CUSTOM_ENDPOINT`.
 Before a translated Job gathers metadata, CueWeaver verifies that the selected
-provider has the required credentials. A Target-language no-op does not require
-translation provider credentials.
+provider has the required server configuration. A Target-language no-op does
+not require translation provider configuration.
 
 ## Test
 
