@@ -13,9 +13,9 @@ from cueweaver.metadata import (
     Term,
     TermPriority,
     WikidataGlossaryProvider,
-    translation_context_instructions,
 )
 from cueweaver.overrides import UserOverrideError
+from cueweaver.translation_context import translation_context_instructions
 from tests.test_helpers import write_user_override
 
 SRT = """1

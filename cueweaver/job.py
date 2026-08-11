@@ -29,7 +29,6 @@ from .metadata import (
     SeriesWikidataIdentifierProvider,
     TMDbMetadataProvider,
     WikidataGlossaryProvider,
-    translation_context_instructions,
 )
 from .overrides import UserOverrideError, UserOverrideStore
 from .publishing import publish_atomically
@@ -41,6 +40,7 @@ from .subtitles import (
 )
 from .trace import TraceWriteError, TraceWriter
 from .translation import PySubtransTranslator
+from .translation_context import translation_context_instructions
 from .workspaces import extraction_cache_path, job_work_directory
 
 
