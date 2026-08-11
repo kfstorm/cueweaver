@@ -155,6 +155,7 @@ class PySubtransTranslator:
         work_directory: PathLike[str] | None = None,
         trace_writer: TraceWriter | None = None,
         dynamic_terminology_enabled: bool = True,
+        episode_terminology_filter_enabled: bool = True,
     ) -> bytes:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
@@ -214,32 +215,38 @@ class PySubtransTranslator:
             user_overrides,
         )
         master_terminology_count = len(terminology_map)
-        filtered_terminology = filter_terminology_for_text(
-            terminology_map,
-            source_text,
-        )
-        static_terminology = {
-            source_key: target
-            for source_key, target in static_terminology.items()
-            if filtered_terminology.terminology.get(source_key) == target
-        }
+        if episode_terminology_filter_enabled:
+            filtered_terminology = filter_terminology_for_text(
+                terminology_map,
+                source_text,
+            )
+            episode_terminology = filtered_terminology.terminology
+            static_terminology = {
+                source_key: target
+                for source_key, target in static_terminology.items()
+                if episode_terminology.get(source_key) == target
+            }
+        else:
+            episode_terminology = terminology_map
+            logger.debug("Episode terminology filtering disabled")
         logger.info("Master terminology entries: %d", master_terminology_count)
         logger.info(
             "Episode terminology entries: %d",
-            len(filtered_terminology.terminology),
+            len(episode_terminology),
         )
-        for source_key, target in filtered_terminology.terminology.items():
-            logger.debug(
-                "%s -> %s (%d)",
-                source_key,
-                target,
-                filtered_terminology.occurrences[source_key],
-            )
+        if episode_terminology_filter_enabled:
+            for source_key, target in episode_terminology.items():
+                logger.debug(
+                    "%s -> %s (%d)",
+                    source_key,
+                    target,
+                    filtered_terminology.occurrences[source_key],
+                )
         engine = SubtitleTranslator(
             options,
             provider,
             resume=True,
-            terminology_map=filtered_terminology.terminology,
+            terminology_map=episode_terminology,
         )
         _disable_thinking(engine)
         trace_session: _TraceSession | None = None

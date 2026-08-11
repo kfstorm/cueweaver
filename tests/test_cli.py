@@ -124,6 +124,78 @@ def test_dynamic_terminology_cli_switches_are_mutually_exclusive():
         )
 
 
+def test_episode_terminology_filter_cli_switches_are_mutually_exclusive():
+    parser = build_parser()
+
+    assert (
+        parser.parse_args(
+            ["Movie.mkv", "--episode-terminology-filter"]
+        ).episode_terminology_filter_enabled
+        is True
+    )
+    assert (
+        parser.parse_args(
+            ["Movie.mkv", "--no-episode-terminology-filter"]
+        ).episode_terminology_filter_enabled
+        is False
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "Movie.mkv",
+                "--episode-terminology-filter",
+                "--no-episode-terminology-filter",
+            ]
+        )
+
+
+def test_cli_passes_episode_terminology_filter_setting_to_the_job(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    candidate = SubtitleCandidate(
+        path=tmp_path / "Movie.en.srt",
+        subtitle_format=SubtitleFormat.SRT,
+        language="en",
+    )
+
+    class RecordingRunner:
+        episode_terminology_filter_enabled = None
+
+        def run(
+            self,
+            media,
+            *,
+            target_language,
+            source,
+            source_language,
+            episode_terminology_filter_enabled,
+        ):
+            self.episode_terminology_filter_enabled = episode_terminology_filter_enabled
+            return JobResult(
+                state=JobState.PUBLISHED,
+                lifecycle=(JobState.PUBLISHED,),
+                media=media,
+                target_language=target_language,
+                source=candidate,
+                published_path=media,
+                no_op=True,
+            )
+
+    runner = RecordingRunner()
+    assert (
+        main(
+            [
+                str(media),
+                "--target-language",
+                "zh",
+                "--no-episode-terminology-filter",
+            ],
+            runner=runner,
+        )
+        == 0
+    )
+    assert runner.episode_terminology_filter_enabled is False
+
+
 def test_cli_passes_no_metadata_fetch_to_the_job(tmp_path):
     media = tmp_path / "Movie.mkv"
     candidate = SubtitleCandidate(

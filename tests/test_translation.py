@@ -284,6 +284,56 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         thread.join(timeout=5)
 
 
+def test_episode_terminology_filter_can_be_disabled(tmp_path):
+    source = tmp_path / "Movie.en.srt"
+    source.write_text(SRT.replace("Hello", "Jon Snow"), encoding="utf-8")
+    glossary = Glossary.from_terms(
+        [
+            Term(
+                source="Jon Snow",
+                target="琼恩·雪诺",
+                provider="wikidata",
+                source_url="https://www.wikidata.org/wiki/Q1",
+                entity_id="Q1",
+            ),
+            Term(
+                source="Unrelated Office",
+                target="无关机构",
+                provider="wikidata",
+                source_url="https://www.wikidata.org/wiki/Q2",
+                entity_id="Q2",
+            ),
+        ]
+    )
+    server, thread = start_provider_server()
+
+    try:
+        translator = PySubtransTranslator(
+            provider="openai-compatible",
+            server_address=f"http://127.0.0.1:{server.server_port}",
+            endpoint="/v1/chat/completions",
+            model="fixture-model",
+        )
+        translator.translate(
+            source,
+            "zh",
+            glossary=glossary,
+            work_directory=tmp_path / "job-work",
+            episode_terminology_filter_enabled=False,
+        )
+
+        prompt = "\n".join(
+            message.get("content", "")
+            for message in ProviderFixtureHandler.requests[0]["messages"]
+        )
+        assert "Unrelated Office" in prompt
+        assert "无关机构" in prompt
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
@@ -669,6 +719,28 @@ def test_dynamic_terminology_setting_is_part_of_job_workspace_identity(
         "zh",
         "Movie.en.srt",
         dynamic_terminology_enabled=False,
+    )
+
+    assert enabled != disabled
+
+
+def test_episode_terminology_filter_setting_is_part_of_job_workspace_identity(
+    tmp_path,
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"media")
+
+    enabled = job_work_directory(
+        media,
+        "zh",
+        "Movie.en.srt",
+        episode_terminology_filter_enabled=True,
+    )
+    disabled = job_work_directory(
+        media,
+        "zh",
+        "Movie.en.srt",
+        episode_terminology_filter_enabled=False,
     )
 
     assert enabled != disabled

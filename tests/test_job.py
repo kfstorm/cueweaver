@@ -71,6 +71,21 @@ class DynamicTerminologySettingTranslator:
         return SRT.replace("Hello", "你好")
 
 
+class EpisodeTerminologyFilterSettingTranslator:
+    def __init__(self):
+        self.settings: list[bool] = []
+
+    def translate(
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        episode_terminology_filter_enabled: bool,
+    ) -> str:
+        self.settings.append(episode_terminology_filter_enabled)
+        return SRT.replace("Hello", "你好")
+
+
 class ExtractionFixture:
     def __init__(self, content: str = SRT):
         self.content = content
@@ -915,6 +930,38 @@ def test_dynamic_terminology_setting_defaults_to_enabled(tmp_path, monkeypatch):
     assert result.state is JobState.PUBLISHED
     assert result.dynamic_terminology_enabled is True
     assert translator.settings == [True]
+
+
+def test_episode_terminology_filter_setting_defaults_to_enabled(tmp_path, monkeypatch):
+    media, source = create_media_and_source(tmp_path)
+    translator = EpisodeTerminologyFilterSettingTranslator()
+    monkeypatch.delenv("CUEWEAVER_EPISODE_TERMINOLOGY_FILTER", raising=False)
+
+    result = JobRunner(translator=translator).run(
+        media,
+        target_language="zh",
+        source=source,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.episode_terminology_filter_enabled is True
+    assert translator.settings == [True]
+
+
+def test_episode_terminology_filter_setting_can_be_disabled(tmp_path):
+    media, source = create_media_and_source(tmp_path)
+    translator = EpisodeTerminologyFilterSettingTranslator()
+
+    result = JobRunner(translator=translator).run(
+        media,
+        target_language="zh",
+        source=source,
+        episode_terminology_filter_enabled=False,
+    )
+
+    assert result.state is JobState.PUBLISHED
+    assert result.episode_terminology_filter_enabled is False
+    assert translator.settings == [False]
 
 
 def test_explicit_dynamic_terminology_value_wins_over_environment(
