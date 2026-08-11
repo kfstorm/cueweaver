@@ -87,6 +87,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable dynamic terminology discovery",
     )
     parser.set_defaults(dynamic_terminology_enabled=None)
+    subtitle_terminology_filter = parser.add_mutually_exclusive_group()
+    subtitle_terminology_filter.add_argument(
+        "--subtitle-terminology-filter",
+        dest="subtitle_terminology_filter_enabled",
+        action="store_true",
+        help="Enable subtitle terminology filtering (default)",
+    )
+    subtitle_terminology_filter.add_argument(
+        "--no-subtitle-terminology-filter",
+        dest="subtitle_terminology_filter_enabled",
+        action="store_false",
+        help="Disable subtitle terminology filtering",
+    )
+    parser.set_defaults(subtitle_terminology_filter_enabled=None)
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -149,6 +163,10 @@ def main(
         if args.dynamic_terminology_enabled is not None:
             run_options["dynamic_terminology_enabled"] = (
                 args.dynamic_terminology_enabled
+            )
+        if args.subtitle_terminology_filter_enabled is not None:
+            run_options["subtitle_terminology_filter_enabled"] = (
+                args.subtitle_terminology_filter_enabled
             )
         if args.series_id is not None:
             run_options.update(
