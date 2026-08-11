@@ -124,32 +124,32 @@ def test_dynamic_terminology_cli_switches_are_mutually_exclusive():
         )
 
 
-def test_episode_terminology_filter_cli_switches_are_mutually_exclusive():
+def test_subtitle_terminology_filter_cli_switches_are_mutually_exclusive():
     parser = build_parser()
 
     assert (
         parser.parse_args(
-            ["Movie.mkv", "--episode-terminology-filter"]
-        ).episode_terminology_filter_enabled
+            ["Movie.mkv", "--subtitle-terminology-filter"]
+        ).subtitle_terminology_filter_enabled
         is True
     )
     assert (
         parser.parse_args(
-            ["Movie.mkv", "--no-episode-terminology-filter"]
-        ).episode_terminology_filter_enabled
+            ["Movie.mkv", "--no-subtitle-terminology-filter"]
+        ).subtitle_terminology_filter_enabled
         is False
     )
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
                 "Movie.mkv",
-                "--episode-terminology-filter",
-                "--no-episode-terminology-filter",
+                "--subtitle-terminology-filter",
+                "--no-subtitle-terminology-filter",
             ]
         )
 
 
-def test_cli_passes_episode_terminology_filter_setting_to_the_job(tmp_path):
+def test_cli_passes_subtitle_terminology_filter_setting_to_the_job(tmp_path):
     media = tmp_path / "Movie.mkv"
     candidate = SubtitleCandidate(
         path=tmp_path / "Movie.en.srt",
@@ -158,7 +158,7 @@ def test_cli_passes_episode_terminology_filter_setting_to_the_job(tmp_path):
     )
 
     class RecordingRunner:
-        episode_terminology_filter_enabled = None
+        subtitle_terminology_filter_enabled = None
 
         def run(
             self,
@@ -167,9 +167,11 @@ def test_cli_passes_episode_terminology_filter_setting_to_the_job(tmp_path):
             target_language,
             source,
             source_language,
-            episode_terminology_filter_enabled,
+            subtitle_terminology_filter_enabled,
         ):
-            self.episode_terminology_filter_enabled = episode_terminology_filter_enabled
+            self.subtitle_terminology_filter_enabled = (
+                subtitle_terminology_filter_enabled
+            )
             return JobResult(
                 state=JobState.PUBLISHED,
                 lifecycle=(JobState.PUBLISHED,),
@@ -187,13 +189,13 @@ def test_cli_passes_episode_terminology_filter_setting_to_the_job(tmp_path):
                 str(media),
                 "--target-language",
                 "zh",
-                "--no-episode-terminology-filter",
+                "--no-subtitle-terminology-filter",
             ],
             runner=runner,
         )
         == 0
     )
-    assert runner.episode_terminology_filter_enabled is False
+    assert runner.subtitle_terminology_filter_enabled is False
 
 
 def test_cli_passes_no_metadata_fetch_to_the_job(tmp_path):

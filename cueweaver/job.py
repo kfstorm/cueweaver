@@ -262,7 +262,7 @@ class JobResult:
     glossary: Glossary = field(default_factory=Glossary)
     user_overrides: dict[str, str] = field(default_factory=dict)
     trace_path: Path | None = None
-    episode_terminology_filter_enabled: bool = True
+    subtitle_terminology_filter_enabled: bool = True
 
     @property
     def status(self) -> str:
@@ -739,8 +739,8 @@ class JobRunner:
                         result.target_language,
                         result.source.selection_id,
                         dynamic_terminology_enabled=result.dynamic_terminology_enabled,
-                        episode_terminology_filter_enabled=(
-                            result.episode_terminology_filter_enabled
+                        subtitle_terminology_filter_enabled=(
+                            result.subtitle_terminology_filter_enabled
                         ),
                     ),
                 )
@@ -807,7 +807,7 @@ class JobRunner:
         no_metadata_fetch: bool = False,
         debug: bool = False,
         dynamic_terminology_enabled: bool | None = None,
-        episode_terminology_filter_enabled: bool | None = None,
+        subtitle_terminology_filter_enabled: bool | None = None,
     ) -> JobResult:
         self._cancel_requested.clear()
         self._intermediate_path = None
@@ -836,7 +836,7 @@ class JobRunner:
                     raise
 
         effective_dynamic_terminology_enabled = True
-        effective_episode_terminology_filter_enabled = True
+        effective_subtitle_terminology_filter_enabled = True
         try:
             if (
                 debug
@@ -849,9 +849,9 @@ class JobRunner:
             effective_dynamic_terminology_enabled = (
                 _resolve_dynamic_terminology_enabled(dynamic_terminology_enabled)
             )
-            effective_episode_terminology_filter_enabled = (
-                _resolve_episode_terminology_filter_enabled(
-                    episode_terminology_filter_enabled
+            effective_subtitle_terminology_filter_enabled = (
+                _resolve_subtitle_terminology_filter_enabled(
+                    subtitle_terminology_filter_enabled
                 )
             )
             configured_target = normalize_language(
@@ -889,8 +889,8 @@ class JobRunner:
                 configured_target,
                 selected_source.selection_id,
                 dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
-                episode_terminology_filter_enabled=(
-                    effective_episode_terminology_filter_enabled
+                subtitle_terminology_filter_enabled=(
+                    effective_subtitle_terminology_filter_enabled
                 ),
             )
             if debug:
@@ -960,8 +960,8 @@ class JobRunner:
                     ),
                     user_overrides=user_overrides,
                     dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
-                    episode_terminology_filter_enabled=(
-                        effective_episode_terminology_filter_enabled
+                    subtitle_terminology_filter_enabled=(
+                        effective_subtitle_terminology_filter_enabled
                     ),
                 )
                 self._raise_if_canceled()
@@ -1003,8 +1003,8 @@ class JobRunner:
                 published_path=published_path,
                 no_op=no_op,
                 dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
-                episode_terminology_filter_enabled=(
-                    effective_episode_terminology_filter_enabled
+                subtitle_terminology_filter_enabled=(
+                    effective_subtitle_terminology_filter_enabled
                 ),
                 context=translation_context,
                 metadata_degradation=(
@@ -1050,8 +1050,8 @@ class JobRunner:
                 published_path=None,
                 no_op=no_op,
                 dynamic_terminology_enabled=effective_dynamic_terminology_enabled,
-                episode_terminology_filter_enabled=(
-                    effective_episode_terminology_filter_enabled
+                subtitle_terminology_filter_enabled=(
+                    effective_subtitle_terminology_filter_enabled
                 ),
                 error=result_error,
                 intermediate_path=self._intermediate_path,
@@ -1469,7 +1469,7 @@ class JobRunner:
         glossary: Glossary | None = None,
         user_overrides: dict[str, str] | None = None,
         dynamic_terminology_enabled: bool = True,
-        episode_terminology_filter_enabled: bool = True,
+        subtitle_terminology_filter_enabled: bool = True,
     ) -> bytes:
         try:
             translator = self._translator
@@ -1491,7 +1491,7 @@ class JobRunner:
                 work_directory=self._job_work_directory,
                 trace_writer=self._trace_writer,
                 dynamic_terminology_enabled=dynamic_terminology_enabled,
-                episode_terminology_filter_enabled=episode_terminology_filter_enabled,
+                subtitle_terminology_filter_enabled=subtitle_terminology_filter_enabled,
             )
         except Exception as error:
             if isinstance(error, JobCanceled):
@@ -1613,13 +1613,13 @@ def _resolve_dynamic_terminology_enabled(value: bool | None) -> bool:
     )
 
 
-def _resolve_episode_terminology_filter_enabled(value: bool | None) -> bool:
+def _resolve_subtitle_terminology_filter_enabled(value: bool | None) -> bool:
     if value is not None:
         if type(value) is not bool:
-            raise JobError("episode_terminology_filter_enabled must be a bool or None")
+            raise JobError("subtitle_terminology_filter_enabled must be a bool or None")
         return value
 
-    configured = os.environ.get("CUEWEAVER_EPISODE_TERMINOLOGY_FILTER")
+    configured = os.environ.get("CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER")
     if configured is None:
         return True
     normalized = configured.strip().casefold()
@@ -1628,7 +1628,7 @@ def _resolve_episode_terminology_filter_enabled(value: bool | None) -> bool:
     if normalized in {"false", "no", "0"}:
         return False
     raise JobError(
-        "CUEWEAVER_EPISODE_TERMINOLOGY_FILTER must be one of true, false, "
+        "CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER must be one of true, false, "
         "yes, no, 1, or 0"
     )
 
@@ -1730,7 +1730,7 @@ def _call_translator(
     work_directory: Path | None,
     trace_writer: TraceWriter | None,
     dynamic_terminology_enabled: bool,
-    episode_terminology_filter_enabled: bool,
+    subtitle_terminology_filter_enabled: bool,
 ) -> bytes | str | PathLike[str]:
     method = cast(
         Callable[..., bytes | str | PathLike[str]],
@@ -1749,9 +1749,9 @@ def _call_translator(
         kwargs["trace_writer"] = trace_writer
     if _accepts_parameter(method, "dynamic_terminology_enabled"):
         kwargs["dynamic_terminology_enabled"] = dynamic_terminology_enabled
-    if _accepts_parameter(method, "episode_terminology_filter_enabled"):
-        kwargs["episode_terminology_filter_enabled"] = (
-            episode_terminology_filter_enabled
+    if _accepts_parameter(method, "subtitle_terminology_filter_enabled"):
+        kwargs["subtitle_terminology_filter_enabled"] = (
+            subtitle_terminology_filter_enabled
         )
     return method(source, target_language, **kwargs)
 

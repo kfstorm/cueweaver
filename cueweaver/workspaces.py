@@ -25,7 +25,7 @@ def job_work_directory(
     source_identity: str,
     *,
     dynamic_terminology_enabled: bool = True,
-    episode_terminology_filter_enabled: bool = True,
+    subtitle_terminology_filter_enabled: bool = True,
 ) -> Path:
     """Return the stable workspace for one Media/Source/Target Job."""
 
@@ -42,7 +42,7 @@ def job_work_directory(
             target_language,
             source_identity,
             str(dynamic_terminology_enabled),
-            str(episode_terminology_filter_enabled),
+            str(subtitle_terminology_filter_enabled),
         )
     ).encode("utf-8")
     digest = hashlib.sha256(key_material).hexdigest()[:16]

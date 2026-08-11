@@ -284,7 +284,7 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         thread.join(timeout=5)
 
 
-def test_episode_terminology_filter_can_be_disabled(tmp_path):
+def test_subtitle_terminology_filter_can_be_disabled(tmp_path):
     source = tmp_path / "Movie.en.srt"
     source.write_text(SRT.replace("Hello", "Jon Snow"), encoding="utf-8")
     glossary = Glossary.from_terms(
@@ -319,7 +319,7 @@ def test_episode_terminology_filter_can_be_disabled(tmp_path):
             "zh",
             glossary=glossary,
             work_directory=tmp_path / "job-work",
-            episode_terminology_filter_enabled=False,
+            subtitle_terminology_filter_enabled=False,
         )
 
         prompt = "\n".join(
@@ -724,7 +724,7 @@ def test_dynamic_terminology_setting_is_part_of_job_workspace_identity(
     assert enabled != disabled
 
 
-def test_episode_terminology_filter_setting_is_part_of_job_workspace_identity(
+def test_subtitle_terminology_filter_setting_is_part_of_job_workspace_identity(
     tmp_path,
 ):
     media = tmp_path / "Movie.mkv"
@@ -734,13 +734,13 @@ def test_episode_terminology_filter_setting_is_part_of_job_workspace_identity(
         media,
         "zh",
         "Movie.en.srt",
-        episode_terminology_filter_enabled=True,
+        subtitle_terminology_filter_enabled=True,
     )
     disabled = job_work_directory(
         media,
         "zh",
         "Movie.en.srt",
-        episode_terminology_filter_enabled=False,
+        subtitle_terminology_filter_enabled=False,
     )
 
     assert enabled != disabled

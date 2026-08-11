@@ -71,7 +71,7 @@ class DynamicTerminologySettingTranslator:
         return SRT.replace("Hello", "你好")
 
 
-class EpisodeTerminologyFilterSettingTranslator:
+class SubtitleTerminologyFilterSettingTranslator:
     def __init__(self):
         self.settings: list[bool] = []
 
@@ -80,9 +80,9 @@ class EpisodeTerminologyFilterSettingTranslator:
         source: Path,
         target_language: str,
         *,
-        episode_terminology_filter_enabled: bool,
+        subtitle_terminology_filter_enabled: bool,
     ) -> str:
-        self.settings.append(episode_terminology_filter_enabled)
+        self.settings.append(subtitle_terminology_filter_enabled)
         return SRT.replace("Hello", "你好")
 
 
@@ -932,10 +932,10 @@ def test_dynamic_terminology_setting_defaults_to_enabled(tmp_path, monkeypatch):
     assert translator.settings == [True]
 
 
-def test_episode_terminology_filter_setting_defaults_to_enabled(tmp_path, monkeypatch):
+def test_subtitle_terminology_filter_setting_defaults_to_enabled(tmp_path, monkeypatch):
     media, source = create_media_and_source(tmp_path)
-    translator = EpisodeTerminologyFilterSettingTranslator()
-    monkeypatch.delenv("CUEWEAVER_EPISODE_TERMINOLOGY_FILTER", raising=False)
+    translator = SubtitleTerminologyFilterSettingTranslator()
+    monkeypatch.delenv("CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER", raising=False)
 
     result = JobRunner(translator=translator).run(
         media,
@@ -944,23 +944,23 @@ def test_episode_terminology_filter_setting_defaults_to_enabled(tmp_path, monkey
     )
 
     assert result.state is JobState.PUBLISHED
-    assert result.episode_terminology_filter_enabled is True
+    assert result.subtitle_terminology_filter_enabled is True
     assert translator.settings == [True]
 
 
-def test_episode_terminology_filter_setting_can_be_disabled(tmp_path):
+def test_subtitle_terminology_filter_setting_can_be_disabled(tmp_path):
     media, source = create_media_and_source(tmp_path)
-    translator = EpisodeTerminologyFilterSettingTranslator()
+    translator = SubtitleTerminologyFilterSettingTranslator()
 
     result = JobRunner(translator=translator).run(
         media,
         target_language="zh",
         source=source,
-        episode_terminology_filter_enabled=False,
+        subtitle_terminology_filter_enabled=False,
     )
 
     assert result.state is JobState.PUBLISHED
-    assert result.episode_terminology_filter_enabled is False
+    assert result.subtitle_terminology_filter_enabled is False
     assert translator.settings == [False]
 
 
