@@ -14,6 +14,7 @@ from cueweaver.metadata import (
     TermPriority,
     WikidataGlossaryProvider,
 )
+from cueweaver.overrides import UserOverrideError
 from tests.test_helpers import write_user_override
 
 SRT = """1
@@ -855,3 +856,19 @@ def test_invalid_override_fails_without_discarding_automatic_glossary(
     assert result.glossary == automatic
     assert translator.overrides == []
     assert result.published_path is None
+
+
+def test_duplicate_override_reports_conflicting_sources(tmp_path):
+    overrides, path = write_user_override(
+        tmp_path / "overrides",
+        "1399",
+        {"Qing dynasty": "清朝", "Qing Dynasty": "清朝"},
+    )
+
+    with pytest.raises(UserOverrideError) as raised:
+        overrides.load("1399")
+
+    assert str(raised.value) == (
+        "User override file contains duplicate Source terms ignoring case: "
+        f"'Qing dynasty' and 'Qing Dynasty' in {path}"
+    )
