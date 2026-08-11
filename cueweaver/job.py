@@ -262,6 +262,7 @@ class JobResult:
     glossary: Glossary = field(default_factory=Glossary)
     user_overrides: dict[str, str] = field(default_factory=dict)
     trace_path: Path | None = None
+    token_usage: dict[str, object] | None = None
 
     @property
     def status(self) -> str:
@@ -647,6 +648,7 @@ class JobRunner:
         self._job_work_directory: Path | None = None
         self._trace_writer: TraceWriter | None = None
         self._trace_path: Path | None = None
+        self._token_usage: dict[str, object] | None = None
 
     def cancel(self) -> None:
         """Cancel the active Job without publishing its partial translation."""
@@ -810,6 +812,7 @@ class JobRunner:
         self._job_work_directory = None
         self._trace_writer = None
         self._trace_path = None
+        self._token_usage = None
         self._reset_translator_for_job()
         self._reset_metadata_provider_for_job()
         media_path = Path(media).expanduser().resolve()
@@ -976,7 +979,7 @@ class JobRunner:
             self._intermediate_path = None
             self._translated_content = None
             record_state(JobState.PUBLISHED)
-            self._finish_trace("completed")
+            self._finish_trace("completed", token_usage=self._token_usage)
             return JobResult(
                 state=JobState.PUBLISHED,
                 lifecycle=tuple(lifecycle),
@@ -1002,6 +1005,7 @@ class JobRunner:
                 ),
                 user_overrides=user_overrides,
                 trace_path=self._trace_path,
+                token_usage=self._token_usage,
             )
         except (JobCanceled, JobError, OSError, SubtitleValidationError) as error:
             terminal_state = (
@@ -1015,6 +1019,7 @@ class JobRunner:
                         "canceled" if terminal_state is JobState.CANCELED else "failed",
                         error=str(error),
                         error_type=type(error).__name__,
+                        token_usage=self._token_usage,
                     )
                 except TraceWriteError as finish_error:
                     trace_error = finish_error
@@ -1049,6 +1054,7 @@ class JobRunner:
                 ),
                 user_overrides=user_overrides,
                 trace_path=self._trace_path,
+                token_usage=self._token_usage,
             )
         finally:
             if self._trace_writer is not None:
@@ -1057,6 +1063,7 @@ class JobRunner:
                         "failed",
                         error="Job terminated unexpectedly",
                         error_type="UnexpectedJobError",
+                        token_usage=self._token_usage,
                     )
                 except TraceWriteError:
                     self._trace_writer = None
@@ -1477,6 +1484,10 @@ class JobRunner:
         finally:
             with self._state_lock:
                 self._active_translator = None
+            token_usage = getattr(translator, "token_usage", None)
+            self._token_usage = (
+                dict(token_usage) if isinstance(token_usage, dict) else None
+            )
             self._intermediate_path = _get_intermediate_path(translator)
         self._raise_if_canceled()
         if isinstance(translated, (str, bytes, bytearray)):

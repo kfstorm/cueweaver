@@ -98,6 +98,7 @@ class PySubtransTranslator:
         if self.endpoint is None and self.provider == "Custom Server":
             self.endpoint = os.environ.get("CUSTOM_ENDPOINT")
         self.intermediate_path: Path | None = None
+        self.token_usage: dict[str, object] | None = None
         self._cancel_requested = Event()
         self._state_lock = Lock()
         self._active_engine: SubtitleTranslator | None = None
@@ -119,6 +120,7 @@ class PySubtransTranslator:
                 raise RuntimeError("Cannot reset an active translation")
             self._cancel_requested.clear()
             self.intermediate_path = None
+            self.token_usage = None
 
     def validate_configuration(self) -> None:
         """Fail before a Job gathers metadata when provider credentials are absent."""
@@ -155,6 +157,7 @@ class PySubtransTranslator:
         """Translate *source* and return the engine-produced subtitle bytes."""
 
         self.intermediate_path = None
+        self.token_usage = None
         source = Path(source).expanduser().resolve()
         static_terminology = _build_static_terminology(glossary, user_overrides)
         working_source = _prepare_working_source(
@@ -269,6 +272,8 @@ class PySubtransTranslator:
                 )
             raise
         finally:
+            if trace_session is not None:
+                self.token_usage = trace_session.aggregate_usage()
             try:
                 project.SaveProjectFile()
             finally:
@@ -334,6 +339,7 @@ class _TraceSession:
         self._current_batch: Any | None = None
         self._current_kind = "initial"
         self._current_parent: str | None = None
+        self._usage_totals: dict[str, object] | None = None
 
     def bind_batch(self, batch: Any) -> tuple[Any | None, str, str | None]:
         previous = self._current_batch, self._current_kind, self._current_parent
@@ -417,6 +423,7 @@ class _TraceSession:
                 (time.monotonic() - request_data["started_at"]) * 1000, 3
             ),
         )
+        self._add_usage(_token_usage(response_data))
 
     def fail_request(self, request: Any, error: BaseException) -> None:
         request_data = self._requests.get(id(request))
@@ -439,18 +446,28 @@ class _TraceSession:
             ),
         )
 
-    def record_chunk(self, request: Any, chunk: Mapping[str, Any]) -> None:
-        request_data = self._requests.get(id(request))
-        if request_data is None:
-            return
-        self.writer.write(
-            "response_chunk",
-            operation_id=request_data["operation_id"],
-            request_id=request_data["request_id"],
-            attempt=request_data["attempt"],
-            chunk=dict(chunk),
-            token_usage=_token_usage(chunk),
-        )
+    def aggregate_usage(self) -> dict[str, object] | None:
+        if self._usage_totals is None:
+            return None
+        return dict(self._usage_totals)
+
+    def _add_usage(self, usage: dict[str, object]) -> None:
+        if self._usage_totals is None:
+            self._usage_totals = {
+                "prompt_tokens": None,
+                "output_tokens": None,
+                "total_tokens": None,
+                "reasoning_tokens": None,
+            }
+        for key, value in usage.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            previous = self._usage_totals.get(key)
+            self._usage_totals[key] = (
+                value + previous
+                if isinstance(previous, (int, float)) and not isinstance(previous, bool)
+                else value
+            )
 
     def record_retry(self, message: str) -> None:
         request = self._current_request
@@ -661,6 +678,15 @@ def _install_trace_hooks(
 
     original_non_streaming = client._handle_non_streaming_request
 
+    original_process_api_response = client._process_api_response
+
+    def process_api_response(content: Mapping[str, Any], response: Any) -> Any:
+        processed = original_process_api_response(content, response)
+        _merge_provider_usage(processed, content)
+        return processed
+
+    client._process_api_response = process_api_response
+
     def handle_non_streaming(request_body: Mapping[str, Any]) -> Any:
         request = trace._current_request
         if request is None:
@@ -698,8 +724,8 @@ def _install_trace_hooks(
         chunk: Mapping[str, Any],
         accumulated_response: dict[str, Any],
     ) -> None:
-        trace.record_chunk(request, chunk)
         original_chunk(request, chunk, accumulated_response)
+        _merge_provider_usage(accumulated_response, chunk)
 
     client._process_streaming_chunk = process_chunk
 
@@ -719,18 +745,66 @@ def _token_usage(response: object) -> dict[str, object]:
         response = {}
     usage = response.get("usage")
     if isinstance(usage, Mapping):
-        return {
+        output_tokens = usage.get("completion_tokens")
+        if output_tokens is None:
+            output_tokens = usage.get("output_tokens")
+        token_usage = {
             "prompt_tokens": usage.get("prompt_tokens"),
-            "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
+            "output_tokens": output_tokens,
             "total_tokens": usage.get("total_tokens"),
-            "reasoning_tokens": usage.get("reasoning_tokens"),
+            "reasoning_tokens": _reasoning_tokens(usage),
         }
-    return {
+        _copy_cache_usage(token_usage, usage)
+        return token_usage
+    token_usage = {
         "prompt_tokens": response.get("prompt_tokens"),
         "output_tokens": response.get("output_tokens"),
         "total_tokens": response.get("total_tokens"),
         "reasoning_tokens": response.get("reasoning_tokens"),
     }
+    _copy_cache_usage(token_usage, response)
+    return token_usage
+
+
+def _merge_provider_usage(
+    response: dict[str, Any], provider_response: Mapping[str, Any]
+) -> None:
+    usage = provider_response.get("usage")
+    if not isinstance(usage, Mapping):
+        return
+    response.update(_token_usage(provider_response))
+
+
+def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
+    reasoning = usage.get("reasoning_tokens")
+    if reasoning is not None:
+        return reasoning
+    for details_key in ("completion_tokens_details", "output_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, Mapping) and "reasoning_tokens" in details:
+            return details["reasoning_tokens"]
+    return None
+
+
+def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) -> None:
+    for key, value in usage.items():
+        if (
+            "cache" in str(key).casefold()
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            token_usage[str(key)] = value
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        details = usage.get(details_key)
+        if not isinstance(details, Mapping):
+            continue
+        for key, value in details.items():
+            if (
+                "cache" in str(key).casefold()
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                token_usage[f"{details_key}.{key}"] = value
 
 
 def _retry_delay(message: str) -> float | None:

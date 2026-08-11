@@ -51,6 +51,14 @@ def test_terminal_flow_passes_debug_and_reports_trace_path(tmp_path, capsys):
                 published_path=tmp_path / "Movie.zh.srt",
                 no_op=False,
                 trace_path=trace,
+                token_usage={
+                    "prompt_tokens": 10,
+                    "output_tokens": 8,
+                    "total_tokens": 18,
+                    "reasoning_tokens": 3,
+                    "prompt_cache_hit_tokens": 4,
+                    "prompt_cache_miss_tokens": 6,
+                },
             )
 
     exit_code = main(
@@ -61,6 +69,10 @@ def test_terminal_flow_passes_debug_and_reports_trace_path(tmp_path, capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert f"  trace: {trace}" in captured.out
+    assert (
+        "  usage: input=10 output=8 reasoning=3 "
+        "prompt_cache_hit_tokens=4 prompt_cache_miss_tokens=6"
+    ) in captured.out
 
 
 def test_terminal_flow_reports_missing_target_language(tmp_path, monkeypatch, capsys):

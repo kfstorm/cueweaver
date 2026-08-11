@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
+from typing import TextIO
 
 from .job import (
     JobCanceled,
@@ -175,6 +176,8 @@ def main(
             print(f"  intermediate: {result.intermediate_path}", file=sys.stderr)
         if result.trace_path is not None:
             print(f"  trace: {result.trace_path}", file=sys.stderr)
+        if args.debug:
+            _display_usage(result.token_usage, file=sys.stderr)
         print("  published: no", file=sys.stderr)
         return 1
     if result.state is JobState.FAILED:
@@ -185,6 +188,8 @@ def main(
         )
         if result.trace_path is not None:
             print(f"  trace: {result.trace_path}", file=sys.stderr)
+        if args.debug:
+            _display_usage(result.token_usage, file=sys.stderr)
         return 1
 
     if result.metadata_degradation is not None:
@@ -203,6 +208,8 @@ def main(
     print(f"  no-op: {'yes' if result.no_op else 'no'}")
     if result.trace_path is not None:
         print(f"  trace: {result.trace_path}")
+    if args.debug:
+        _display_usage(result.token_usage)
     return 0
 
 
@@ -249,6 +256,30 @@ def _display_selection(selection: SourceSelection) -> None:
     if selection.reason is not None:
         message += f"; {selection.reason}"
     print(f"{message}]", file=sys.stderr)
+
+
+def _display_usage(
+    token_usage: dict[str, object] | None, *, file: TextIO | None = None
+) -> None:
+    if token_usage is None:
+        return
+    output = sys.stdout if file is None else file
+    common = {
+        "prompt_tokens": "input",
+        "output_tokens": "output",
+        "reasoning_tokens": "reasoning",
+    }
+    fields = [
+        f"{label}={token_usage.get(key, 'unknown')}" for key, label in common.items()
+    ]
+    fields.extend(
+        f"{key}={value}"
+        for key, value in token_usage.items()
+        if key
+        not in {"prompt_tokens", "output_tokens", "reasoning_tokens", "total_tokens"}
+        and value is not None
+    )
+    print(f"  usage: {' '.join(fields)}", file=output)
 
 
 if __name__ == "__main__":

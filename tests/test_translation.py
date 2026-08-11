@@ -36,6 +36,8 @@ def start_provider_server(
     block_scene: str | None = None,
     use_terminology: bool = False,
     include_dynamic_terminology: bool = False,
+    usage: dict | None = None,
+    usage_only_terminal: bool = False,
 ) -> tuple[ThreadingHTTPServer, Thread]:
     ProviderFixtureHandler.requests = []
     ProviderFixtureHandler.fail_after_first_request = fail_after_first_request
@@ -43,6 +45,8 @@ def start_provider_server(
     ProviderFixtureHandler.block_scene = block_scene
     ProviderFixtureHandler.use_terminology = use_terminology
     ProviderFixtureHandler.include_dynamic_terminology = include_dynamic_terminology
+    ProviderFixtureHandler.usage = usage or {}
+    ProviderFixtureHandler.usage_only_terminal = usage_only_terminal
     ProviderFixtureHandler.blocked_request_started = Event()
     ProviderFixtureHandler.release_block = Event()
     server = ThreadingHTTPServer(("127.0.0.1", 0), ProviderFixtureHandler)
@@ -72,6 +76,8 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
     block_scene: ClassVar[str | None] = None
     use_terminology: ClassVar[bool] = False
     include_dynamic_terminology: ClassVar[bool] = False
+    usage: ClassVar[dict] = {}
+    usage_only_terminal: ClassVar[bool] = False
     blocked_request_started: ClassVar[Event] = Event()
     release_block: ClassVar[Event] = Event()
 
@@ -117,7 +123,7 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
                     "finish_reason": "stop",
                 }
             ],
-            "usage": {},
+            "usage": type(self).usage,
         }
         if request.get("stream"):
             self.send_response(200)
@@ -137,12 +143,15 @@ class ProviderFixtureHandler(BaseHTTPRequestHandler):
                         }
                     ],
                 }
-                if index == len(chunks) - 1:
-                    payload["usage"] = {
+                if index == len(chunks) - 1 and not type(self).usage_only_terminal:
+                    payload["usage"] = type(self).usage or {
                         "prompt_tokens": 2,
                         "completion_tokens": 3,
                         "total_tokens": 5,
                     }
+                self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+            if type(self).usage_only_terminal:
+                payload = {"usage": type(self).usage}
                 self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             return
@@ -277,7 +286,7 @@ def test_pysubtrans_adapter_uses_resume_and_disabled_thinking(tmp_path, monkeypa
         thread.join(timeout=5)
 
 
-def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
+def test_debug_trace_records_default_deepseek_streaming_response(tmp_path):
     media = tmp_path / "Movie.mkv"
     source = tmp_path / "Movie.en.srt"
     media.write_bytes(b"media")
@@ -309,7 +318,7 @@ def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
         completed = [
             event for event in events if event["event"] == "response_completed"
         ]
-        assert chunks
+        assert chunks == []
         assert completed
         assert all(
             event["request_body"]["stream"] is True
@@ -324,6 +333,123 @@ def test_debug_trace_records_default_deepseek_streaming_chunks(tmp_path):
         }
         assert completed[-1]["response"]["text"]
         assert "fixture-secret" not in result.trace_path.read_text(encoding="utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_debug_trace_preserves_provider_usage_without_inventing_cache_fields(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server(
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 8,
+            "total_tokens": 18,
+            "completion_tokens_details": {"reasoning_tokens": 3},
+            "prompt_cache_hit_tokens": 4,
+            "prompt_cache_miss_tokens": 6,
+        },
+        usage_only_terminal=True,
+    )
+
+    try:
+        result = JobRunner(
+            translator=PySubtransTranslator(
+                provider="deepseek",
+                api_key="fixture-secret",
+                api_base=f"http://127.0.0.1:{server.server_port}",
+                model="fixture-model",
+            )
+        ).run(media, target_language="zh", source=source, debug=True)
+
+        assert result.state is JobState.PUBLISHED
+        assert result.token_usage == {
+            "prompt_tokens": 20,
+            "output_tokens": 16,
+            "total_tokens": 36,
+            "reasoning_tokens": 6,
+            "prompt_cache_hit_tokens": 8,
+            "prompt_cache_miss_tokens": 12,
+        }
+        assert result.trace_path is not None
+        events = [
+            json.loads(line)
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        ]
+        completed = next(
+            event for event in events if event["event"] == "response_completed"
+        )
+        assert completed["token_usage"] == {
+            "prompt_tokens": 10,
+            "output_tokens": 8,
+            "total_tokens": 18,
+            "reasoning_tokens": 3,
+            "prompt_cache_hit_tokens": 4,
+            "prompt_cache_miss_tokens": 6,
+        }
+        assert "prompt_cache_write_tokens" not in completed["token_usage"]
+        assert "response_chunk" not in [event["event"] for event in events]
+        assert events[-1]["token_usage"] == result.token_usage
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_debug_trace_aggregates_usage_for_completed_retry_attempts(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    source = tmp_path / "Movie.en.srt"
+    media.write_bytes(b"media")
+    source.write_text(SRT, encoding="utf-8")
+    server, thread = start_provider_server(
+        fail_transport_first_request=True,
+        usage={
+            "prompt_tokens": 2,
+            "completion_tokens": 3,
+            "total_tokens": 5,
+        },
+    )
+    monkeypatch.setattr(
+        "PySubtrans.Providers.Clients.CustomClient.time.sleep",
+        lambda _seconds: None,
+    )
+
+    try:
+        result = JobRunner(
+            translator=PySubtransTranslator(
+                provider="openai-compatible",
+                server_address=f"http://127.0.0.1:{server.server_port}",
+                endpoint="/v1/chat/completions",
+                model="fixture-model",
+            )
+        ).run(media, target_language="zh", source=source, debug=True)
+
+        assert result.state is JobState.PUBLISHED
+        assert result.token_usage == {
+            "prompt_tokens": 4,
+            "output_tokens": 6,
+            "total_tokens": 10,
+            "reasoning_tokens": None,
+        }
+        assert result.trace_path is not None
+        events = [
+            json.loads(line)
+            for line in result.trace_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert (
+            len([event for event in events if event["event"] == "attempt_started"]) == 3
+        )
+        assert (
+            len([event for event in events if event["event"] == "response_completed"])
+            == 2
+        )
+        assert events[-1]["token_usage"] == result.token_usage
     finally:
         server.shutdown()
         server.server_close()
