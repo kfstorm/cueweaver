@@ -60,7 +60,7 @@ class UserOverrideStore:
             )
 
         overrides: dict[str, str] = {}
-        seen_sources: set[str] = set()
+        seen_sources: dict[str, str] = {}
         for source, target in payload.items():
             if not isinstance(source, str) or not isinstance(target, str):
                 raise UserOverrideError(
@@ -74,11 +74,13 @@ class UserOverrideStore:
                     f"User override Sources and Targets must not be empty in {path}"
                 )
             source_key = source.casefold()
-            if source_key in seen_sources:
+            previous_source = seen_sources.get(source_key)
+            if previous_source is not None:
                 raise UserOverrideError(
-                    f"User override file contains duplicate Source terms: {path}"
+                    "User override file contains duplicate Source terms ignoring "
+                    f"case: {previous_source!r} and {source!r} in {path}"
                 )
-            seen_sources.add(source_key)
+            seen_sources[source_key] = source
             overrides[source] = target
         return dict(
             sorted(overrides.items(), key=lambda item: (item[0].casefold(), item[0]))
