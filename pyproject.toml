@@ -15,9 +15,6 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[project.scripts]
-cueweaver = "cueweaver.cli:main"
-
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",

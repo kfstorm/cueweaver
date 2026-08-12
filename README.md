@@ -1,274 +1,23 @@
 # CueWeaver
 
-CueWeaver is a self-hosted media subtitle translation tool. The first
-vertical slice runs one Media through a single Source Job.
+CueWeaver is a library for a local HTTP subtitle service. It exposes application
+components for exactly three synchronous JSON operations:
 
-## Run
+- `POST /api/discover`
+- `POST /api/extract`
+- `POST /api/translate`
 
-Use `uv` for the project environment:
+Requests use explicit container-local paths. Discovery reports External and
+Embedded subtitle candidates, extraction writes a selected text stream to an
+explicit path, and translation reads and writes explicit subtitle paths.
 
-```bash
-uv sync
-uv run cueweaver run /path/to/Movie.mkv --target-language zh
-```
+The project does not provide a CLI or an HTTP server startup entrypoint. An
+embedding service creates its own ASGI application with
+`cueweaver.create_app(cueweaver.CueWeaverApplication())`.
 
-Add `--debug` to record the PySubtrans translation interaction:
-
-```bash
-uv run cueweaver run /path/to/Movie.mkv --target-language zh --debug
-```
-
-## Configuration
-
-### Translation provider
-
-CueWeaver uses an OpenAI-compatible server by default. The server address and
-endpoint are required for a translated Job. The model and API key are
-optional. If no API key is configured, CueWeaver does not send an
-`Authorization` header; this is useful for local servers and endpoints that do
-not require authentication.
-
-```bash
-export CUEWEAVER_TRANSLATION_PROVIDER="openai-compatible"
-export CUEWEAVER_TRANSLATION_SERVER_ADDRESS="https://api.example.com"
-export CUEWEAVER_TRANSLATION_ENDPOINT="/v1/chat/completions"
-export CUEWEAVER_TRANSLATION_MODEL="your-model-name"
-export CUEWEAVER_TRANSLATION_API_KEY="your-api-key"  # Optional
-```
-
-For example, OpenCode Zen exposes an OpenAI-compatible chat endpoint:
-
-```bash
-export CUEWEAVER_TRANSLATION_SERVER_ADDRESS="https://opencode.ai/zen"
-export CUEWEAVER_TRANSLATION_ENDPOINT="/v1/chat/completions"
-export CUEWEAVER_TRANSLATION_MODEL="your-opencode-zen-model"
-export CUEWEAVER_TRANSLATION_API_KEY="your-opencode-zen-api-key"
-```
-
-CueWeaver-specific variables take precedence over the corresponding `CUSTOM_*`
-fallbacks:
-
-| CueWeaver variable | Fallback | Purpose |
-| --- | --- | --- |
-| `CUEWEAVER_TRANSLATION_PROVIDER` | None | Provider name; defaults to `openai-compatible` |
-| `CUEWEAVER_TRANSLATION_SERVER_ADDRESS` | `CUSTOM_SERVER_ADDRESS` | Server base URL |
-| `CUEWEAVER_TRANSLATION_ENDPOINT` | `CUSTOM_ENDPOINT` | Request path, such as `/v1/chat/completions` |
-| `CUEWEAVER_TRANSLATION_MODEL` | `CUSTOM_MODEL` | Model identifier sent in the request |
-| `CUEWEAVER_TRANSLATION_API_KEY` | `CUSTOM_API_KEY` | Optional bearer token |
-
-The provider also accepts `custom server` and `openai compatible` as provider
-aliases. API keys must contain only the key value; CueWeaver adds the `Bearer`
-prefix when it sends the header. Do not reuse a stale API key from the shell
-environment when testing an anonymous endpoint.
-
-### Command-line options
-
-The executable accepts `run` as an optional command prefix. The following
-options are available:
-
-| Option | Purpose |
-| --- | --- |
-| `--target-language LANG` | Required Target language; can use `CUEWEAVER_TARGET_LANGUAGE` |
-| `--source PATH_OR_ID` | Select an External subtitle path or Embedded subtitle identifier |
-| `--source-language LANG` | Override language inferred from the Source filename |
-| `--language-priority LANGS` | Comma-separated Source language tie-breaker, such as `en,ja`; can use `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` |
-| `--tmdb-series-id ID`, `--series-id ID` | TMDb series ID for Context gathering |
-| `--season-number N`, `--season N` | TMDb season number |
-| `--episode-number N`, `--episode N` | TMDb episode number |
-| `--refresh-metadata` | Ignore cached TMDb Context and fetch it again |
-| `--no-metadata-fetch` | Skip automatic Context and Glossary fetching, including the cache |
-| `--dynamic-terminology` | Enable dynamic terminology discovery |
-| `--no-dynamic-terminology` | Disable dynamic terminology discovery |
-| `--subtitle-terminology-filter` | Enable Source-wide subtitle terminology filtering |
-| `--no-subtitle-terminology-filter` | Disable subtitle terminology filtering |
-| `--debug` | Write a durable JSONL trace of translation requests |
-| `--user-override-directory PATH`, `--override-directory PATH` | Select the directory containing User override files |
-
-CLI switches take precedence over their environment-variable equivalents. A
-Target-language no-op does not require translation provider configuration.
-
-### Environment variables
-
-| Variable | Purpose |
-| --- | --- |
-| `CUEWEAVER_TARGET_LANGUAGE` | Target language when `--target-language` is omitted |
-| `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` | Comma-separated Source language priority when `--language-priority` is omitted |
-| `CUEWEAVER_WORK_DIRECTORY` | Root directory for durable Job workspaces and checkpoints |
-| `CUEWEAVER_SECONV` | Path to the `seconv` executable used for Embedded subtitle Extraction |
-| `CUEWEAVER_TMDB_API_KEY` | TMDb API key; falls back to `TMDB_API_KEY` |
-| `TMDB_API_KEY` | TMDb API key fallback |
-| `CUEWEAVER_METADATA_CACHE` | Metadata cache directory |
-| `CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP` | Dynamic terminology default: `true`, `false`, `yes`, `no`, `1`, or `0` |
-| `CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER` | Subtitle terminology filtering default: `true`, `false`, `yes`, `no`, `1`, or `0` |
-| `CUEWEAVER_USER_OVERRIDE_DIRECTORY` | User override directory when `--user-override-directory` is omitted |
-| `XDG_CACHE_HOME` | Base directory for default Job and metadata caches |
-| `XDG_CONFIG_HOME` | Base directory for default User override files |
-
-The `--dynamic-terminology` and `--no-dynamic-terminology` switches override
-`CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP`. The
-`--subtitle-terminology-filter` and `--no-subtitle-terminology-filter` switches
-override `CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER`. `--user-override-directory`
-overrides `CUEWEAVER_USER_OVERRIDE_DIRECTORY`.
-
-CueWeaver writes one durable `trace-<UTC timestamp>-<random suffix>.jsonl`
-file in the Job workspace and reports its path when the Job succeeds, fails,
-or is canceled. Trace files are retained with the workspace and are not
-automatically cleaned up. Debug tracing covers the built-in PySubtrans
-translation requests only; metadata requests and custom translators are not
-traced.
-
-Trace files use schema version 1. Each line has `schema_version`, `event`,
-`timestamp`, and `run_id`. Events are `run_started`, `attempt_started`,
-`response_completed`, `attempt_failed`,
-`retry_scheduled`, and `run_finished`. Request attempts can be correlated
-with `operation_id`, `request_id`, `batch_number`, `scene`, `attempt`, and
-`attempt_kind`; logical retries and batch splits include a parent operation.
-Request bodies, prompts, parsed responses, complete assembled streaming
-responses, token usage, and structured errors may be recorded. Streaming
-usage-only terminal chunks are folded into the complete response; individual
-chunks are not recorded. API keys,
-authorization headers, settings, and other transport credentials are
-excluded. The trace is not a redacted subtitle copy: subtitle content,
-Context, Glossary, and provider response text may be written to it. Protect
-trace files with the same care as the source subtitles.
-
-CLI summaries report aggregate billing dimensions from completed provider
-attempts whenever the provider reports token usage; this does not depend on
-`--debug`. The `--debug` flag additionally retains the raw request trace
-described above. The summary uses `input`, `output`, `cache_read`, and
-`cache_write`; `input` is the non-cached input portion. Provider fields such as
-`prompt_tokens`, `reasoning_tokens`, and `prompt_cache_miss_tokens` are raw
-usage details, not additional charges. Reasoning tokens are a subset of
-output and are never added to output again. Retries are counted once per
-completed API attempt, while streaming chunks are never counted separately.
-Missing cache fields are not invented. Cache-read and cache-write values are
-reported only when the provider supplies a recognized field.
-
-The Target language is required and has no product default. It can also be
-configured for a shell session with `CUEWEAVER_TARGET_LANGUAGE`. A subtitle
-named after the Media, such as `Movie.zh.srt`, `Movie.en.ass`, or
-`Movie.vtt`, is discovered automatically when it is the only eligible
-External subtitle. MKV and MP4 Embedded subtitles are listed from container
-metadata with `ffprobe`; install FFmpeg so `ffprobe` is available. Text
-Embedded Sources require an explicit selection and are
-materialized lazily through `seconv` into the configured Job work directory's
-Extraction cache. Bitmap
-Sources are listed as disabled because Subtitle OCR is outside v0.1. Durable
-Job files are kept outside the Media directory under
-`$XDG_CACHE_HOME/cueweaver/jobs` or `~/.cache/cueweaver/jobs`; set
-`CUEWEAVER_WORK_DIRECTORY` to choose another root. Set `CUEWEAVER_SECONV` when
-`seconv` is not on `PATH`.
-Use `--language-priority en,ja` or `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` to
-break same-cost Source ties without content sniffing.
-
-The terminal lists every discovered Source with its label, subtype, I/O cost,
-and availability. It then reports the selected Source exactly once, including
-whether the choice was explicit, automatic, or interactive. Automatic choices
-also state the primary reason, such as the lowest I/O cost or a language
-priority. Candidate lists, selection messages, and lifecycle progress are
-written to stderr; the final successful Job summary is written to stdout.
-During a Job, progress reports each lifecycle transition once: `discovered`,
-`extracting`, `metadata`, `translating`, `validating`, `publishing`, and the
-terminal `published`, `failed`, or `canceled` state when applicable. Progress
-does not include prompts, API keys, or subtitle payloads. A canceled Job is not
-published automatically; when an intermediate result is retained, its path is
-reported for an explicit follow-up decision.
-
-For an episode Job, pass `--tmdb-series-id`, `--season`, and `--episode` to
-gather the full TMDb series and episode overviews as Context before
-translation. Set `CUEWEAVER_TMDB_API_KEY` (or `TMDB_API_KEY`) for TMDb access.
-Successful Context is cached by the resolved series QID when available (with
-the provider series ID as a fallback) in the long-lived user cache at
-`$XDG_CACHE_HOME/cueweaver/metadata` or `~/.cache/cueweaver/metadata`; set
-`CUEWEAVER_METADATA_CACHE` to choose another location. The cache has no expiry
-or polling. Use `--refresh-metadata` for an explicit refresh. Use
-`--no-metadata-fetch` to skip the entire automatic metadata stage; this ignores
-both cached and provider-supplied Context and Glossary Terms while preserving
-User overrides. A missing key or provider failure is reported as a metadata
-degradation hint and the Job continues with baseline translation and no fetched
-metadata.
-For an already-published degraded Job, `JobRunner.retry_metadata` refreshes the
-metadata cache without invoking translation again or changing the published
-baseline artifact.
-
-The same metadata stage builds an automatic Glossary from series-linked
-Wikidata entities in the configured Target language. It includes only
-structured entity evidence for characters, organizations/factions, locations,
-and species, and records each Term's provider, source URL, and entity ID.
-Missing target labels may use an exact structured Wikipedia `langlinks`/
-`pageprops` lookup; article prose, tables, and subtitle content are never
-scraped. Ambiguous or unsupported mappings are dropped, so a series with no
-usable relations continues with an empty Glossary and baseline translation.
-Glossary Terms are cached at the same series scope and seeded into PySubtrans;
-dynamic terminology learning remains enabled for uncovered terms. Use
-`--no-dynamic-terminology` or set
-`CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP=false` to disable it for a Job. The paired
-`--dynamic-terminology` option explicitly enables it, and an explicit CLI value
-overrides the environment variable. The environment variable accepts
-`true`/`false`, `yes`/`no`, and `1`/`0`.
-
-Dynamic terminology discovery can make later prompts grow as new mappings are
-learned, increasing token usage. Disabling it keeps prompts deterministic from
-the static Glossary and User override seeds, which can improve consistency and
-prefix-cache reuse, but uncovered terms will not be learned between batches.
-The two modes use separate Job checkpoints.
-
-Subtitle terminology filtering is enabled by default. Before translation,
-CueWeaver passes PySubtrans only the Glossary and User override Terms whose
-source phrases occur lexically in the complete Source subtitle document. This
-applies to both episode and film Sources; filtering is not performed per
-translation batch. Use `--no-subtitle-terminology-filter` or set
-`CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER=false` to pass the full terminology map
-instead. The paired `--subtitle-terminology-filter` option explicitly enables
-filtering, and an explicit CLI value overrides the environment variable. The
-environment variable accepts `true`/`false`, `yes`/`no`, and `1`/`0`.
-
-User overrides are loaded from one JSON file per scope. By default, files live
-under `$XDG_CONFIG_HOME/cueweaver/overrides` or `~/.config/cueweaver/overrides`;
-set `CUEWEAVER_USER_OVERRIDE_DIRECTORY` or pass
-`--user-override-directory` to choose another directory. Name a series file
-`<series-id>.json`; a film uses its Media stem, such as `Movie.json` (scoped
-names that need filesystem sanitization receive a short digest suffix). Each
-file is a JSON object mapping Source terms to Target-language terms:
-There is no global override file.
-Without an explicitly selected directory, a missing scope file means that no
-User override is defined. When a directory is explicitly selected, the scope
-file is required; use `{}` for a scope with no mappings.
-
-```json
-{
-  "Jon Snow": "Custom name"
-}
-```
-
-The User override seed wins over automatic Terms and PySubtrans's dynamic
-learning. Automatic Term provenance remains available in the Job result. A
-malformed override file fails the Job with the file path and validation error;
-the automatic Glossary is not discarded.
-
-If the Source language already matches the Target language, the Job skips the
-translator, validates the subtitle structure, and atomically publishes the
-result beside the Media. SRT, ASS, and VTT are supported. A non-Target-language
-Source uses PySubtrans 1.6.0 with scene/batch translation, rolling context, and
-resume checkpoints before the same Validation and Publishing stages.
-
-The default provider is an OpenAI-compatible server. Set
-`CUEWEAVER_TRANSLATION_SERVER_ADDRESS` and
-`CUEWEAVER_TRANSLATION_ENDPOINT`, or select it explicitly with
-`CUEWEAVER_TRANSLATION_PROVIDER=openai-compatible`. The model and API key are
-optional; when no API key is configured, CueWeaver does not send an
-`Authorization` header. CueWeaver sends
-`thinking: {"type": "disabled"}` for the v0.1 fast/low-cost seam. PySubtrans
-checkpoint files are kept in CueWeaver's per-Job user cache workspace so a
-completed batch is not sent again on a later Job. No temporary CueWeaver files
-are written beside the Media.
-
-The adapter also accepts PySubtrans's Custom Server settings through
-`CUSTOM_API_KEY`, `CUSTOM_MODEL`, `CUSTOM_SERVER_ADDRESS`, and
-`CUSTOM_ENDPOINT`.
-Before a translated Job gathers metadata, CueWeaver verifies that the selected
-provider has the required server configuration. A Target-language no-op does
-not require translation provider configuration.
+Translation provider configuration remains PySubtrans service-process
+configuration. CueWeaver does not add provider configuration request fields or
+CueWeaver-specific environment-variable fallbacks.
 
 ## Test
 
@@ -276,23 +25,8 @@ not require translation provider configuration.
 uv run pytest
 ```
 
-## Development checks
-
-Install the development dependencies and the local Git hook:
+## Development Checks
 
 ```bash
-uv sync --group dev
-uv run pre-commit install
-```
-
-Run every pre-commit check manually:
-
-```bash
-uv run pre-commit run --all-files
-```
-
-Run the quality checks without changing files:
-
-```bash
-./scripts/lint.sh --check
+scripts/lint.sh --check
 ```
