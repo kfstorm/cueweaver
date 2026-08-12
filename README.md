@@ -132,16 +132,17 @@ excluded. The trace is not a redacted subtitle copy: subtitle content,
 Context, Glossary, and provider response text may be written to it. Protect
 trace files with the same care as the source subtitles.
 
-CLI summaries report aggregate usage from completed provider attempts whenever
-the provider reports token usage; this does not depend on `--debug`. The
-`--debug` flag additionally retains the request trace described above. Input
-and output counts use the provider's
-`prompt_tokens` and `completion_tokens`/`output_tokens` values; reasoning
-tokens are a subset of output and are never added to output again. Retries
-are counted once per completed API attempt, while streaming chunks are never
-counted separately. Cache usage fields, such as `prompt_cache_hit_tokens` and
-`prompt_cache_miss_tokens`, are preserved only when returned by the provider.
-Missing fields are not inferred.
+CLI summaries report aggregate billing dimensions from completed provider
+attempts whenever the provider reports token usage; this does not depend on
+`--debug`. The `--debug` flag additionally retains the raw request trace
+described above. The summary uses `input`, `output`, `cache_read`, and
+`cache_write`; `input` is the non-cached input portion. Provider fields such as
+`prompt_tokens`, `reasoning_tokens`, and `prompt_cache_miss_tokens` are raw
+usage details, not additional charges. Reasoning tokens are a subset of
+output and are never added to output again. Retries are counted once per
+completed API attempt, while streaming chunks are never counted separately.
+Missing cache fields are not invented. Cache-read and cache-write values are
+reported only when the provider supplies a recognized field.
 
 The Target language is required and has no product default. It can also be
 configured for a shell session with `CUEWEAVER_TARGET_LANGUAGE`. A subtitle

@@ -428,10 +428,10 @@ def test_non_debug_translation_preserves_usage_without_creating_trace(tmp_path):
 
         assert result.state is JobState.PUBLISHED
         assert result.token_usage == {
-            "prompt_tokens": 4,
+            "input_tokens": 4,
             "output_tokens": 6,
-            "total_tokens": 10,
-            "reasoning_tokens": None,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
         }
         assert result.trace_path is None
     finally:
@@ -453,8 +453,8 @@ def test_debug_trace_preserves_openai_compatible_cache_usage(tmp_path):
             "completion_tokens_details": {"reasoning_tokens": 3},
             "prompt_cache_hit_tokens": 4,
             "prompt_cache_miss_tokens": 6,
-            "prompt_cache_write_tokens": 99,
-            "prompt_tokens_details": {"cache_write_tokens": 99},
+            "prompt_cache_write_tokens": 1,
+            "prompt_tokens_details": {"cache_write_tokens": 1},
         },
         usage_only_terminal=True,
     )
@@ -472,14 +472,10 @@ def test_debug_trace_preserves_openai_compatible_cache_usage(tmp_path):
 
         assert result.state is JobState.PUBLISHED
         assert result.token_usage == {
-            "prompt_tokens": 20,
+            "input_tokens": 10,
             "output_tokens": 16,
-            "total_tokens": 36,
-            "reasoning_tokens": 6,
-            "prompt_cache_hit_tokens": 8,
-            "prompt_cache_miss_tokens": 12,
-            "prompt_cache_write_tokens": 198,
-            "prompt_tokens_details.cache_write_tokens": 198,
+            "cache_read_tokens": 8,
+            "cache_write_tokens": 2,
         }
         assert result.trace_path is not None
         events = [
@@ -496,8 +492,8 @@ def test_debug_trace_preserves_openai_compatible_cache_usage(tmp_path):
             "reasoning_tokens": 3,
             "prompt_cache_hit_tokens": 4,
             "prompt_cache_miss_tokens": 6,
-            "prompt_cache_write_tokens": 99,
-            "prompt_tokens_details.cache_write_tokens": 99,
+            "prompt_cache_write_tokens": 1,
+            "prompt_tokens_details.cache_write_tokens": 1,
         }
         assert "response_chunk" not in [event["event"] for event in events]
         assert events[-1]["token_usage"] == result.token_usage
@@ -553,7 +549,7 @@ def test_debug_trace_preserves_non_streaming_output_usage(tmp_path):
             "reasoning_tokens": 2,
             "prompt_tokens_details": {
                 "cached_tokens": 5,
-                "cache_write_tokens": 99,
+                "cache_write_tokens": 1,
             },
         }
     )
@@ -570,12 +566,10 @@ def test_debug_trace_preserves_non_streaming_output_usage(tmp_path):
 
         assert result.state is JobState.PUBLISHED
         assert result.token_usage == {
-            "prompt_tokens": 22,
-            "output_tokens": 14,
-            "total_tokens": 36,
-            "reasoning_tokens": 4,
-            "prompt_tokens_details.cached_tokens": 10,
-            "prompt_tokens_details.cache_write_tokens": 198,
+            "input_tokens": 10,
+            "output_tokens": 18,
+            "cache_read_tokens": 10,
+            "cache_write_tokens": 2,
         }
         assert result.trace_path is not None
         events = [
@@ -588,7 +582,7 @@ def test_debug_trace_preserves_non_streaming_output_usage(tmp_path):
         assert len(completed) == 2
         assert all(event["token_usage"]["output_tokens"] == 7 for event in completed)
         assert all(
-            event["token_usage"]["prompt_tokens_details.cache_write_tokens"] == 99
+            event["token_usage"]["prompt_tokens_details.cache_write_tokens"] == 1
             for event in completed
         )
     finally:
@@ -629,10 +623,10 @@ def test_debug_trace_aggregates_usage_for_completed_retry_attempts(
 
         assert result.state is JobState.PUBLISHED
         assert result.token_usage == {
-            "prompt_tokens": 4,
+            "input_tokens": 4,
             "output_tokens": 6,
-            "total_tokens": 10,
-            "reasoning_tokens": None,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
         }
         assert result.trace_path is not None
         events = [

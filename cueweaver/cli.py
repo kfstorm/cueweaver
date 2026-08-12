@@ -280,21 +280,16 @@ def _display_usage(
         return
     output = sys.stdout if file is None else file
     usage_labels = {
-        "prompt_tokens": "input",
+        "input_tokens": "input",
         "output_tokens": "output",
-        "reasoning_tokens": "reasoning",
+        "cache_read_tokens": "cache_read",
+        "cache_write_tokens": "cache_write",
     }
     fields = [
-        f"{label}={token_usage.get(key, 'unknown')}"
+        f"{label}={value}"
         for key, label in usage_labels.items()
+        if (value := token_usage.get(key)) is not None
     ]
-    fields.extend(
-        f"{key}={value}"
-        for key, value in token_usage.items()
-        if key
-        not in {"prompt_tokens", "output_tokens", "reasoning_tokens", "total_tokens"}
-        and value is not None
-    )
     print(f"  usage: {' '.join(fields)}", file=output)
 
 
