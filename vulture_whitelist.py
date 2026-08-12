@@ -19,3 +19,8 @@ MetadataProvider.get_series_title
 MetadataProvider.get_episode_title
 TMDbMetadataProvider.get_series_title
 TMDbMetadataProvider.get_episode_title
+
+# HTTP application contracts are public adapter APIs.
+TranslateRequest.subtitle_path
+TranslateRequest.term_map_path
+create_app
