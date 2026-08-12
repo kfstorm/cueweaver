@@ -8,3 +8,6 @@ CueWeaverApplication
 TranslateRequest.subtitle_path
 TranslateRequest.term_map_path
 create_app
+
+# Pydantic reads request-model configuration dynamically.
+RequestBody.model_config

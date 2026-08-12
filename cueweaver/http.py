@@ -24,17 +24,21 @@ from .application import (
 )
 
 
-class DiscoverBody(BaseModel):
+class RequestBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class DiscoverBody(RequestBody):
     media_path: str = Field(min_length=1)
 
 
-class ExtractBody(BaseModel):
+class ExtractBody(RequestBody):
     media_path: str = Field(min_length=1)
     stream_index: int = Field(strict=True)
     output_path: str = Field(min_length=1)
 
 
-class TranslateBody(BaseModel):
+class TranslateBody(RequestBody):
     subtitle_path: str = Field(min_length=1)
     target_language_code: str = Field(min_length=1)
     output_path: str = Field(min_length=1)

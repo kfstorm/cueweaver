@@ -583,6 +583,23 @@ def test_http_translate_uses_error_envelope_for_invalid_requests(body):
     assert set(response.json()).issuperset({"error_code", "message", "field"})
 
 
+@pytest.mark.parametrize("removed_field", ["media_path", "source_language", "no_op"])
+def test_http_translate_rejects_removed_request_fields(removed_field):
+    response = TestClient(create_app(ApplicationFixture())).post(
+        "/api/translate",
+        json={
+            "subtitle_path": "/work/Movie.srt",
+            "target_language_code": "zh-Hans",
+            "output_path": "/media/Movie.zh.srt",
+            "work_directory": "/work/job-123",
+            removed_field: "removed",
+        },
+    )
+
+    assert response.status_code >= 400
+    assert response.json()["field"] == removed_field
+
+
 @pytest.mark.parametrize(
     ("term_map_content", "expected_code"),
     [

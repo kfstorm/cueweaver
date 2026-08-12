@@ -1,15 +1,16 @@
 # CueWeaver
 
-CueWeaver is a library for a local HTTP subtitle service. It exposes application
-components for exactly three synchronous JSON operations:
+CueWeaver is a library for a local HTTP subtitle service. Deploy it behind an
+ASGI server with media and working directories mounted into that server's
+container. Every path in a request is a path in that container. It exposes
+exactly three synchronous JSON operations:
 
 - `POST /api/discover`
 - `POST /api/extract`
 - `POST /api/translate`
 
-Requests use explicit container-local paths. Discovery reports External and
-Embedded subtitle candidates, extraction writes a selected text stream to an
-explicit path, and translation reads and writes explicit subtitle paths.
+Each request receives one final JSON response. There are no Job, event-stream,
+or cancellation APIs.
 
 The project does not provide a CLI or an HTTP server startup entrypoint. An
 embedding service creates its own ASGI application with
@@ -18,6 +19,119 @@ embedding service creates its own ASGI application with
 Translation provider configuration remains PySubtrans service-process
 configuration. CueWeaver does not add provider configuration request fields or
 CueWeaver-specific environment-variable fallbacks.
+
+## HTTP Contract
+
+All requests use `application/json`. Successful requests return HTTP 200 and
+the JSON shapes below. Failures return JSON with at least `error_code` and
+`message`; path and stream context may also be included. Clients must not rely
+on a specific status code or fine-grained error-code string.
+
+Unknown request fields are rejected. In particular, there are no `media_path`,
+`source_language`, or `no_op` fields on translation requests.
+
+### Discover
+
+`POST /api/discover` accepts:
+
+```json
+{"media_path":"/media/Movie.mkv"}
+```
+
+It returns:
+
+```json
+{
+  "media_path":"/media/Movie.mkv",
+  "candidates":[
+    {
+      "kind":"external",
+      "path":"/media/Movie.en.forced.srt",
+      "format":"srt",
+      "tags":{"language":"en","title":""}
+    },
+    {
+      "kind":"embedded",
+      "stream_index":3,
+      "format":"ass",
+      "tags":{"language":"zhs","title":"Chinese Simplified"}
+    }
+  ],
+  "unsupported_candidates":[
+    {"kind":"embedded","stream_index":4,"reason":"bitmap subtitle"}
+  ]
+}
+```
+
+Candidates are usable External or text Embedded subtitles. External subtitles
+are same-stem `.srt`, `.ass`, or `.vtt` files beside the Media. Their language
+tag is the first non-empty dot-separated suffix after the Media stem and
+subtitle extension, and their title is `""`. Embedded tags are raw ffprobe
+`language` and `title` values; missing values are `""`. Unsupported subtitle
+streams, including Bitmap subtitles, appear separately in
+`unsupported_candidates`. ffprobe failure fails the whole request.
+
+### Extract
+
+`POST /api/extract` accepts:
+
+```json
+{
+  "media_path":"/media/Movie.mkv",
+  "stream_index":3,
+  "output_path":"/work/Movie.en.ass"
+}
+```
+
+It returns:
+
+```json
+{"output_path":"/work/Movie.en.ass","format":"ass"}
+```
+
+Extraction probes the requested Embedded stream then performs lossless
+same-format ffmpeg extraction. Supported mappings are `subrip` and `srt` to
+`.srt`, `ass` and `ssa` to `.ass`, and `webvtt` to `.vtt`. Bitmap/OCR and other
+codecs are rejected. The output extension must match the stream format; missing
+output parent directories are created; existing outputs are never overwritten.
+
+### Translate
+
+`POST /api/translate` accepts:
+
+```json
+{
+  "subtitle_path":"/work/Movie.en.srt",
+  "target_language_code":"zh-Hans",
+  "output_path":"/media/Movie.zh.srt",
+  "work_directory":"/work/requests/123",
+  "term_map_path":"/work/terms.json",
+  "dynamic_terminology_enabled":true,
+  "subtitle_terminology_filter_enabled":true
+}
+```
+
+`subtitle_path`, `target_language_code`, `output_path`, and `work_directory`
+are required non-empty strings. `term_map_path` is optional. Both terminology
+flags default to `true`. A term map is an explicit JSON object whose keys and
+values are non-empty strings; CueWeaver performs no automatic or network term
+map lookup.
+
+It returns only after translation, subtitle validation, and writing the output:
+
+```json
+{
+  "output_path":"/media/Movie.zh.srt",
+  "target_language_code":"zh-Hans",
+  "format":"srt"
+}
+```
+
+Input and output must use the same supported subtitle extension and valid
+content. Missing output parents and the work directory are created. Existing
+outputs are never overwritten. CueWeaver forwards the non-empty
+`target_language_code` unchanged to PySubtrans and does not normalize, map, or
+infer it.
 
 ## Test
 
