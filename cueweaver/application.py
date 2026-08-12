@@ -139,6 +139,63 @@ class CueWeaverApplication:
             unsupported_candidates=unsupported,
         )
 
+    def extract(self, request: ExtractRequest) -> ExtractResult:
+        media_path = request.media_path
+        _require_readable_media(media_path)
+        output_format = _output_format(request.output_path)
+        _prepare_output_path(request.output_path)
+
+        streams = _probe_subtitle_streams(media_path)
+        stream = next(
+            (
+                stream
+                for stream in streams
+                if _stream_index(stream) == request.stream_index
+            ),
+            None,
+        )
+        if stream is None:
+            raise ServiceError(
+                "stream_not_found",
+                "Embedded subtitle stream was not found",
+                stream_index=request.stream_index,
+            )
+        codec = str(stream.get("codec_name", "")).casefold()
+        stream_format = _EXTRACT_CODEC_FORMATS.get(codec)
+        if stream_format is None:
+            raise ServiceError(
+                "unsupported_stream",
+                "Embedded subtitle stream is not a supported text format",
+                stream_index=request.stream_index,
+            )
+        if stream_format != output_format:
+            raise ServiceError(
+                "format_mismatch",
+                "Output format must match the Embedded subtitle stream format",
+                stream_index=request.stream_index,
+            )
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(media_path),
+                    "-map",
+                    f"0:{request.stream_index}",
+                    "-c:s",
+                    "copy",
+                    str(request.output_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise ServiceError("extraction_failed", "ffmpeg failed") from error
+        return ExtractResult(output_path=request.output_path, format=output_format)
+
 
 _TEXT_CODEC_FORMATS = {
     "ass": "ass",
@@ -151,8 +208,53 @@ _TEXT_CODEC_FORMATS = {
     "hdmv_text_subtitle": "srt",
     "substation_alpha": "ass",
 }
+_EXTRACT_CODEC_FORMATS = {
+    "ass": "ass",
+    "ssa": "ass",
+    "subrip": "srt",
+    "srt": "srt",
+    "webvtt": "vtt",
+}
 _BITMAP_CODECS = frozenset({"dvd_subtitle", "hdmv_pgs_subtitle", "pgssub"})
 _EXTERNAL_FORMATS = {".srt": "srt", ".ass": "ass", ".vtt": "vtt"}
+
+
+def _require_readable_media(media_path: Path) -> None:
+    if not media_path.is_file():
+        raise ServiceError("media_not_found", "Media does not exist", path=media_path)
+    try:
+        with media_path.open("rb"):
+            pass
+    except OSError as error:
+        raise ServiceError(
+            "media_unreadable", "Media cannot be read", path=media_path
+        ) from error
+
+
+def _output_format(output_path: Path) -> str:
+    output_format = _EXTERNAL_FORMATS.get(output_path.suffix.casefold())
+    if output_format is None:
+        raise ServiceError(
+            "unsupported_output_format",
+            "Output path must use a supported subtitle extension",
+            path=output_path,
+        )
+    return output_format
+
+
+def _prepare_output_path(output_path: Path) -> None:
+    if output_path.exists():
+        raise ServiceError(
+            "output_exists", "Output path already exists", path=output_path
+        )
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ServiceError(
+            "invalid_output_path",
+            "Output directory cannot be created",
+            path=output_path,
+        ) from error
 
 
 def _discover_external_subtitles(

@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cueweaver.application import (
@@ -243,3 +244,257 @@ def test_http_discovery_uses_error_envelope_when_ffprobe_fails(tmp_path, monkeyp
 
     assert response.status_code >= 400
     assert set(response.json()).issuperset({"error_code", "message"})
+
+
+@pytest.mark.parametrize(
+    ("codec", "extension", "format"),
+    [("subrip", "srt", "srt"), ("ssa", "ass", "ass"), ("webvtt", "vtt", "vtt")],
+)
+def test_http_extracts_a_matching_text_embedded_subtitle(
+    tmp_path, monkeypatch, codec, extension, format
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    output = tmp_path / "work" / f"Movie.en.{extension}"
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[0] == "ffprobe":
+            return type(
+                "CompletedProcessFixture",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {"streams": [{"index": 3, "codec_name": codec}]}
+                    )
+                },
+            )()
+        output.write_text("[Events]\n", encoding="utf-8")
+        return type("CompletedProcessFixture", (), {"stdout": ""})()
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", run)
+
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(output),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"output_path": str(output), "format": format}
+    assert commands[1] == [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        str(media),
+        "-map",
+        "0:3",
+        "-c:s",
+        "copy",
+        str(output),
+    ]
+
+
+def test_http_extract_uses_error_envelope_for_invalid_requests(tmp_path):
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(tmp_path / "Movie.mkv"),
+            "stream_index": "3",
+            "output_path": str(tmp_path / "Movie.srt"),
+        },
+    )
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message", "field"})
+    assert response.json()["field"] == "stream_index"
+
+
+def test_http_extract_uses_error_envelope_for_invalid_media_and_output_paths(tmp_path):
+    missing = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(tmp_path / "missing.mkv"),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie.srt"),
+        },
+    )
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    (tmp_path / "not-a-directory").write_text("file", encoding="utf-8")
+    invalid_output = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "not-a-directory" / "Movie.srt"),
+        },
+    )
+
+    assert missing.status_code >= 400
+    assert set(missing.json()).issuperset({"error_code", "message"})
+    assert invalid_output.status_code >= 400
+    assert set(invalid_output.json()).issuperset({"error_code", "message"})
+
+
+def test_http_extract_uses_error_envelope_for_existing_or_unsupported_outputs(tmp_path):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    output = tmp_path / "Movie.srt"
+    output.write_text("existing", encoding="utf-8")
+
+    existing = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(output),
+        },
+    )
+    unsupported = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie.txt"),
+        },
+    )
+
+    assert existing.status_code >= 400
+    assert set(existing.json()).issuperset({"error_code", "message"})
+    assert unsupported.status_code >= 400
+    assert set(unsupported.json()).issuperset({"error_code", "message"})
+
+
+def test_http_extract_uses_error_envelope_for_stream_and_process_failures(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+
+    def unsupported_stream(*_args, **_kwargs):
+        return type(
+            "CompletedProcessFixture",
+            (),
+            {
+                "stdout": json.dumps(
+                    {"streams": [{"index": 3, "codec_name": "hdmv_pgs_subtitle"}]}
+                )
+            },
+        )()
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", unsupported_stream)
+    bitmap = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie.srt"),
+        },
+    )
+
+    def failed_process(command, **_kwargs):
+        if command[0] == "ffprobe":
+            return type(
+                "CompletedProcessFixture",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {"streams": [{"index": 3, "codec_name": "subrip"}]}
+                    )
+                },
+            )()
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", failed_process)
+    failed = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie2.srt"),
+        },
+    )
+
+    assert bitmap.status_code >= 400
+    assert set(bitmap.json()).issuperset({"error_code", "message"})
+    assert failed.status_code >= 400
+    assert set(failed.json()).issuperset({"error_code", "message"})
+
+
+def test_http_extract_rejects_codecs_outside_the_explicit_mapping(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+
+    def unsupported_stream(*_args, **_kwargs):
+        return type(
+            "CompletedProcessFixture",
+            (),
+            {
+                "stdout": json.dumps(
+                    {"streams": [{"index": 3, "codec_name": "mov_text"}]}
+                )
+            },
+        )()
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", unsupported_stream)
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie.srt"),
+        },
+    )
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message"})
+
+
+def test_http_extract_uses_error_envelope_for_format_mismatch_and_ffprobe_failure(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+
+    def mismatched_stream(*_args, **_kwargs):
+        return type(
+            "CompletedProcessFixture",
+            (),
+            {"stdout": json.dumps({"streams": [{"index": 3, "codec_name": "ass"}]})},
+        )()
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", mismatched_stream)
+    mismatch = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie.srt"),
+        },
+    )
+
+    def failed_probe(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, "ffprobe")
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", failed_probe)
+    failed = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/extract",
+        json={
+            "media_path": str(media),
+            "stream_index": 3,
+            "output_path": str(tmp_path / "Movie2.srt"),
+        },
+    )
+
+    assert mismatch.status_code >= 400
+    assert set(mismatch.json()).issuperset({"error_code", "message"})
+    assert failed.status_code >= 400
+    assert set(failed.json()).issuperset({"error_code", "message"})
