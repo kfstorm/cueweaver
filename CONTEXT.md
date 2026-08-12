@@ -1,8 +1,9 @@
 # CueWeaver
 
 CueWeaver is a library for a locally deployed HTTP subtitle service. An
-embedding ASGI server exposes discovery, extraction, and translation over
-explicit container-local paths.
+embedding ASGI server exposes `POST /api/discover`, `POST /api/extract`, and
+`POST /api/translate` over explicit container-local paths. Media and working
+directories are mounted into the server container.
 
 ## Language
 
