@@ -9,5 +9,8 @@ TranslateRequest.subtitle_path
 TranslateRequest.term_map_path
 create_app
 
+# FastAPI middleware callbacks are registered dynamically by the decorator.
+require_json_content_type
+
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
