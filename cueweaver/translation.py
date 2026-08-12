@@ -34,7 +34,7 @@ class PySubtransTranslator:
         subtitle_terminology_filter_enabled: bool = True,
     ) -> bytes:
         source = Path(source).expanduser().resolve()
-        source_text = source.read_text(encoding="utf-8-sig")
+        source_text = source.read_text(encoding="utf-8-sig", errors="replace")
         working_source = _prepare_working_source(
             source, target_language, user_overrides, work_directory
         )
