@@ -30,7 +30,7 @@ class DiscoverBody(BaseModel):
 
 class ExtractBody(BaseModel):
     media_path: str = Field(min_length=1)
-    stream_index: int
+    stream_index: int = Field(strict=True)
     output_path: str = Field(min_length=1)
 
 
