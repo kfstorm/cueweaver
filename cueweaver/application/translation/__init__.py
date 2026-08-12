@@ -1,0 +1,123 @@
+"""Translation operation and its contracts."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+from ...subtitle_formats import matching_format
+from ..errors import ServiceError
+
+
+@dataclass(frozen=True)
+class TranslateRequest:
+    subtitle_path: Path
+    target_language_code: str
+    output_path: Path
+    work_directory: Path
+    term_map_path: Path | None = None
+    dynamic_terminology_enabled: bool = True
+    subtitle_terminology_filter_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class TranslateResult:
+    output_path: Path
+    target_language_code: str
+    format: str
+
+
+class Translator(Protocol):
+    def translate(
+        self,
+        source: Path,
+        target_language: str,
+        *,
+        user_overrides: Mapping[str, str] | None = None,
+        work_directory: Path,
+        dynamic_terminology_enabled: bool = True,
+        subtitle_terminology_filter_enabled: bool = True,
+    ) -> bytes: ...
+
+
+class OutputPublisher(Protocol):
+    def publish(self, output_path: Path, write: Callable[[Path], None]) -> None: ...
+
+
+class Translation:
+    def __init__(self, translator: Translator, output: OutputPublisher) -> None:
+        self._translator = translator
+        self._output = output
+
+    def translate(self, request: TranslateRequest) -> TranslateResult:
+        subtitle_format = matching_format(request.subtitle_path, request.output_path)
+        _require_readable_subtitle(request.subtitle_path)
+        _create_work_directory(request.work_directory)
+        term_map = _load_term_map(request.term_map_path)
+        try:
+            content = self._translator.translate(
+                request.subtitle_path,
+                request.target_language_code,
+                user_overrides=term_map,
+                work_directory=request.work_directory,
+                dynamic_terminology_enabled=request.dynamic_terminology_enabled,
+                subtitle_terminology_filter_enabled=request.subtitle_terminology_filter_enabled,
+            )
+        except Exception as error:
+            raise ServiceError("translation_failed", "Translation failed") from error
+
+        def write(temporary_path: Path) -> None:
+            temporary_path.write_bytes(content)
+
+        self._output.publish(request.output_path, write)
+        return TranslateResult(
+            request.output_path, request.target_language_code, subtitle_format
+        )
+
+
+def _require_readable_subtitle(subtitle_path: Path) -> None:
+    if not subtitle_path.is_file():
+        raise ServiceError(
+            "subtitle_not_found", "Subtitle does not exist", path=subtitle_path
+        )
+    try:
+        with subtitle_path.open("rb"):
+            pass
+    except OSError as error:
+        raise ServiceError(
+            "subtitle_unreadable", "Subtitle cannot be read", path=subtitle_path
+        ) from error
+
+
+def _create_work_directory(work_directory: Path) -> None:
+    try:
+        work_directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ServiceError(
+            "invalid_work_directory",
+            "Work directory cannot be created",
+            path=work_directory,
+        ) from error
+
+
+def _load_term_map(term_map_path: Path | None) -> dict[str, str]:
+    if term_map_path is None:
+        return {}
+    try:
+        payload = json.loads(term_map_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ServiceError(
+            "invalid_term_map", "Term map cannot be read", path=term_map_path
+        ) from error
+    if not isinstance(payload, dict) or any(
+        not isinstance(source, str)
+        or not source
+        or not isinstance(target, str)
+        or not target
+        for source, target in payload.items()
+    ):
+        raise ServiceError("invalid_term_map", "Term map must map non-empty strings")
+    return payload
