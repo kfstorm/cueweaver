@@ -658,8 +658,8 @@ def test_http_translate_uses_error_envelope_for_missing_or_malformed_term_map(
     assert response.json()["error_code"] == "invalid_term_map"
 
 
-def test_http_translate_rejects_format_errors_invalid_content_and_existing_output(
-    tmp_path,
+def test_http_translate_rejects_format_errors_and_existing_output(
+    tmp_path, monkeypatch
 ):
     subtitle = tmp_path / "Movie.srt"
     subtitle.write_text("not subtitles", encoding="utf-8")
@@ -667,6 +667,10 @@ def test_http_translate_rejects_format_errors_invalid_content_and_existing_outpu
     valid_subtitle.write_text(SRT, encoding="utf-8")
     output = tmp_path / "output.ass"
     client = TestClient(create_app(CueWeaverApplication()))
+    monkeypatch.setattr(
+        "cueweaver.application.PySubtransTranslator.translate",
+        lambda *_args, **_kwargs: b"translated subtitles",
+    )
 
     mismatch = client.post(
         "/api/translate",
@@ -699,24 +703,61 @@ def test_http_translate_rejects_format_errors_invalid_content_and_existing_outpu
     )
 
     assert mismatch.status_code >= 400
-    assert invalid.status_code >= 400
+    assert invalid.status_code == 200
     assert exists.status_code >= 400
     assert set(mismatch.json()).issuperset({"error_code", "message"})
-    assert set(invalid.json()).issuperset({"error_code", "message"})
     assert set(exists.json()).issuperset({"error_code", "message"})
 
 
-@pytest.mark.parametrize("failure", [RuntimeError("provider failed"), b"not subtitles"])
-def test_http_translate_uses_error_envelope_for_provider_and_validation_failures(
-    tmp_path, monkeypatch, failure
+@pytest.mark.parametrize(
+    ("subtitle_name", "output_name", "expected_error_code"),
+    [
+        ("Movie.SRT", "output.srt", None),
+        ("Movie.srt", "output.txt", "unsupported_subtitle_format"),
+        ("Movie.txt", "output.txt", "unsupported_subtitle_format"),
+    ],
+)
+def test_http_translate_enforces_the_extension_contract(
+    tmp_path, monkeypatch, subtitle_name, output_name, expected_error_code
+):
+    subtitle = tmp_path / subtitle_name
+    subtitle.write_bytes(b"\xff")
+    captured: dict[str, Path] = {}
+
+    def translate(self, source, *_args, **_kwargs):
+        captured["source"] = source
+        return b"translated subtitles"
+
+    monkeypatch.setattr(
+        "cueweaver.application.PySubtransTranslator.translate", translate
+    )
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(tmp_path / output_name),
+            "work_directory": str(tmp_path / "work"),
+        },
+    )
+
+    if expected_error_code is None:
+        assert response.status_code == 200
+        assert captured == {"source": subtitle}
+    else:
+        assert response.status_code >= 400
+        assert response.json()["error_code"] == expected_error_code
+        assert captured == {}
+
+
+def test_http_translate_uses_error_envelope_without_writing_output_on_translation_failure(
+    tmp_path, monkeypatch
 ):
     subtitle = tmp_path / "Movie.srt"
     subtitle.write_text(SRT, encoding="utf-8")
 
     def translate(self, source, target_language, **kwargs):
-        if isinstance(failure, Exception):
-            raise failure
-        return failure
+        raise RuntimeError("PySubtrans could not parse subtitle")
 
     monkeypatch.setattr(
         "cueweaver.application.PySubtransTranslator.translate", translate
@@ -732,7 +773,8 @@ def test_http_translate_uses_error_envelope_for_provider_and_validation_failures
     )
 
     assert response.status_code >= 400
-    assert set(response.json()).issuperset({"error_code", "message"})
+    assert response.json()["error_code"] == "translation_failed"
+    assert not (tmp_path / "output.srt").exists()
 
 
 def test_http_translate_uses_error_envelope_for_unexpected_application_failures():

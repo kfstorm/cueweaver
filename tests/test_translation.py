@@ -178,3 +178,54 @@ def test_translation_uses_an_explicit_english_language_description_in_the_prompt
 
     assert captured["target_language"] == target_language
     assert captured["prompt"] == f"Translate these subtitles to {prompt_language}"
+
+
+def test_translation_does_not_reject_non_utf8_source_before_pysubtrans(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.srt"
+    source.write_bytes(b"\xff")
+    captured: dict[str, object] = {}
+
+    class Project:
+        subtitles = SimpleNamespace(terminology_map={}, all_translated=True)
+
+        def SaveProjectFile(self) -> None:
+            pass
+
+        def TranslateSubtitles(self, _engine) -> None:
+            pass
+
+    class Engine:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.aborted = False
+            self.errors: list[object] = []
+            self.terminology_map: dict[str, str] = {}
+            self.events = SimpleNamespace(
+                batch_translated=Event(), terminology_updated=Event()
+            )
+
+    def init_project(_options, *, filepath, **_kwargs):
+        captured["filepath"] = filepath
+        return Project()
+
+    def save_translation(path: str) -> None:
+        Path(path).write_bytes(b"translated")
+
+    Project.subtitles.SaveTranslation = save_translation
+    monkeypatch.setattr(
+        "cueweaver.translation.init_options",
+        lambda **_kwargs: SimpleNamespace(provider="Test Provider"),
+    )
+    monkeypatch.setattr("cueweaver.translation.init_project", init_project)
+    monkeypatch.setattr(
+        "cueweaver.translation.init_translation_provider", lambda *_args: object()
+    )
+    monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", Engine)
+
+    result = PySubtransTranslator().translate(
+        source, "zh-Hans", work_directory=tmp_path / "work"
+    )
+
+    assert result == b"translated"
+    assert Path(captured["filepath"]).read_bytes() == b"\xff"
