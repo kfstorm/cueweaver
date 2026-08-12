@@ -14,6 +14,7 @@ from cueweaver.application import (
     ServiceError,
     TranslateRequest,
     TranslateResult,
+    _write_output,
 )
 from cueweaver.http import create_app
 
@@ -105,9 +106,9 @@ def test_http_service_returns_the_shared_error_envelope():
                 "discovery_failed", "ffprobe failed", path=request.media_path
             )
 
-    response = TestClient(create_app(FailingApplication())).post(
-        "/api/discover", json={"media_path": "/media/Movie.mkv"}
-    )
+    response = TestClient(
+        create_app(FailingApplication()), raise_server_exceptions=False
+    ).post("/api/discover", json={"media_path": "/media/Movie.mkv"})
 
     assert response.status_code >= 400
     assert response.headers["content-type"] == "application/json"
@@ -498,3 +499,259 @@ def test_http_extract_uses_error_envelope_for_format_mismatch_and_ffprobe_failur
     assert set(mismatch.json()).issuperset({"error_code", "message"})
     assert failed.status_code >= 400
     assert set(failed.json()).issuperset({"error_code", "message"})
+
+
+SRT = """1
+00:00:01,000 --> 00:00:02,000
+Hello
+"""
+
+
+def test_http_translates_an_explicit_subtitle_to_an_explicit_output(
+    tmp_path, monkeypatch
+):
+    subtitle = tmp_path / "Movie.en.SRT"
+    subtitle.write_text(SRT, encoding="utf-8")
+    output = tmp_path / "media" / "Movie.zh.srt"
+    work_directory = tmp_path / "work" / "job-123"
+    term_map = tmp_path / "terms.json"
+    term_map.write_text('{"Hello":"你好"}', encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def translate(self, source, target_language, **kwargs):
+        captured.update(source=source, target_language=target_language, **kwargs)
+        return SRT.replace("Hello", "你好").encode()
+
+    monkeypatch.setattr(
+        "cueweaver.application.PySubtransTranslator.translate", translate
+    )
+
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh-Hans-SG",
+            "output_path": str(output),
+            "work_directory": str(work_directory),
+            "term_map_path": str(term_map),
+            "subtitle_terminology_filter_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "output_path": str(output),
+        "target_language_code": "zh-Hans-SG",
+        "format": "srt",
+    }
+    assert output.read_text(encoding="utf-8") == SRT.replace("Hello", "你好")
+    assert work_directory.is_dir()
+    assert captured == {
+        "source": subtitle,
+        "target_language": "zh-Hans-SG",
+        "user_overrides": {"Hello": "你好"},
+        "work_directory": work_directory,
+        "dynamic_terminology_enabled": True,
+        "subtitle_terminology_filter_enabled": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {
+            "subtitle_path": "",
+            "target_language_code": "zh",
+            "output_path": "a.srt",
+            "work_directory": "work",
+        },
+        {
+            "subtitle_path": "a.srt",
+            "target_language_code": "",
+            "output_path": "b.srt",
+            "work_directory": "work",
+        },
+    ],
+)
+def test_http_translate_uses_error_envelope_for_invalid_requests(body):
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/translate", json=body
+    )
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message", "field"})
+
+
+@pytest.mark.parametrize(
+    ("term_map_content", "expected_code"),
+    [
+        (None, "subtitle_not_found"),
+        ("[]", "invalid_term_map"),
+        ('{"":"x"}', "invalid_term_map"),
+    ],
+)
+def test_http_translate_uses_error_envelope_for_invalid_inputs(
+    tmp_path, term_map_content, expected_code
+):
+    subtitle = tmp_path / "Movie.srt"
+    subtitle.write_text(SRT, encoding="utf-8")
+    term_map = tmp_path / "terms.json"
+    if term_map_content is not None:
+        term_map.write_text(term_map_content, encoding="utf-8")
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(tmp_path / "missing.srt")
+            if term_map_content is None
+            else str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(tmp_path / "output.srt"),
+            "work_directory": str(tmp_path / "work"),
+            "term_map_path": str(term_map) if term_map_content is not None else None,
+        },
+    )
+
+    assert response.status_code >= 400
+    assert response.json()["error_code"] == expected_code
+
+
+@pytest.mark.parametrize("term_map_content", [None, "{", '{"Hello":""}'])
+def test_http_translate_uses_error_envelope_for_missing_or_malformed_term_map(
+    tmp_path, term_map_content
+):
+    subtitle = tmp_path / "Movie.srt"
+    subtitle.write_text(SRT, encoding="utf-8")
+    term_map = tmp_path / "terms.json"
+    if term_map_content is not None:
+        term_map.write_text(term_map_content, encoding="utf-8")
+
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(tmp_path / "output.srt"),
+            "work_directory": str(tmp_path / "work"),
+            "term_map_path": str(term_map),
+        },
+    )
+
+    assert response.status_code >= 400
+    assert response.json()["error_code"] == "invalid_term_map"
+
+
+def test_http_translate_rejects_format_errors_invalid_content_and_existing_output(
+    tmp_path,
+):
+    subtitle = tmp_path / "Movie.srt"
+    subtitle.write_text("not subtitles", encoding="utf-8")
+    valid_subtitle = tmp_path / "Valid.srt"
+    valid_subtitle.write_text(SRT, encoding="utf-8")
+    output = tmp_path / "output.ass"
+    client = TestClient(create_app(CueWeaverApplication()))
+
+    mismatch = client.post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(output),
+            "work_directory": str(tmp_path / "work"),
+        },
+    )
+    invalid = client.post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(tmp_path / "output.srt"),
+            "work_directory": str(tmp_path / "work"),
+        },
+    )
+    existing = tmp_path / "existing.srt"
+    existing.write_text("existing", encoding="utf-8")
+    exists = client.post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(valid_subtitle),
+            "target_language_code": "zh",
+            "output_path": str(existing),
+            "work_directory": str(tmp_path / "work"),
+        },
+    )
+
+    assert mismatch.status_code >= 400
+    assert invalid.status_code >= 400
+    assert exists.status_code >= 400
+    assert set(mismatch.json()).issuperset({"error_code", "message"})
+    assert set(invalid.json()).issuperset({"error_code", "message"})
+    assert set(exists.json()).issuperset({"error_code", "message"})
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("provider failed"), b"not subtitles"])
+def test_http_translate_uses_error_envelope_for_provider_and_validation_failures(
+    tmp_path, monkeypatch, failure
+):
+    subtitle = tmp_path / "Movie.srt"
+    subtitle.write_text(SRT, encoding="utf-8")
+
+    def translate(self, source, target_language, **kwargs):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(
+        "cueweaver.application.PySubtransTranslator.translate", translate
+    )
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(tmp_path / "output.srt"),
+            "work_directory": str(tmp_path / "work"),
+        },
+    )
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message"})
+
+
+def test_http_translate_uses_error_envelope_for_unexpected_application_failures():
+    class FailingApplication(ApplicationFixture):
+        def translate(self, request: TranslateRequest) -> TranslateResult:
+            raise RuntimeError("unexpected")
+
+    response = TestClient(
+        create_app(FailingApplication()), raise_server_exceptions=False
+    ).post(
+        "/api/translate",
+        json={
+            "subtitle_path": "/work/Movie.srt",
+            "target_language_code": "zh",
+            "output_path": "/media/Movie.zh.srt",
+            "work_directory": "/work/job-123",
+        },
+    )
+
+    assert response.status_code >= 400
+    assert response.json() == {
+        "error_code": "internal_error",
+        "message": "Operation failed",
+    }
+
+
+def test_output_write_failure_removes_its_temporary_file(tmp_path, monkeypatch):
+    output = tmp_path / "Movie.zh.srt"
+
+    def fail_to_publish(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("cueweaver.application.os.link", fail_to_publish)
+
+    with pytest.raises(ServiceError, match="Output cannot be written"):
+        _write_output(output, b"translated")
+
+    assert not output.exists()
+    assert list(tmp_path.iterdir()) == []
