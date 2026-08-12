@@ -10,6 +10,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any
 
+import langcodes
 from PySubtrans import (
     SubtitleTranslator,
     init_options,
@@ -40,7 +41,10 @@ class PySubtransTranslator:
         )
         options = init_options(
             target_language=target_language,
-            prompt=f"Translate these subtitles to {target_language}",
+            prompt=(
+                "Translate these subtitles to "
+                f"{_prompt_language_description(target_language)}"
+            ),
             preprocess_subtitles=False,
             postprocess_translation=False,
             build_terminology_map=dynamic_terminology_enabled,
@@ -116,6 +120,51 @@ def _build_terminology_seed(
             _overlay_terminology(static_terminology, source, target)
             _overlay_terminology(terminology_map, source, target)
     return terminology_map, static_terminology
+
+
+_SUBTITLE_LANGUAGE_ALIASES = {
+    "big5": "zh-Hant",
+    "chs": "zh-Hans",
+    "cht": "zh-Hant",
+    "gb": "zh-Hans",
+    "gb18030": "zh-Hans",
+    "gb2312": "zh-Hans",
+    "gbk": "zh-Hans",
+    "in": "id",
+    "iw": "he",
+    "ji": "yi",
+    "latam": "es-419",
+    "pob": "pt-BR",
+    "spl": "es-419",
+    "zhs": "zh-Hans",
+    "zht": "zh-Hant",
+    "chi": "zh",
+    "cze": "cs",
+    "dut": "nl",
+    "esla": "es-419",
+    "fre": "fr",
+    "ger": "de",
+    "gre": "el",
+    "mac": "mk",
+    "may": "ms",
+    "per": "fa",
+    "rum": "ro",
+    "slo": "sk",
+    "tib": "bo",
+    "wel": "cy",
+}
+
+
+def _prompt_language_description(target_language: str) -> str:
+    language_tag = _SUBTITLE_LANGUAGE_ALIASES.get(
+        target_language.casefold(), target_language
+    )
+    if not langcodes.tag_is_valid(language_tag):
+        return target_language
+    description = langcodes.Language.get(language_tag).display_name("en")
+    return (
+        target_language if description.startswith("Unknown language") else description
+    )
 
 
 def _overlay_terminology(

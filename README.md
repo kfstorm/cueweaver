@@ -129,9 +129,40 @@ It returns only after translation, subtitle validation, and writing the output:
 
 Input and output must use the same supported subtitle extension and valid
 content. Missing output parents and the work directory are created. Existing
-outputs are never overwritten. CueWeaver forwards the non-empty
-`target_language_code` unchanged to PySubtrans and does not normalize, map, or
-infer it.
+outputs are never overwritten. CueWeaver forwards `target_language_code`
+unchanged to PySubtrans and output metadata. It only uses an English language
+description in the LLM prompt. Standard, valid BCP 47 tags (including ISO 639-3
+codes) use their CLDR English display name. Unknown values retain their raw
+prompt value rather than being rejected or guessed.
+
+For common subtitle-file conventions, these exact aliases are used only for
+the LLM prompt:
+
+| Alias | Prompt language tag |
+| --- | --- |
+| `chs`, `zhs`, `gb`, `gbk`, `gb2312`, `gb18030` | `zh-Hans` |
+| `cht`, `zht`, `big5` | `zh-Hant` |
+| `pob` | `pt-BR` |
+| `spl`, `esla`, `latam` | `es-419` |
+| `chi` | `zh` |
+| `cze` | `cs` |
+| `dut` | `nl` |
+| `fre` | `fr` |
+| `ger` | `de` |
+| `gre` | `el` |
+| `mac` | `mk` |
+| `may` | `ms` |
+| `per` | `fa` |
+| `rum` | `ro` |
+| `slo` | `sk` |
+| `tib` | `bo` |
+| `wel` | `cy` |
+| `iw` | `he` |
+| `in` | `id` |
+| `ji` | `yi` |
+
+Subtitle attributes such as `forced`, `sdh`, `hi`, `cc`, and `default` are not
+language aliases and must not be supplied as `target_language_code`.
 
 ## Test
 
