@@ -412,18 +412,19 @@ class _TraceSession:
             )
             return
         response_data = dict(response) if isinstance(response, Mapping) else response
+        token_usage = _token_usage(response_data)
         self._write(
             "response_completed",
             operation_id=request_data["operation_id"],
             request_id=request_data["request_id"],
             attempt=request_data["attempt"],
             response=response_data,
-            token_usage=_token_usage(response_data),
+            token_usage=token_usage,
             duration_ms=round(
                 (time.monotonic() - request_data["started_at"]) * 1000, 3
             ),
         )
-        self._add_usage(_token_usage(response_data))
+        self._add_usage(_billing_usage(response_data))
 
     def fail_request(self, request: Any, error: BaseException) -> None:
         request_data = self._requests.get(id(request))
@@ -454,10 +455,10 @@ class _TraceSession:
     def _add_usage(self, usage: dict[str, object]) -> None:
         if self._usage_totals is None:
             self._usage_totals = {
-                "prompt_tokens": None,
+                "input_tokens": None,
                 "output_tokens": None,
-                "total_tokens": None,
-                "reasoning_tokens": None,
+                "cache_read_tokens": None,
+                "cache_write_tokens": None,
             }
         for key, value in usage.items():
             if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -752,20 +753,30 @@ def _token_usage(response: object) -> dict[str, object]:
         if output_tokens is None:
             output_tokens = usage.get("output_tokens")
         token_usage = {
-            "prompt_tokens": usage.get("prompt_tokens"),
+            "prompt_tokens": (
+                usage.get("prompt_tokens")
+                if usage.get("prompt_tokens") is not None
+                else usage.get("input_tokens")
+            ),
             "output_tokens": output_tokens,
             "total_tokens": usage.get("total_tokens"),
             "reasoning_tokens": _reasoning_tokens(usage),
         }
         _copy_cache_usage(token_usage, usage)
+        _warn_inconsistent_cache_usage(usage, token_usage["prompt_tokens"])
         return token_usage
     token_usage = {
-        "prompt_tokens": response.get("prompt_tokens"),
+        "prompt_tokens": (
+            response.get("prompt_tokens")
+            if response.get("prompt_tokens") is not None
+            else response.get("input_tokens")
+        ),
         "output_tokens": response.get("output_tokens"),
         "total_tokens": response.get("total_tokens"),
         "reasoning_tokens": response.get("reasoning_tokens"),
     }
     _copy_cache_usage(token_usage, response)
+    _warn_inconsistent_cache_usage(response, token_usage["prompt_tokens"])
     return token_usage
 
 
@@ -776,7 +787,20 @@ def _merge_provider_usage(
     usage = provider_response.get("usage")
     if not isinstance(usage, Mapping):
         return
-    response.update(_token_usage(provider_response))
+    # A terminal streaming chunk may contain only part of the usage object.
+    # Do not let missing fields erase values collected from an earlier chunk.
+    response.update(
+        {
+            key: value
+            for key, value in _token_usage(provider_response).items()
+            if value is not None
+        }
+    )
+    completion_tokens = usage.get("completion_tokens")
+    if isinstance(completion_tokens, (int, float)) and not isinstance(
+        completion_tokens, bool
+    ):
+        response["completion_tokens"] = completion_tokens
 
 
 def _reasoning_tokens(usage: Mapping[str, Any]) -> object:
@@ -809,6 +833,120 @@ def _copy_cache_usage(token_usage: dict[str, object], usage: Mapping[str, Any]) 
                 and not isinstance(value, bool)
             ):
                 token_usage[f"{details_key}.{key}"] = value
+
+
+def _billing_usage(usage: Mapping[str, Any]) -> dict[str, object]:
+    source = usage.get("usage")
+    if isinstance(source, Mapping):
+        usage = source
+    prompt_tokens = usage.get("prompt_tokens")
+    if prompt_tokens is None:
+        prompt_tokens = usage.get("input_tokens")
+    completion_tokens = _cache_tokens(usage, "completion_tokens")
+    output_tokens = usage.get("output_tokens")
+    if not isinstance(prompt_tokens, (int, float)) or isinstance(prompt_tokens, bool):
+        prompt_tokens = None
+    if completion_tokens is not None:
+        output_tokens = completion_tokens
+    elif isinstance(output_tokens, (int, float)) and not isinstance(
+        output_tokens, bool
+    ):
+        reasoning_tokens = _reasoning_tokens(usage)
+        if isinstance(reasoning_tokens, (int, float)) and not isinstance(
+            reasoning_tokens, bool
+        ):
+            output_tokens += reasoning_tokens
+    else:
+        output_tokens = None
+
+    cache_read = _cache_tokens(usage, "prompt_cache_hit_tokens")
+    if cache_read is None:
+        cache_read = _nested_cache_tokens(usage, "cached_tokens")
+    cache_write = _nested_cache_tokens(usage, "cache_write_tokens")
+    if cache_write is None:
+        cache_write = _cache_tokens(usage, "prompt_cache_write_tokens")
+
+    return {
+        "input_tokens": (
+            max(prompt_tokens - (cache_read or 0) - (cache_write or 0), 0)
+            if prompt_tokens is not None
+            else None
+        ),
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+    }
+
+
+def _cache_tokens(usage: Mapping[str, Any], key: str) -> int | float | None:
+    value = usage.get(key)
+    return (
+        value
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else None
+    )
+
+
+def _nested_cache_tokens(usage: Mapping[str, Any], key: str) -> int | float | None:
+    flattened_keys = {
+        "cached_tokens": (
+            "prompt_tokens_details.cached_tokens",
+            "input_tokens_details.cached_tokens",
+        ),
+        "cache_write_tokens": (
+            "prompt_tokens_details.cache_write_tokens",
+            "input_tokens_details.cache_write_tokens",
+        ),
+    }
+    for flattened_key in flattened_keys.get(key, ()):
+        value = usage.get(flattened_key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        details = usage.get(details_key)
+        if not isinstance(details, Mapping):
+            continue
+        value = details.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _warn_inconsistent_cache_usage(
+    usage: Mapping[str, Any], prompt_tokens: object
+) -> None:
+    if not isinstance(prompt_tokens, (int, float)) or isinstance(prompt_tokens, bool):
+        return
+    hit = usage.get("prompt_cache_hit_tokens")
+    miss = usage.get("prompt_cache_miss_tokens")
+    if (
+        isinstance(hit, (int, float))
+        and not isinstance(hit, bool)
+        and isinstance(miss, (int, float))
+        and not isinstance(miss, bool)
+        and prompt_tokens != hit + miss
+    ):
+        logger.warning(
+            "Provider token usage is inconsistent: prompt_tokens=%s but "
+            "prompt_cache_hit_tokens + prompt_cache_miss_tokens=%s",
+            prompt_tokens,
+            hit + miss,
+        )
+    details = usage.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, Mapping) else None
+    if (
+        isinstance(hit, (int, float))
+        and not isinstance(hit, bool)
+        and isinstance(cached, (int, float))
+        and not isinstance(cached, bool)
+        and hit != cached
+    ):
+        logger.warning(
+            "Provider token usage has conflicting cache-hit fields: "
+            "prompt_cache_hit_tokens=%s but prompt_tokens_details.cached_tokens=%s",
+            hit,
+            cached,
+        )
 
 
 def _retry_delay(message: str) -> float | None:
