@@ -18,6 +18,98 @@ Add `--debug` to record the PySubtrans translation interaction:
 uv run cueweaver run /path/to/Movie.mkv --target-language zh --debug
 ```
 
+## Configuration
+
+### Translation provider
+
+CueWeaver uses an OpenAI-compatible server by default. The server address and
+endpoint are required for a translated Job. The model and API key are
+optional. If no API key is configured, CueWeaver does not send an
+`Authorization` header; this is useful for local servers and endpoints that do
+not require authentication.
+
+```bash
+export CUEWEAVER_TRANSLATION_PROVIDER="openai-compatible"
+export CUEWEAVER_TRANSLATION_SERVER_ADDRESS="https://api.example.com"
+export CUEWEAVER_TRANSLATION_ENDPOINT="/v1/chat/completions"
+export CUEWEAVER_TRANSLATION_MODEL="your-model-name"
+export CUEWEAVER_TRANSLATION_API_KEY="your-api-key"  # Optional
+```
+
+For example, OpenCode Zen exposes an OpenAI-compatible chat endpoint:
+
+```bash
+export CUEWEAVER_TRANSLATION_SERVER_ADDRESS="https://opencode.ai/zen"
+export CUEWEAVER_TRANSLATION_ENDPOINT="/v1/chat/completions"
+export CUEWEAVER_TRANSLATION_MODEL="your-opencode-zen-model"
+export CUEWEAVER_TRANSLATION_API_KEY="your-opencode-zen-api-key"
+```
+
+CueWeaver-specific variables take precedence over the corresponding `CUSTOM_*`
+fallbacks:
+
+| CueWeaver variable | Fallback | Purpose |
+| --- | --- | --- |
+| `CUEWEAVER_TRANSLATION_PROVIDER` | None | Provider name; defaults to `openai-compatible` |
+| `CUEWEAVER_TRANSLATION_SERVER_ADDRESS` | `CUSTOM_SERVER_ADDRESS` | Server base URL |
+| `CUEWEAVER_TRANSLATION_ENDPOINT` | `CUSTOM_ENDPOINT` | Request path, such as `/v1/chat/completions` |
+| `CUEWEAVER_TRANSLATION_MODEL` | `CUSTOM_MODEL` | Model identifier sent in the request |
+| `CUEWEAVER_TRANSLATION_API_KEY` | `CUSTOM_API_KEY` | Optional bearer token |
+
+The provider also accepts `custom server` and `openai compatible` as provider
+aliases. API keys must contain only the key value; CueWeaver adds the `Bearer`
+prefix when it sends the header. Do not reuse a stale API key from the shell
+environment when testing an anonymous endpoint.
+
+### Command-line options
+
+The executable accepts `run` as an optional command prefix. The following
+options are available:
+
+| Option | Purpose |
+| --- | --- |
+| `--target-language LANG` | Required Target language; can use `CUEWEAVER_TARGET_LANGUAGE` |
+| `--source PATH_OR_ID` | Select an External subtitle path or Embedded subtitle identifier |
+| `--source-language LANG` | Override language inferred from the Source filename |
+| `--language-priority LANGS` | Comma-separated Source language tie-breaker, such as `en,ja`; can use `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` |
+| `--tmdb-series-id ID`, `--series-id ID` | TMDb series ID for Context gathering |
+| `--season-number N`, `--season N` | TMDb season number |
+| `--episode-number N`, `--episode N` | TMDb episode number |
+| `--refresh-metadata` | Ignore cached TMDb Context and fetch it again |
+| `--no-metadata-fetch` | Skip automatic Context and Glossary fetching, including the cache |
+| `--dynamic-terminology` | Enable dynamic terminology discovery |
+| `--no-dynamic-terminology` | Disable dynamic terminology discovery |
+| `--subtitle-terminology-filter` | Enable Source-wide subtitle terminology filtering |
+| `--no-subtitle-terminology-filter` | Disable subtitle terminology filtering |
+| `--debug` | Write a durable JSONL trace of translation requests |
+| `--user-override-directory PATH`, `--override-directory PATH` | Select the directory containing User override files |
+
+CLI switches take precedence over their environment-variable equivalents. A
+Target-language no-op does not require translation provider configuration.
+
+### Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `CUEWEAVER_TARGET_LANGUAGE` | Target language when `--target-language` is omitted |
+| `CUEWEAVER_SOURCE_LANGUAGE_PRIORITY` | Comma-separated Source language priority when `--language-priority` is omitted |
+| `CUEWEAVER_WORK_DIRECTORY` | Root directory for durable Job workspaces and checkpoints |
+| `CUEWEAVER_SECONV` | Path to the `seconv` executable used for Embedded subtitle Extraction |
+| `CUEWEAVER_TMDB_API_KEY` | TMDb API key; falls back to `TMDB_API_KEY` |
+| `TMDB_API_KEY` | TMDb API key fallback |
+| `CUEWEAVER_METADATA_CACHE` | Metadata cache directory |
+| `CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP` | Dynamic terminology default: `true`, `false`, `yes`, `no`, `1`, or `0` |
+| `CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER` | Subtitle terminology filtering default: `true`, `false`, `yes`, `no`, `1`, or `0` |
+| `CUEWEAVER_USER_OVERRIDE_DIRECTORY` | User override directory when `--user-override-directory` is omitted |
+| `XDG_CACHE_HOME` | Base directory for default Job and metadata caches |
+| `XDG_CONFIG_HOME` | Base directory for default User override files |
+
+The `--dynamic-terminology` and `--no-dynamic-terminology` switches override
+`CUEWEAVER_DYNAMIC_TERMINOLOGY_MAP`. The
+`--subtitle-terminology-filter` and `--no-subtitle-terminology-filter` switches
+override `CUEWEAVER_SUBTITLE_TERMINOLOGY_FILTER`. `--user-override-directory`
+overrides `CUEWEAVER_USER_OVERRIDE_DIRECTORY`.
+
 CueWeaver writes one durable `trace-<UTC timestamp>-<random suffix>.jsonl`
 file in the Job workspace and reports its path when the Job succeeds, fails,
 or is canceled. Trace files are retained with the workspace and are not
