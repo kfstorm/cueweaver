@@ -10,13 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from .subtitles import (
-    SubtitleFormat,
-    SubtitleValidationError,
-    UnsupportedSubtitleFormat,
-    validate_subtitle,
-    validate_subtitle_pair,
-)
 from .translation import PySubtransTranslator
 
 
@@ -211,15 +204,7 @@ class CueWeaverApplication:
         subtitle_format = _matching_subtitle_format(
             request.subtitle_path, request.output_path
         )
-        source_content = _read_subtitle(request.subtitle_path)
-        try:
-            validate_subtitle(source_content, subtitle_format)
-        except SubtitleValidationError as error:
-            raise ServiceError(
-                "invalid_subtitle",
-                "Subtitle failed validation",
-                path=request.subtitle_path,
-            ) from error
+        _require_readable_subtitle(request.subtitle_path)
         _prepare_output_path(request.output_path)
         try:
             request.work_directory.mkdir(parents=True, exist_ok=True)
@@ -244,17 +229,11 @@ class CueWeaverApplication:
             )
         except Exception as error:
             raise ServiceError("translation_failed", "Translation failed") from error
-        try:
-            validate_subtitle_pair(source_content, translated_content, subtitle_format)
-        except SubtitleValidationError as error:
-            raise ServiceError(
-                "invalid_translation", "Translated subtitle failed validation"
-            ) from error
         _write_output(request.output_path, translated_content)
         return TranslateResult(
             output_path=request.output_path,
             target_language_code=request.target_language_code,
-            format=subtitle_format.value,
+            format=subtitle_format,
         )
 
 
@@ -303,29 +282,29 @@ def _output_format(output_path: Path) -> str:
     return output_format
 
 
-def _matching_subtitle_format(subtitle_path: Path, output_path: Path) -> SubtitleFormat:
-    try:
-        input_format = SubtitleFormat.from_path(subtitle_path)
-        output_format = SubtitleFormat.from_path(output_path)
-    except UnsupportedSubtitleFormat as error:
+def _matching_subtitle_format(subtitle_path: Path, output_path: Path) -> str:
+    input_format = _EXTERNAL_FORMATS.get(subtitle_path.suffix.casefold())
+    output_format = _EXTERNAL_FORMATS.get(output_path.suffix.casefold())
+    if input_format is None or output_format is None:
         raise ServiceError(
             "unsupported_subtitle_format",
             "Subtitle paths must use supported extensions",
-        ) from error
-    if input_format is not output_format:
+        )
+    if input_format != output_format:
         raise ServiceError(
             "format_mismatch", "Input and output subtitle formats must match"
         )
     return input_format
 
 
-def _read_subtitle(subtitle_path: Path) -> bytes:
+def _require_readable_subtitle(subtitle_path: Path) -> None:
     if not subtitle_path.is_file():
         raise ServiceError(
             "subtitle_not_found", "Subtitle does not exist", path=subtitle_path
         )
     try:
-        return subtitle_path.read_bytes()
+        with subtitle_path.open("rb"):
+            pass
     except OSError as error:
         raise ServiceError(
             "subtitle_unreadable", "Subtitle cannot be read", path=subtitle_path
