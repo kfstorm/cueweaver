@@ -152,6 +152,20 @@ def test_http_validates_request_bodies(path, body, field):
     assert response.json()["field"] == field
 
 
+def test_http_rejects_non_json_request_content():
+    response = TestClient(create_app(ApplicationFixture())).post(
+        "/api/discover",
+        content='{"media_path":"/media/Movie.mkv"}',
+        headers={"content-type": "text/plain"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "invalid_request",
+        "message": "Request must use application/json",
+    }
+
+
 def test_http_returns_error_envelopes_for_malformed_unknown_and_operation_errors():
     class FailingApplication(ApplicationFixture):
         def discover(self, request: DiscoverRequest) -> DiscoverResult:

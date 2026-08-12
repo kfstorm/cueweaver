@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ServiceError
 from .discover import DiscoveryOperation, register_discover
 from .extract import ExtractionOperation, register_extract
 from .translate import TranslationOperation, register_translate
+
+BUSINESS_ROUTES = frozenset({"/api/discover", "/api/extract", "/api/translate"})
 
 
 class Application(Protocol):
@@ -28,6 +31,22 @@ def create_app(application: Application) -> FastAPI:
     app.add_exception_handler(RequestValidationError, request_validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_error_handler)
     app.add_exception_handler(Exception, unexpected_error_handler)
+
+    @app.middleware("http")
+    async def require_json_content_type(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if request.method == "POST" and request.url.path in BUSINESS_ROUTES:
+            content_type = request.headers.get("content-type", "")
+            if (
+                content_type.split(";", maxsplit=1)[0].strip().casefold()
+                != "application/json"
+            ):
+                return error_response(
+                    ServiceError("invalid_request", "Request must use application/json")
+                )
+        return await call_next(request)
+
     register_discover(app, application)
     register_extract(app, application)
     register_translate(app, application)
