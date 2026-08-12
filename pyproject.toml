@@ -5,7 +5,10 @@ description = "A self-hosted media subtitle translation tool"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "fastapi>=0.141.1",
+    "pydantic>=2.13.4",
     "pysubtrans==1.6.0",
+    "starlette>=1.6.0",
 ]
 
 [build-system]
@@ -17,6 +20,7 @@ cueweaver = "cueweaver.cli:main"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "mypy>=1.13.0",
     "pre-commit>=3.0.0",
     "pymarkdownlnt>=0.9.0",
