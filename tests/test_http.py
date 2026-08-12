@@ -1,8 +1,11 @@
+import json
+import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from cueweaver.application import (
+    CueWeaverApplication,
     DiscoverRequest,
     DiscoverResult,
     ExtractRequest,
@@ -125,8 +128,118 @@ def test_http_service_returns_json_errors_for_invalid_requests():
     assert payload["field"] == "media_path"
 
 
+def test_http_service_returns_json_errors_for_malformed_json_requests():
+    response = TestClient(create_app(ApplicationFixture())).post(
+        "/api/discover",
+        content="{",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message", "field"})
+
+
 def test_http_service_uses_the_shared_error_envelope_for_unknown_routes():
     response = TestClient(create_app(ApplicationFixture())).post("/api/missing")
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message"})
+
+
+def test_http_discovery_reports_external_embedded_and_unsupported_candidates(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    (tmp_path / "Movie.en.forced.srt").write_text("subtitles", encoding="utf-8")
+    (tmp_path / "Movie.zh-Hans.default.ass").write_text("subtitles", encoding="utf-8")
+
+    def run(*_args, **_kwargs):
+        return type(
+            "CompletedProcessFixture",
+            (),
+            {
+                "stdout": json.dumps(
+                    {
+                        "streams": [
+                            {
+                                "index": 3,
+                                "codec_name": "ass",
+                                "tags": {
+                                    "language": "zhs",
+                                    "title": "Chinese Simplified",
+                                },
+                            },
+                            {"index": 4, "codec_name": "hdmv_pgs_subtitle"},
+                            {"index": 5, "codec_name": "dvb_subtitle"},
+                        ]
+                    }
+                )
+            },
+        )()
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", run)
+
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/discover", json={"media_path": str(media)}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "media_path": str(media),
+        "candidates": [
+            {
+                "kind": "external",
+                "path": str(tmp_path / "Movie.en.forced.srt"),
+                "format": "srt",
+                "tags": {"language": "en", "title": ""},
+            },
+            {
+                "kind": "external",
+                "path": str(tmp_path / "Movie.zh-Hans.default.ass"),
+                "format": "ass",
+                "tags": {"language": "zh-Hans", "title": ""},
+            },
+            {
+                "kind": "embedded",
+                "stream_index": 3,
+                "format": "ass",
+                "tags": {"language": "zhs", "title": "Chinese Simplified"},
+            },
+        ],
+        "unsupported_candidates": [
+            {"kind": "embedded", "stream_index": 4, "reason": "bitmap subtitle"},
+            {
+                "kind": "embedded",
+                "stream_index": 5,
+                "reason": "unsupported subtitle codec: dvb_subtitle",
+            },
+        ],
+    }
+
+
+def test_http_discovery_uses_error_envelope_for_missing_media(tmp_path):
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/discover", json={"media_path": str(tmp_path / "missing.mkv")}
+    )
+
+    assert response.status_code >= 400
+    assert set(response.json()).issuperset({"error_code", "message"})
+
+
+def test_http_discovery_uses_error_envelope_when_ffprobe_fails(tmp_path, monkeypatch):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"container")
+    (tmp_path / "Movie.en.srt").write_text("subtitles", encoding="utf-8")
+
+    def run(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, "ffprobe")
+
+    monkeypatch.setattr("cueweaver.application.subprocess.run", run)
+
+    response = TestClient(create_app(CueWeaverApplication())).post(
+        "/api/discover", json={"media_path": str(media)}
+    )
 
     assert response.status_code >= 400
     assert set(response.json()).issuperset({"error_code", "message"})

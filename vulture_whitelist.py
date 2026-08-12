@@ -21,6 +21,7 @@ TMDbMetadataProvider.get_series_title
 TMDbMetadataProvider.get_episode_title
 
 # HTTP application contracts are public adapter APIs.
+CueWeaverApplication
 TranslateRequest.subtitle_path
 TranslateRequest.term_map_path
 create_app
