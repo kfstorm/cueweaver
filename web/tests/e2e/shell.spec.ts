@@ -27,6 +27,16 @@ test("mobile shell renders every product route", async ({ page }) => {
   await expectResponsiveShell(page, true);
 });
 
+test("mobile primary actions meet the touch target", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/translate");
+
+  const button = page.getByRole("button", { name: "Start translation" });
+  const box = await button.boundingBox();
+
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+});
+
 test("unavailable provider is actionable and cannot submit", async ({ page }) => {
   await page.goto("/translate");
 

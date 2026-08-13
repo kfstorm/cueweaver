@@ -11,6 +11,7 @@ source_roots = ["."]
 root_module = "ignore"
 
 [external]
+exclude = ["uvicorn"]
 
 [rules]
 unused_external_dependencies = "error"
