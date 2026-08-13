@@ -60,11 +60,15 @@ export interface MediaDiscovery {
   unsupported_candidates: UnsupportedSubtitleCandidate[];
 }
 
-async function fetchDiscovery(path: string): Promise<MediaDiscovery> {
+async function fetchDiscovery(
+  path: string,
+  signal: AbortSignal,
+): Promise<MediaDiscovery> {
   const response = await fetch("/api/media/discover", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path }),
+    signal,
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as {
@@ -82,8 +86,9 @@ async function fetchDiscovery(path: string): Promise<MediaDiscovery> {
 export function useMediaDiscovery(path: string | null) {
   return useQuery({
     queryKey: ["media-discovery", path],
-    queryFn: () => fetchDiscovery(path!),
+    queryFn: ({ signal }) => fetchDiscovery(path!, signal),
     enabled: path !== null,
     retry: false,
+    gcTime: 0,
   });
 }

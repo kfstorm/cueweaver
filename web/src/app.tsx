@@ -9,6 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { NavLink, Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
@@ -91,6 +92,7 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 }
 
 function Translate() {
+  const queryClient = useQueryClient();
   const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
@@ -98,6 +100,17 @@ function Translate() {
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
+  const clearDiscovery = (previousMedia: string | null) => {
+    if (previousMedia !== null) {
+      void queryClient.cancelQueries({ queryKey: ["media-discovery", previousMedia] });
+      queryClient.removeQueries({ queryKey: ["media-discovery", previousMedia] });
+    }
+  };
+  const clearMedia = (previousMedia: string | null) => {
+    clearDiscovery(previousMedia);
+    setSelectedMedia(null);
+    setSelectedSubtitle(null);
+  };
   return (
     <>
       <PageHeader
@@ -114,12 +127,12 @@ function Translate() {
             onDirectoryChange={(path) => {
               setDirectory(path);
               setFilter("");
-              setSelectedMedia(null);
-              setSelectedSubtitle(null);
+              clearMedia(selectedMedia);
             }}
             onFilterChange={setFilter}
             selectedMedia={selectedMedia}
             onMediaSelect={(path) => {
+              clearDiscovery(selectedMedia);
               setSelectedMedia(path);
               setSelectedSubtitle(null);
             }}
@@ -132,8 +145,7 @@ function Translate() {
               onSelect={setSelectedSubtitle}
               query={discovery}
               onClear={() => {
-                setSelectedMedia(null);
-                setSelectedSubtitle(null);
+                clearMedia(selectedMedia);
               }}
             />
           )}
@@ -181,7 +193,7 @@ function SubtitleDiscovery({
         </Button>
       </div>
       <div className="subtitle-results" aria-live="polite">
-        {query.isPending && (
+        {(query.isPending || query.isFetching) && (
           <div role="status" className="discovery-skeleton" aria-label="Loading subtitles">
             <span /><span /><span />
           </div>
@@ -194,12 +206,12 @@ function SubtitleDiscovery({
             </Button>
           </div>
         )}
-        {query.data &&
+        {!query.isFetching && query.data &&
           query.data.candidates.length === 0 &&
           query.data.unsupported_candidates.length === 0 && (
             <div className="browser-message">No subtitles were found for this Media.</div>
           )}
-        {query.data?.candidates.map((candidate, index) => {
+        {!query.isFetching && !query.isError && query.data?.candidates.map((candidate, index) => {
           const key = candidateKey(candidate, index);
           return (
             <SubtitleEntry
@@ -211,7 +223,7 @@ function SubtitleDiscovery({
             />
           );
         })}
-        {query.data?.unsupported_candidates.map((candidate, index) => (
+        {!query.isFetching && !query.isError && query.data?.unsupported_candidates.map((candidate, index) => (
           <UnsupportedSubtitleEntry
             key={`unsupported-${candidateKey(candidate, index)}`}
             candidate={candidate}
@@ -231,6 +243,18 @@ function subtitleLabel(candidate: SubtitleCandidate) {
   return [tags.language, tags.title].filter(Boolean).join(" / ") || "Metadata unavailable";
 }
 
+function subtitlePath(candidate: SubtitleCandidate) {
+  if (candidate.kind !== "external" || !candidate.path) {
+    return null;
+  }
+  return candidate.path.split("/").pop() ?? candidate.path;
+}
+
+function subtitleAccessibleLabel(candidate: SubtitleCandidate) {
+  const path = subtitlePath(candidate);
+  return path ? `${subtitleLabel(candidate)} (${path})` : subtitleLabel(candidate);
+}
+
 function SubtitleEntry({
   candidate,
   candidateId,
@@ -248,13 +272,16 @@ function SubtitleEntry({
       variant="outline"
       className="subtitle-entry"
       aria-pressed={selected}
-      aria-label={`Select ${candidate.kind} subtitle ${subtitleLabel(candidate)}`}
+      aria-label={`Select ${candidate.kind} subtitle ${subtitleAccessibleLabel(candidate)}`}
       onClick={() => onSelect(candidateId)}
     >
       <span className="subtitle-kind">{candidate.kind === "external" ? "External" : "Embedded"}</span>
       <span className="subtitle-copy">
         <strong>{subtitleLabel(candidate)}</strong>
-        <small>{candidate.format?.toUpperCase() ?? "Unknown format"}</small>
+        <small>
+          {candidate.format?.toUpperCase() ?? "Unknown format"}
+          {subtitlePath(candidate) && ` · ${subtitlePath(candidate)}`}
+        </small>
       </span>
       {selected && <span className="media-entry-selected">Selected</span>}
     </Button>

@@ -46,3 +46,30 @@ test("mobile Translate can select a labelled Media", async ({ page }) => {
   await expect(media).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("Selected")).toBeVisible();
 });
+
+test.describe("explicit subtitle selection", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} Translate shows and selects discovered subtitles`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/translate");
+
+      await page.getByRole("button", { name: /Select Example movie/ }).click();
+      const external = page.getByRole("button", {
+        name: /Select external subtitle en \(Example\.en\.srt\)/,
+      });
+      await expect(external).toBeVisible();
+      await expect(external).toHaveAttribute("aria-pressed", "false");
+      await expect(
+        page.getByRole("group", { name: "Unsupported embedded subtitle" }),
+      ).toHaveAttribute("aria-disabled", "true");
+
+      await external.click();
+      await expect(external).toHaveAttribute("aria-pressed", "true");
+    });
+  }
+});
