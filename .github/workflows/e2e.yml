@@ -1,4 +1,4 @@
-name: Pre-commit
+name: E2E
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  pre-commit:
+  e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -29,4 +29,14 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: web
 
-      - uses: pre-commit/action@v3.0.1
+      - name: Build Web product
+        run: pnpm build
+        working-directory: web
+
+      - name: Install browser
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+
+      - name: Run end-to-end tests
+        run: pnpm test:e2e
+        working-directory: web
