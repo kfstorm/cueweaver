@@ -32,6 +32,19 @@ if [[ ! -d web/node_modules ]]; then
   exit 1
 fi
 
+port_is_in_use() {
+  (echo >/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1
+}
+
+if port_is_in_use "$API_PORT"; then
+  printf '%s\n' "API_PORT ${API_PORT} is already in use" >&2
+  exit 1
+fi
+if port_is_in_use "$WEB_PORT"; then
+  printf '%s\n' "WEB_PORT ${WEB_PORT} is already in use" >&2
+  exit 1
+fi
+
 if [[ "$MEDIA_ROOT" != /* || "$WORK_ROOT" != /* ]]; then
   printf '%s\n' "CUEWEAVER_MEDIA_ROOT and CUEWEAVER_WORK_ROOT must be absolute paths" >&2
   exit 1
@@ -83,4 +96,4 @@ fi
 
 printf '%s\n' "Starting Web on http://0.0.0.0:${WEB_PORT}"
 export API_PORT WEB_PORT
-pnpm --dir web dev --host 0.0.0.0 --port "$WEB_PORT"
+pnpm --dir web dev --host 0.0.0.0 --port "$WEB_PORT" --strictPort

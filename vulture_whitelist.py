@@ -15,9 +15,7 @@ create_product_app_from_env
 # FastAPI middleware callbacks are registered dynamically by the decorator.
 require_json_content_type
 product_status
-spa
-api_root_not_found
-api_path_not_found
+product_not_found
 browse
 
 # Pydantic reads request-model configuration dynamically.

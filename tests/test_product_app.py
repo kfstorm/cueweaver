@@ -236,6 +236,22 @@ def test_product_rejects_unknown_api_head_paths(tmp_path: Path, path: str):
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("GET", "/api/discover"), ("POST", "/api/status")],
+)
+def test_product_preserves_method_mismatch_for_known_api_paths(
+    tmp_path: Path, method: str, path: str
+):
+    response = TestClient(product_app(tmp_path)).request(method, path)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "invalid_request",
+        "message": "Request failed",
+    }
+
+
 def test_development_factory_does_not_require_static_assets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

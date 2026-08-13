@@ -6,12 +6,13 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .application import CueWeaverApplication
 from .application.translation import Translator
 from .http import create_app
+from .http.app import http_error_handler
 from .translation import PySubtransTranslator
 
 MEDIA_ROOT_ENV = "CUEWEAVER_MEDIA_ROOT"
@@ -33,14 +34,21 @@ def create_product_app(
     app = _create_api_app(media_root, work_root, translator)
     static_root = _validate_static_root(static_root or STATIC_ROOT)
 
-    @app.get("/{client_path:path}", include_in_schema=False)
-    def spa(client_path: str) -> Response:
-        if client_path == "api" or client_path.startswith("api/"):
+    async def product_not_found(request: Request, _error: Exception) -> Response:
+        if _is_api_path(request.url.path):
             return _api_not_found()
-        asset = (static_root / client_path).resolve()
-        if client_path and asset.is_relative_to(static_root) and asset.is_file():
+        if request.method not in {"GET", "HEAD"}:
+            return await http_error_handler(request, _error)
+        asset = (static_root / request.url.path.removeprefix("/")).resolve()
+        if (
+            request.url.path != "/"
+            and asset.is_relative_to(static_root)
+            and asset.is_file()
+        ):
             return FileResponse(asset)
         return FileResponse(static_root / "index.html", media_type="text/html")
+
+    app.add_exception_handler(404, product_not_found)
 
     return app
 
@@ -77,23 +85,6 @@ def _create_api_app(
             "worker": {"ready": True, "mode": "single"},
         }
 
-    @app.api_route(
-        "/api",
-        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        include_in_schema=False,
-    )
-    def api_root_not_found() -> JSONResponse:
-        return _api_not_found()
-
-    @app.api_route(
-        "/api/{api_path:path}",
-        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        include_in_schema=False,
-    )
-    def api_path_not_found(api_path: str) -> JSONResponse:
-        del api_path
-        return _api_not_found()
-
     return app
 
 
@@ -114,6 +105,10 @@ def _api_not_found() -> JSONResponse:
         status_code=404,
         content={"error_code": "not_found", "message": "Resource not found"},
     )
+
+
+def _is_api_path(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
 
 
 def _configured_product_inputs(
