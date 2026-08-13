@@ -87,41 +87,41 @@ def wait_for_status(
 def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: Path):
     media_root, work_root, media, _subtitle = make_roots(tmp_path)
     release = threading.Event()
-    client = make_client(media_root, work_root, FakeTranslator(delay=release))
+    with make_client(media_root, work_root, FakeTranslator(delay=release)) as client:
+        response = create_job(client)
 
-    response = create_job(client)
+        assert response.status_code == 200
+        queued = response.json()
+        assert queued["status"] == "Queued"
+        assert queued["request"] == {
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh-Hans",
+            "output_path": "Movie.zh-Hans.srt",
+            "source_format": "srt",
+        }
+        assert client.get("/api/status").status_code == 200
+        assert client.get(f"/api/jobs/{queued['id']}").json()["status"] in {
+            "Queued",
+            "Translating",
+        }
+        record_path = work_root / "jobs" / f"{queued['id']}.json"
+        assert record_path.is_file()
+        assert json.loads(record_path.read_text(encoding="utf-8"))["status"] in {
+            "Queued",
+            "Translating",
+        }
 
-    assert response.status_code == 200
-    queued = response.json()
-    assert queued["status"] == "Queued"
-    assert queued["request"] == {
-        "media_path": "Movie.mkv",
-        "subtitle_path": "Movie.en.srt",
-        "target_language_code": "zh-Hans",
-        "output_path": "Movie.zh-Hans.srt",
-        "source_format": "srt",
-    }
-    assert client.get("/api/status").status_code == 200
-    assert client.get(f"/api/jobs/{queued['id']}").json()["status"] in {
-        "Queued",
-        "Translating",
-    }
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    assert record_path.is_file()
-    assert json.loads(record_path.read_text(encoding="utf-8"))["status"] in {
-        "Queued",
-        "Translating",
-    }
+        release.set()
+        completed = wait_for_status(client, queued["id"], "Completed")
 
-    release.set()
-    completed = wait_for_status(client, queued["id"], "Completed")
-
-    assert completed["finished_at"]
-    assert (media.parent / "Movie.zh-Hans.srt").read_bytes() == SRT
-    assert not (work_root / "jobs" / queued["id"]).exists()
+        assert completed["finished_at"]
+        assert (media.parent / "Movie.zh-Hans.srt").read_bytes() == SRT
+        assert not (work_root / "jobs" / queued["id"]).exists()
 
     restarted = make_client(media_root, work_root, FakeTranslator())
     assert restarted.get(f"/api/jobs/{queued['id']}").json() == completed
+    restarted.close()
 
 
 def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
@@ -321,9 +321,9 @@ def test_job_accepts_external_subtitle_without_language_suffix(tmp_path: Path):
 
 def test_restart_marks_active_job_interrupted_without_requeueing(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    client = make_client(media_root, work_root, FakeTranslator())
-    queued = create_job(client).json()
-    wait_for_status(client, queued["id"], "Completed")
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        queued = create_job(client).json()
+        wait_for_status(client, queued["id"], "Completed")
 
     record_path = work_root / "jobs" / f"{queued['id']}.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -342,36 +342,7 @@ def test_restart_marks_active_job_interrupted_without_requeueing(tmp_path: Path)
     }
 
 
-def test_new_instance_interrupts_old_worker_without_publishing_output(
-    tmp_path: Path,
-):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    started = threading.Event()
-    release = threading.Event()
-
-    class BlockingTranslator(FakeTranslator):
-        def translate(
-            self, source: Path, target_language: str, **kwargs: object
-        ) -> bytes:
-            started.set()
-            release.wait(timeout=5)
-            return super().translate(source, target_language, **kwargs)
-
-    first = Jobs(BlockingTranslator(), media_root, work_root)
-    queued = first.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    assert started.wait(timeout=5)
-
-    second = Jobs(FakeTranslator(), media_root, work_root)
-    assert second.get(str(queued["id"]))["status"] == "Interrupted"
-    release.set()
-    time.sleep(0.05)
-
-    assert not (media_root / "Movie.zh.srt").exists()
-    first.close()
-    second.close()
-
-
-def test_interrupted_worker_cleans_work_after_publishing_before_shutdown(
+def test_shutdown_after_publish_persists_completed_job(
     tmp_path: Path,
 ):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
@@ -381,27 +352,8 @@ def test_interrupted_worker_cleans_work_after_publishing_before_shutdown(
     while not (media_root / "Movie.zh.srt").exists() and time.monotonic() < deadline:
         time.sleep(0.01)
     jobs.close()
+    record = json.loads(
+        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
+    )
+    assert record["status"] == "Completed"
     assert not (work_root / "jobs" / str(queued["id"])).exists()
-
-
-def test_concurrent_jobs_construction_leaves_one_live_owner(tmp_path: Path):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    instances: list[Jobs] = []
-    errors: list[Exception] = []
-
-    def construct() -> None:
-        try:
-            instances.append(Jobs(FakeTranslator(), media_root, work_root))
-        except Exception as error:
-            errors.append(error)
-
-    threads = [threading.Thread(target=construct) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=5)
-
-    assert errors == []
-    assert len(instances) == 2
-    assert sum(not instance._closed.is_set() for instance in instances) == 1
-    instances[-1].close()

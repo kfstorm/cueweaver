@@ -14,7 +14,6 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import ClassVar
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
@@ -39,33 +38,22 @@ class CreateJobRequest:
 class Jobs:
     """Validate, persist, execute, and expose one serial stream of Jobs."""
 
-    _instances: ClassVar[dict[Path, Jobs]] = {}
-    _instances_lock: ClassVar[threading.Lock] = threading.Lock()
-    _construction_lock: ClassVar[threading.Lock] = threading.Lock()
-
     def __init__(
         self, translator: Translator, media_root: Path, work_root: Path
     ) -> None:
-        with self._construction_lock:
-            self._translator = translator
-            self._media_root = media_root.resolve()
-            self._jobs_root = work_root / "jobs"
-            self._pending: queue.Queue[str | None] = queue.Queue()
-            self._records: dict[str, dict[str, object]] = {}
-            self._lock = threading.Lock()
-            self._lifecycle_lock = threading.Lock()
-            self._closed = threading.Event()
-            with self._instances_lock:
-                previous = self._instances.get(self._jobs_root)
-            if previous is not None:
-                previous.close()
-            self._load_records()
-            self._worker = threading.Thread(
-                target=self._run, daemon=True, name="cueweaver-job-worker"
-            )
-            self._worker.start()
-            with self._instances_lock:
-                self._instances[self._jobs_root] = self
+        self._translator = translator
+        self._media_root = media_root.resolve()
+        self._jobs_root = work_root / "jobs"
+        self._pending: queue.Queue[str | None] = queue.Queue()
+        self._records: dict[str, dict[str, object]] = {}
+        self._lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
+        self._closed = threading.Event()
+        self._load_records()
+        self._worker = threading.Thread(
+            target=self._run, daemon=True, name="cueweaver-job-worker"
+        )
+        self._worker.start()
 
     def close(self) -> None:
         """Stop accepting work and let the worker exit after its current Job."""
@@ -74,9 +62,7 @@ class Jobs:
                 return
             self._closed.set()
             self._pending.put(None)
-            with self._instances_lock:
-                if self._instances.get(self._jobs_root) is self:
-                    del self._instances[self._jobs_root]
+        self._worker.join()
 
     def create(self, request: CreateJobRequest) -> dict[str, object]:
         with self._lifecycle_lock:
@@ -227,6 +213,7 @@ class Jobs:
                 request = record["request"]
         assert isinstance(request, dict)
         work_directory = self._jobs_root / job_id
+        output_published = threading.Event()
         try:
             Translation(
                 self._translator,
@@ -234,6 +221,7 @@ class Jobs:
                     AtomicOutputPublisher(),
                     self._lifecycle_lock,
                     self._closed,
+                    output_published.set,
                 ),
             ).translate(
                 TranslateRequest(
@@ -265,7 +253,7 @@ class Jobs:
             try:
                 shutil.rmtree(work_directory)
             except OSError:
-                if not self._closed.is_set():
+                if not self._closed.is_set() or output_published.is_set():
                     self._finish(
                         job_id,
                         "Failed",
@@ -275,7 +263,7 @@ class Jobs:
                         },
                     )
                 return
-            if not self._closed.is_set():
+            if not self._closed.is_set() or output_published.is_set():
                 self._finish(job_id, "Completed", None)
 
     def _finish(
@@ -353,10 +341,12 @@ class _JobOutputPublisher:
         publisher: OutputPublisher,
         lifecycle_lock: threading.Lock,
         closed: threading.Event,
+        mark_published: Callable[[], None],
     ) -> None:
         self._publisher = publisher
         self._lifecycle_lock = lifecycle_lock
         self._closed = closed
+        self._mark_published = mark_published
 
     def publish(self, output_path: Path, write: Callable[[Path], None]) -> None:
         with self._lifecycle_lock:
@@ -365,6 +355,7 @@ class _JobOutputPublisher:
                     "job_interrupted", "Job was interrupted when CueWeaver stopped"
                 )
             self._publisher.publish(output_path, write)
+            self._mark_published()
 
 
 def _timestamp() -> str:

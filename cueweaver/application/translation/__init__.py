@@ -69,8 +69,6 @@ class Translation:
                 dynamic_terminology_enabled=request.dynamic_terminology_enabled,
                 subtitle_terminology_filter_enabled=request.subtitle_terminology_filter_enabled,
             )
-        except ServiceError:
-            raise
         except Exception as error:
             raise ServiceError("translation_failed", "Translation failed") from error
 
