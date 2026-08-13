@@ -26,6 +26,7 @@ import {
 import { cn } from "./lib/utils";
 import { useProductStatus } from "./status";
 import { useCreateJob, useJobs } from "./jobs";
+import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
   useCreateTermMap,
   useDeleteTermMap,
@@ -111,7 +112,14 @@ function Translate() {
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
-  const [targetLanguage, setTargetLanguage] = useState("");
+  const [targetLanguage, setTargetLanguage] = useState(
+    () => window.localStorage.getItem("cueweaver.target-language") ?? "",
+  );
+  const [termMapId, setTermMapId] = useState<string | null>(null);
+  const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useState(true);
+  const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
+    useState(true);
+  const termMaps = useTermMaps();
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
   const clearDiscovery = (previousMedia: string | null) => {
@@ -124,7 +132,6 @@ function Translate() {
     clearDiscovery(previousMedia);
     setSelectedMedia(null);
     setSelectedSubtitle(null);
-    setTargetLanguage("");
   };
   const selectedCandidate = discovery.data?.candidates.find(
     (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
@@ -181,16 +188,66 @@ function Translate() {
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
           <p>Select an External subtitle and enter the target language.</p>
-          <label>
+          <label htmlFor="target-language-code">
             Target language code
             <Input
+              id="target-language-code"
+              list="target-languages"
               required
+              aria-describedby="target-language-help"
               value={targetLanguage}
               onChange={(event) => setTargetLanguage(event.target.value)}
               placeholder="zh-Hans"
               disabled={selectedCandidate?.kind !== "external"}
             />
+            <datalist id="target-languages">
+              {COMMON_TARGET_LANGUAGES.map((language) => (
+                <option key={language} value={language} />
+              ))}
+            </datalist>
           </label>
+          <span id="target-language-help" className="field-help">
+            Search common BCP 47 codes or enter a custom code.
+          </span>
+          <details className="advanced-settings">
+            <summary>Advanced settings</summary>
+            <div className="advanced-fields">
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={dynamicTerminologyEnabled}
+                  onChange={(event) =>
+                    setDynamicTerminologyEnabled(event.target.checked)
+                  }
+                />
+                Dynamic terminology
+              </label>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={subtitleTerminologyFilterEnabled}
+                  onChange={(event) =>
+                    setSubtitleTerminologyFilterEnabled(event.target.checked)
+                  }
+                />
+                Subtitle terminology filtering
+              </label>
+              <label>
+                Term map
+                <select
+                  value={termMapId ?? ""}
+                  onChange={(event) => setTermMapId(event.target.value || null)}
+                >
+                  <option value="">No Term map</option>
+                  {(termMaps.data?.term_maps ?? []).map((termMap) => (
+                    <option key={termMap.id} value={termMap.id}>
+                      {termMap.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </details>
           {selectedMedia && selectedCandidate?.path && (
             <p className="field-help">
               Suggested output:{" "}
@@ -209,10 +266,22 @@ function Translate() {
           disabled={!canSubmit}
           onClick={() => {
             if (selectedMedia && selectedCandidate?.path) {
-              createJob.mutate({
+              const request = {
                 media_path: selectedMedia,
                 subtitle_path: selectedCandidate.path,
                 target_language_code: targetLanguage,
+                term_map_id: termMapId,
+                dynamic_terminology_enabled: dynamicTerminologyEnabled,
+                subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
+              };
+              createJob.mutate(request, {
+                onSuccess: () => {
+                  window.localStorage.setItem(
+                    "cueweaver.target-language",
+                    targetLanguage,
+                  );
+                  clearMedia(selectedMedia);
+                },
               });
             }
           }}
@@ -616,6 +685,9 @@ function JobsPage() {
               <p>
                 {job.request.subtitle_path} to {job.request.target_language_code}
               </p>
+              {job.queue_position !== null && job.queue_position !== undefined && (
+                <small>Queue position {job.queue_position}</small>
+              )}
             </div>
             <span className={`job-status status-${job.status.toLowerCase()}`}>
               {job.status}

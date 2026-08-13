@@ -32,9 +32,11 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         self.translation = Translation(configured_translator, output)
-        if work_root is not None and media_root is not None:
-            self.jobs = Jobs(configured_translator, media_root, work_root)
         self.term_maps = TermMaps(FileTermMapStore(work_root or Path.cwd()))
+        if work_root is not None and media_root is not None:
+            self.jobs = Jobs(
+                configured_translator, media_root, work_root, self.term_maps
+            )
 
 
 __all__ = ["CueWeaverApplication"]

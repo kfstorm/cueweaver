@@ -6,10 +6,18 @@ export interface Job {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  queue_position: number | null;
   request: {
     media_path: string;
     subtitle_path: string;
     target_language_code: string;
+    term_map: {
+      id: string;
+      name: string;
+      content: Record<string, string>;
+    } | null;
+    dynamic_terminology_enabled: boolean;
+    subtitle_terminology_filter_enabled: boolean;
     output_path: string;
     source_format: string;
   };
@@ -36,6 +44,9 @@ export function useCreateJob() {
       media_path: string;
       subtitle_path: string;
       target_language_code: string;
+      term_map_id: string | null;
+      dynamic_terminology_enabled: boolean;
+      subtitle_terminology_filter_enabled: boolean;
     }): Promise<Job> => {
       const response = await fetch("/api/jobs", {
         method: "POST",

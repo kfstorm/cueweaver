@@ -206,6 +206,49 @@ a {
   line-height: 1.55;
 }
 
+.field-help {
+  display: block;
+  margin-top: 6px;
+  color: #778195;
+  font-size: 12px;
+}
+
+.advanced-settings {
+  margin-top: 18px;
+  color: #20293a;
+  font-size: 13px;
+}
+
+.advanced-settings summary {
+  cursor: pointer;
+  font-weight: 620;
+}
+
+.advanced-fields {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.advanced-fields select {
+  display: block;
+  width: min(100%, 320px);
+  min-height: 36px;
+  margin-top: 6px;
+  border: 1px solid #dce1e9;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 9px;
+  color: #20293a;
+  font: inherit;
+}
+
 .media-browser {
   margin-top: 18px;
   border: 1px solid #e0e4eb;

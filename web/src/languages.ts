@@ -1,0 +1,17 @@
+export const COMMON_TARGET_LANGUAGES = [
+  "ar",
+  "de",
+  "en",
+  "es",
+  "fr",
+  "it",
+  "ja",
+  "ko",
+  "nl",
+  "pl",
+  "pt-BR",
+  "ru",
+  "tr",
+  "zh-Hans",
+  "zh-Hant",
+] as const;

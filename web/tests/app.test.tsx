@@ -170,6 +170,7 @@ function renderTermMapsWithFetch(fetchImplementation: typeof fetch) {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -560,9 +561,48 @@ describe("product shell", () => {
             media_path: "Movie.mkv",
             subtitle_path: "Movie.en.srt",
             target_language_code: "zh-Hans",
+            term_map_id: null,
+            dynamic_terminology_enabled: true,
+            subtitle_terminology_filter_enabled: true,
           }),
         }),
       ),
+    );
+  });
+
+  it("remembers a successful language and resets the source form", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "x-custom" },
+    });
+    fireEvent.click(screen.getByText("Advanced settings"));
+    fireEvent.click(screen.getByLabelText("Dynamic terminology"));
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem("cueweaver.target-language")).toBe("x-custom");
+    });
+    expect(screen.getByLabelText("Target language code")).toHaveValue("x-custom");
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Choose another Media" }),
+    ).not.toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jobs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          media_path: "Movie.mkv",
+          subtitle_path: "Movie.en.srt",
+          target_language_code: "x-custom",
+          term_map_id: null,
+          dynamic_terminology_enabled: false,
+          subtitle_terminology_filter_enabled: true,
+        }),
+      }),
     );
   });
 
