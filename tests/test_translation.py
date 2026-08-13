@@ -14,6 +14,20 @@ class Event:
         pass
 
 
+def _patch_translation_dependencies(
+    monkeypatch, project, engine, save_translation, init_options
+):
+    project.subtitles.SaveTranslation = save_translation
+    monkeypatch.setattr("cueweaver.translation.init_options", init_options)
+    monkeypatch.setattr(
+        "cueweaver.translation.init_project", lambda *_args, **_kwargs: project
+    )
+    monkeypatch.setattr(
+        "cueweaver.translation.init_translation_provider", lambda *_args: object()
+    )
+    monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", engine)
+
+
 def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
     tmp_path, monkeypatch
 ):
@@ -57,15 +71,9 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
     def save_translation(path: str) -> None:
         Path(path).write_bytes(source.read_bytes())
 
-    project.subtitles.SaveTranslation = save_translation
-    monkeypatch.setattr("cueweaver.translation.init_options", init_options)
-    monkeypatch.setattr(
-        "cueweaver.translation.init_project", lambda *_args, **_kwargs: project
+    _patch_translation_dependencies(
+        monkeypatch, project, Engine, save_translation, init_options
     )
-    monkeypatch.setattr(
-        "cueweaver.translation.init_translation_provider", lambda *_args: object()
-    )
-    monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", Engine)
 
     result = PySubtransTranslator().translate(
         source,
@@ -162,15 +170,9 @@ def test_translation_uses_an_explicit_english_language_description_in_the_prompt
     def save_translation(path: str) -> None:
         Path(path).write_bytes(source.read_bytes())
 
-    project.subtitles.SaveTranslation = save_translation
-    monkeypatch.setattr("cueweaver.translation.init_options", init_options)
-    monkeypatch.setattr(
-        "cueweaver.translation.init_project", lambda *_args, **_kwargs: project
+    _patch_translation_dependencies(
+        monkeypatch, project, Engine, save_translation, init_options
     )
-    monkeypatch.setattr(
-        "cueweaver.translation.init_translation_provider", lambda *_args: object()
-    )
-    monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", Engine)
 
     PySubtransTranslator().translate(
         source, target_language, work_directory=tmp_path / "work"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 from ..application.errors import ServiceError
@@ -45,7 +46,5 @@ class AtomicOutputPublisher:
             ) from error
         finally:
             if temporary_path is not None:
-                try:
+                with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass

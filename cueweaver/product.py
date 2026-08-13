@@ -123,7 +123,7 @@ def _prepare_work_root(work_root: Path) -> None:
             if source.read_bytes() != b"ready":
                 raise OSError
             destination.write_bytes(b"replace")
-            os.replace(source, destination)
+            source.replace(destination)
             if destination.read_bytes() != b"ready":
                 raise OSError
     except OSError as error:

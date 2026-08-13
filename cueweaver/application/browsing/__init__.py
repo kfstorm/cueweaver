@@ -114,7 +114,7 @@ def _relative_path(path: Path, root: Path) -> Path:
 
 
 def _requested_relative_path(requested: Path) -> Path:
-    return Path(".") if not str(requested) else requested
+    return Path() if not str(requested) else requested
 
 
 def _natural_key(name: str) -> tuple[tuple[int, str | int], ...]:
@@ -136,7 +136,7 @@ def _media_nfo(media: Path, root: Path) -> tuple[str | None, int | None]:
     return None, None
 
 
-def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:
+def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:  # noqa: PLR0911
     try:
         if not path.resolve().is_relative_to(root):
             return None, None
