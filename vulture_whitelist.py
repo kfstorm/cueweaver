@@ -18,6 +18,11 @@ product_status
 spa
 api_root_not_found
 api_path_not_found
+browse
 
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
+BrowseBody.model_config
+expat.ParserCreate().StartDoctypeDeclHandler
+expat.ParserCreate().EntityDeclHandler
+expat.ParserCreate().ExternalEntityRefHandler

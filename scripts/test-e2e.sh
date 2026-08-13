@@ -8,6 +8,9 @@ IMAGE="cueweaver-e2e"
 CONTAINER="cueweaver-e2e-$$"
 ROOTS="$(mktemp -d)"
 mkdir "$ROOTS/media" "$ROOTS/work"
+printf '%s' '<movie><title>Example movie</title><year>2024</year></movie>' \
+  >"$ROOTS/media/Example.nfo"
+printf '%s' 'media' >"$ROOTS/media/Example.mkv"
 
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {

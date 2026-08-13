@@ -1,27 +1,50 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
+import type { MediaDirectory } from "../src/browse";
 
-function renderRoute(path: string, providerReady = true) {
+function renderRoute(
+  path: string,
+  providerReady = true,
+  browseResponse: MediaDirectory = {
+    path: "",
+    entries: [
+      { kind: "directory", name: "Series", path: "Series" },
+      { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
+    ],
+  },
+) {
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        api: { ready: true },
-        roots: { ready: true },
-        translation_provider: providerReady
-          ? { ready: true }
-          : {
-              ready: false,
-              message:
-                "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
-            },
-        worker: { ready: true, mode: "single" },
-      }),
+    vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/media/browse")) {
+        const path = init?.body ? JSON.parse(String(init.body)).path : "";
+        return Promise.resolve({
+          ok: true,
+          json: async () =>
+            path === "Series"
+              ? { path, entries: [{ kind: "media", name: "Episode.mkv", path: "Series/Episode.mkv" }] }
+              : browseResponse,
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          api: { ready: true },
+          roots: { ready: true },
+          translation_provider: providerReady
+            ? { ready: true }
+            : {
+                ready: false,
+                message:
+                  "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
+              },
+          worker: { ready: true, mode: "single" },
+        }),
+      });
     }),
   );
   const queryClient = new QueryClient({
@@ -75,5 +98,62 @@ describe("product shell", () => {
       expect(screen.getByText("Translation provider ready")).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("browses one directory at a time and filters its entries", async () => {
+    renderRoute("/translate");
+
+    expect(await screen.findByRole("button", { name: "Open Series" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
+
+    const filter = screen.getByRole("searchbox", { name: "Filter this directory" });
+    fireEvent.change(filter, { target: { value: "movie" } });
+
+    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Series" })).not.toBeInTheDocument();
+  });
+
+  it("navigates with breadcrumbs and preserves Media selection", async () => {
+    renderRoute("/translate");
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+
+    await screen.findByRole("button", { name: "Open Series" });
+    fireEvent.click(screen.getByRole("button", { name: "Open Series" }));
+    expect(await screen.findByRole("button", { name: "Media" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/media/browse",
+      expect.objectContaining({ body: JSON.stringify({ path: "Series" }) }),
+    );
+  });
+
+  it("selects a Media with keyboard- and touch-sized controls", async () => {
+    renderRoute("/translate");
+
+    const media = await screen.findByRole("button", { name: "Select Movie.mkv" });
+    fireEvent.click(media);
+
+    expect(media).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Selected")).toBeInTheDocument();
+  });
+
+  it("keeps the real filename in the accessible Media name", async () => {
+    renderRoute("/translate", true, {
+      path: "",
+      entries: [
+        {
+          kind: "media",
+          name: "Actual filename.mkv",
+          path: "Actual filename.mkv",
+          title: "Displayed title",
+          year: 2024,
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Select Displayed title (2024) (Actual filename.mkv)",
+      }),
+    ).toBeInTheDocument();
   });
 });

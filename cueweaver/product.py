@@ -62,7 +62,7 @@ def _create_api_app(
     _validate_media_root(media_root)
     _prepare_work_root(work_root)
 
-    app = create_app(CueWeaverApplication(translator))
+    app = create_app(CueWeaverApplication(translator, media_root))
     provider_ready = _provider_available(translator)
 
     @app.get("/api/status")
