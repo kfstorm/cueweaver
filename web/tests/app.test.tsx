@@ -37,7 +37,9 @@ function renderRoute(
     ],
   },
   discoveryFailure = false,
-  discoveryResponses: Array<MediaDiscovery | Error | Promise<MediaDiscovery | Error>> = [],
+  discoveryResponses: Array<
+    MediaDiscovery | Error | Promise<MediaDiscovery | Error>
+  > = [],
 ) {
   let discoveryCall = 0;
   vi.stubGlobal(
@@ -49,16 +51,23 @@ function renderRoute(
           ok: true,
           json: async () =>
             path === "Series"
-              ? { path, entries: [{ kind: "media", name: "Episode.mkv", path: "Series/Episode.mkv" }] }
+              ? {
+                  path,
+                  entries: [
+                    { kind: "media", name: "Episode.mkv", path: "Series/Episode.mkv" },
+                  ],
+                }
               : browseResponse,
         });
       }
       if (String(input).includes("/api/media/discover")) {
-        const response = discoveryResponses[discoveryCall++] ??
+        const response =
+          discoveryResponses[discoveryCall++] ??
           (discoveryFailure ? new Error("ffprobe failed") : discoveryResponse);
         return Promise.resolve(response).then((value) => ({
           ok: !(value instanceof Error),
-          json: async () => (value instanceof Error ? { message: value.message } : value),
+          json: async () =>
+            value instanceof Error ? { message: value.message } : value,
         }));
       }
       return Promise.resolve({
@@ -134,14 +143,22 @@ describe("product shell", () => {
   it("browses one directory at a time and filters its entries", async () => {
     renderRoute("/translate");
 
-    expect(await screen.findByRole("button", { name: "Open Series" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Open Series" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
 
     const filter = screen.getByRole("searchbox", { name: "Filter this directory" });
     fireEvent.change(filter, { target: { value: "movie" } });
 
-    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Series" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open Series" }),
+    ).not.toBeInTheDocument();
   });
 
   it("navigates with breadcrumbs and preserves Media selection", async () => {
@@ -205,12 +222,13 @@ describe("product shell", () => {
     expect(screen.getByText("bitmap subtitle")).toBeInTheDocument();
     expect(screen.getByText("Not selectable")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Select external subtitle en (Movie.en.srt)" }),
+      screen.getByRole("button", {
+        name: "Select external subtitle en (Movie.en.srt)",
+      }),
     ).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("group", { name: "Unsupported embedded subtitle" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      screen.getByRole("group", { name: "Unsupported embedded subtitle" }),
+    ).toHaveAttribute("aria-disabled", "true");
   });
 
   it("renders a retryable Discovery error", async () => {
@@ -220,8 +238,10 @@ describe("product shell", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("ffprobe failed");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
-    const discoverCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([input]) => String(input).includes("/api/media/discover"),
+    const discoverCalls = (
+      globalThis.fetch as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([input]) =>
+      String(input).includes("/api/media/discover"),
     ).length;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() =>
@@ -246,17 +266,27 @@ describe("product shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Series" }));
 
     await screen.findByRole("button", { name: "Select Episode.mkv" });
-    expect(screen.queryByRole("button", { name: "Select external subtitle en (Movie.en.srt)" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Select external subtitle en (Movie.en.srt)",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("clears the selected Media explicitly", async () => {
     renderRoute("/translate");
 
     fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Choose another Media" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose another Media" }),
+    );
 
-    expect(screen.queryByRole("button", { name: "Choose another Media" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Choose another Media" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
   });
 
   it("shows an empty Discovery result", async () => {

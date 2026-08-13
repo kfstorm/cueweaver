@@ -13,6 +13,7 @@ from ..application.discovery import (
     UnsupportedCandidateResult,
 )
 from ..application.errors import ServiceError
+from .discover import add_candidate_location
 
 
 class MediaDiscoverBody(BaseModel):
@@ -72,10 +73,9 @@ def candidate_body(
         "format": candidate.format,
         "tags": candidate.tags,
     }
-    if candidate.path is not None:
-        body["path"] = _relative_path(candidate.path, media_root)
-    if candidate.stream_index is not None:
-        body["stream_index"] = candidate.stream_index
+    add_candidate_location(
+        body, candidate, lambda path: _relative_path(path, media_root)
+    )
     return body
 
 
@@ -83,10 +83,9 @@ def unsupported_candidate_body(
     candidate: UnsupportedCandidateResult, media_root: Path
 ) -> dict[str, object]:
     body: dict[str, object] = {"kind": candidate.kind, "reason": candidate.reason}
-    if candidate.path is not None:
-        body["path"] = _relative_path(candidate.path, media_root)
-    if candidate.stream_index is not None:
-        body["stream_index"] = candidate.stream_index
+    add_candidate_location(
+        body, candidate, lambda path: _relative_path(path, media_root)
+    )
     return body
 
 

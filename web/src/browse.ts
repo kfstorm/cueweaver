@@ -20,14 +20,7 @@ async function fetchDirectory(path: string): Promise<MediaDirectory> {
     body: JSON.stringify({ path }),
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      message?: unknown;
-    } | null;
-    throw new Error(
-      typeof body?.message === "string"
-        ? body.message
-        : "This Media directory could not be loaded.",
-    );
+    await throwResponseError(response, "This Media directory could not be loaded.");
   }
   return response.json() as Promise<MediaDirectory>;
 }
@@ -71,16 +64,19 @@ async function fetchDiscovery(
     signal,
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      message?: unknown;
-    } | null;
-    throw new Error(
-      typeof body?.message === "string"
-        ? body.message
-        : "Subtitles could not be discovered.",
-    );
+    await throwResponseError(response, "Subtitles could not be discovered.");
   }
   return response.json() as Promise<MediaDiscovery>;
+}
+
+async function throwResponseError(
+  response: Response,
+  fallback: string,
+): Promise<never> {
+  const body = (await response.json().catch(() => null)) as {
+    message?: unknown;
+  } | null;
+  throw new Error(typeof body?.message === "string" ? body.message : fallback);
 }
 
 export function useMediaDiscovery(path: string | null) {

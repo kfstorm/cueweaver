@@ -93,7 +93,6 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 
 function Translate() {
   const queryClient = useQueryClient();
-  const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
@@ -160,9 +159,7 @@ function Translate() {
       </section>
       <div className="submission-bar">
         <ProviderState />
-        <Button disabled>
-          Start translation
-        </Button>
+        <Button disabled>Start translation</Button>
       </div>
     </>
   );
@@ -194,53 +191,67 @@ function SubtitleDiscovery({
       </div>
       <div className="subtitle-results" aria-live="polite">
         {(query.isPending || query.isFetching) && (
-          <div role="status" className="discovery-skeleton" aria-label="Loading subtitles">
-            <span /><span /><span />
+          <div
+            role="status"
+            className="discovery-skeleton"
+            aria-label="Loading subtitles"
+          >
+            <span />
+            <span />
+            <span />
           </div>
         )}
         {query.isError && (
-          <div role="alert" className="browser-message error">
-            {query.error.message}
-            <Button variant="outline" onClick={() => void query.refetch()}>
-              Try again
-            </Button>
-          </div>
+          <QueryErrorMessage
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+          />
         )}
-        {!query.isFetching && query.data &&
+        {!query.isFetching &&
+          query.data &&
           query.data.candidates.length === 0 &&
           query.data.unsupported_candidates.length === 0 && (
-            <div className="browser-message">No subtitles were found for this Media.</div>
+            <EmptyMessage>No subtitles were found for this Media.</EmptyMessage>
           )}
-        {!query.isFetching && !query.isError && query.data?.candidates.map((candidate, index) => {
-          const key = candidateKey(candidate, index);
-          return (
-            <SubtitleEntry
-              key={key}
+        {!query.isFetching &&
+          !query.isError &&
+          query.data?.candidates.map((candidate, index) => {
+            const key = candidateKey(candidate, index);
+            return (
+              <SubtitleEntry
+                key={key}
+                candidate={candidate}
+                candidateId={key}
+                selected={selected === key}
+                onSelect={onSelect}
+              />
+            );
+          })}
+        {!query.isFetching &&
+          !query.isError &&
+          query.data?.unsupported_candidates.map((candidate, index) => (
+            <UnsupportedSubtitleEntry
+              key={`unsupported-${candidateKey(candidate, index)}`}
               candidate={candidate}
-              candidateId={key}
-              selected={selected === key}
-              onSelect={onSelect}
             />
-          );
-        })}
-        {!query.isFetching && !query.isError && query.data?.unsupported_candidates.map((candidate, index) => (
-          <UnsupportedSubtitleEntry
-            key={`unsupported-${candidateKey(candidate, index)}`}
-            candidate={candidate}
-          />
-        ))}
+          ))}
       </div>
     </section>
   );
 }
 
-function candidateKey(candidate: SubtitleCandidate | UnsupportedSubtitleCandidate, index: number) {
+function candidateKey(
+  candidate: SubtitleCandidate | UnsupportedSubtitleCandidate,
+  index: number,
+) {
   return `${candidate.kind}-${candidate.path ?? candidate.stream_index ?? index}`;
 }
 
 function subtitleLabel(candidate: SubtitleCandidate) {
   const tags = candidate.tags ?? {};
-  return [tags.language, tags.title].filter(Boolean).join(" / ") || "Metadata unavailable";
+  return (
+    [tags.language, tags.title].filter(Boolean).join(" / ") || "Metadata unavailable"
+  );
 }
 
 function subtitlePath(candidate: SubtitleCandidate) {
@@ -275,7 +286,9 @@ function SubtitleEntry({
       aria-label={`Select ${candidate.kind} subtitle ${subtitleAccessibleLabel(candidate)}`}
       onClick={() => onSelect(candidateId)}
     >
-      <span className="subtitle-kind">{candidate.kind === "external" ? "External" : "Embedded"}</span>
+      <span className="subtitle-kind">
+        {candidate.kind === "external" ? "External" : "Embedded"}
+      </span>
       <span className="subtitle-copy">
         <strong>{subtitleLabel(candidate)}</strong>
         <small>
@@ -300,7 +313,9 @@ function UnsupportedSubtitleEntry({
       aria-disabled="true"
       aria-label={`Unsupported ${candidate.kind} subtitle`}
     >
-      <span className="subtitle-kind">{candidate.kind === "external" ? "External" : "Embedded"}</span>
+      <span className="subtitle-kind">
+        {candidate.kind === "external" ? "External" : "Embedded"}
+      </span>
       <span className="subtitle-copy">
         <strong>Unavailable subtitle</strong>
         <small>{candidate.reason}</small>
@@ -341,22 +356,25 @@ function MediaBrowser({
         >
           Media
         </Button>
-        {directory.split("/").filter(Boolean).map((part, index, parts) => {
-          const path = parts.slice(0, index + 1).join("/");
-          return (
-            <span key={path} className="breadcrumb-item">
-              <span aria-hidden="true">/</span>
-              <Button
-                type="button"
-                variant="outline"
-                className="breadcrumb-button"
-                onClick={() => onDirectoryChange(path)}
-              >
-                {part}
-              </Button>
-            </span>
-          );
-        })}
+        {directory
+          .split("/")
+          .filter(Boolean)
+          .map((part, index, parts) => {
+            const path = parts.slice(0, index + 1).join("/");
+            return (
+              <span key={path} className="breadcrumb-item">
+                <span aria-hidden="true">/</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="breadcrumb-button"
+                  onClick={() => onDirectoryChange(path)}
+                >
+                  {part}
+                </Button>
+              </span>
+            );
+          })}
       </div>
       <label className="media-filter">
         <span>Filter this directory</span>
@@ -368,19 +386,21 @@ function MediaBrowser({
         />
       </label>
       <div className="media-results" aria-live="polite">
-        {query.isPending && <div role="status" className="browser-message">Loading Media...</div>}
-        {query.isError && (
-          <div role="alert" className="browser-message error">
-            {query.error.message}
-            <Button variant="outline" onClick={() => void query.refetch()}>
-              Try again
-            </Button>
+        {query.isPending && (
+          <div role="status" className="browser-message">
+            Loading Media...
           </div>
         )}
+        {query.isError && (
+          <QueryErrorMessage
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+          />
+        )}
         {query.data && entries?.length === 0 && (
-          <div className="browser-message">
+          <EmptyMessage>
             {filter ? "No matching Media or directories." : "This directory is empty."}
-          </div>
+          </EmptyMessage>
         )}
         {entries?.map((entry) => (
           <MediaEntry
@@ -392,6 +412,27 @@ function MediaBrowser({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function EmptyMessage({ children }: { children: string }) {
+  return <div className="browser-message">{children}</div>;
+}
+
+function QueryErrorMessage({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div role="alert" className="browser-message error">
+      {message}
+      <Button variant="outline" onClick={onRetry}>
+        Try again
+      </Button>
     </div>
   );
 }
@@ -418,9 +459,7 @@ function MediaEntry({
       variant="outline"
       className="media-entry"
       onClick={() =>
-        isDirectory
-          ? onDirectoryChange(entry.path)
-          : onMediaSelect(entry.path)
+        isDirectory ? onDirectoryChange(entry.path) : onMediaSelect(entry.path)
       }
       aria-pressed={!isDirectory ? selected : undefined}
       aria-label={isDirectory ? `Open ${accessibleLabel}` : `Select ${accessibleLabel}`}
@@ -430,7 +469,9 @@ function MediaEntry({
         <strong title={entry.name}>{label}</strong>
         {entry.title && <small title={entry.name}>{entry.name}</small>}
       </span>
-      {!isDirectory && selected && <span className="media-entry-selected">Selected</span>}
+      {!isDirectory && selected && (
+        <span className="media-entry-selected">Selected</span>
+      )}
       {isDirectory && <span aria-hidden="true">-&gt;</span>}
     </Button>
   );
