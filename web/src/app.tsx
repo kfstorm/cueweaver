@@ -711,9 +711,7 @@ function TermMapsPage() {
                 <span>
                   {map.entry_count} {map.entry_count === 1 ? "entry" : "entries"}
                 </span>
-                <time dateTime={map.updated_at}>
-                  {new Date(map.updated_at).toLocaleString()}
-                </time>
+                <time dateTime={map.updated_at}>{map.updated_at}</time>
               </button>
             ))}
           </div>

@@ -274,6 +274,28 @@ def test_term_map_delete_requires_current_name_and_removes_resource(tmp_path: Pa
     }
 
 
+def test_term_map_delete_index_failure_keeps_old_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client = make_client(tmp_path)
+    created = create_term_map(client)
+    original_write = FileTermMapStore._write_json
+
+    def fail_index(_store: object, path: Path, payload: object) -> None:
+        if path.name == "index.json":
+            raise ServiceError("term_map_write_failed", "index write failed")
+        original_write(path, payload)
+
+    monkeypatch.setattr(FileTermMapStore, "_write_json", fail_index)
+
+    response = client.request(
+        "DELETE", f"/api/term-maps/{created['id']}", json={"name": "Characters"}
+    )
+
+    assert response.json()["error_code"] == "term_map_write_failed"
+    assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
+
+
 def test_term_map_rename_and_replacement_concurrently_preserve_both_changes(
     tmp_path: Path,
 ):

@@ -150,13 +150,8 @@ class FileTermMapStore:
                     "Enter the current Term map name to confirm deletion",
                     field="name",
                 )
-            retired_file = self._retire_content_file(record.content_file)
-            try:
-                self._write_index([item for item in records if item.id != term_map_id])
-            except ServiceError:
-                self._restore_content_file(record.content_file, retired_file)
-                raise
-            self._remove_content_file(retired_file)
+            self._write_index([item for item in records if item.id != term_map_id])
+            self._remove_content_file(record.content_file)
             return self._summary(record)
 
     @contextmanager
@@ -204,27 +199,6 @@ class FileTermMapStore:
             return
         with suppress(OSError):
             (self._directory / content_file).unlink(missing_ok=True)
-
-    def _retire_content_file(self, content_file: str) -> str | None:
-        source = self._directory / content_file
-        if not source.exists():
-            return None
-        retired = self._directory / f".deleted-{uuid.uuid4().hex}-{source.name}"
-        try:
-            source.replace(retired)
-        except OSError as error:
-            raise ServiceError(
-                "term_map_write_failed", "Term map cannot be deleted"
-            ) from error
-        return retired.name
-
-    def _restore_content_file(
-        self, content_file: str, retired_file: str | None
-    ) -> None:
-        if retired_file is None:
-            return
-        with suppress(OSError):
-            (self._directory / retired_file).replace(self._directory / content_file)
 
     def _remove_orphans(self, records: builtins.list[_TermMapRecord]) -> None:
         referenced = {record.content_file for record in records}
