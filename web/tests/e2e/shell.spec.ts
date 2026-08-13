@@ -91,17 +91,24 @@ test("Term maps API validates and persists a real browser-created resource", asy
     expect(response.status()).toBe(400);
     expect((await response.json()).error_code).toBe("invalid_term_map");
   }
+  const duplicate = await page.request.fetch("/api/term-maps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    data: '{"name":"Duplicate","content":{"Source":"one","Source":"two"}}',
+  });
+  expect(duplicate.status()).toBe(400);
+  expect((await duplicate.json()).error_code).toBe("invalid_term_map");
 
   const created = await page.request.post("/api/term-maps", {
     data: { name, content: { Captain: "队长", Ship: "舰船" } },
   });
   expect(created.ok()).toBeTruthy();
   const summary = await created.json();
-  const duplicate = await page.request.post("/api/term-maps", {
+  const duplicateName = await page.request.post("/api/term-maps", {
     data: { name: name.toUpperCase(), content: { Other: "其他" } },
   });
-  expect(duplicate.status()).toBe(400);
-  expect((await duplicate.json()).error_code).toBe("duplicate_term_map_name");
+  expect(duplicateName.status()).toBe(400);
+  expect((await duplicateName.json()).error_code).toBe("duplicate_term_map_name");
 
   const detail = await page.request.get(`/api/term-maps/${summary.id}`);
   expect((await detail.json()).content).toEqual({ Captain: "队长", Ship: "舰船" });

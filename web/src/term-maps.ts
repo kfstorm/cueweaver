@@ -58,7 +58,7 @@ export function useCreateTermMap() {
         await fetch("/api/term-maps", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, content: parsedContent }),
+          body: `{"name":${JSON.stringify(name)},"content":${content}}`,
         }),
       );
     },

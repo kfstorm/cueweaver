@@ -108,6 +108,31 @@ def test_term_map_creation_rejects_oversized_content(tmp_path: Path):
     assert "1 MiB" in response.json()["message"]
 
 
+def test_term_map_creation_rejects_oversized_raw_content_with_whitespace(
+    tmp_path: Path,
+):
+    raw_content = "{\n" + (" " * (1024 * 1024)) + '"source":"target"\n}'
+    response = make_client(tmp_path).post(
+        "/api/term-maps",
+        content=f'{{"name":"Large","content":{raw_content}}}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "invalid_term_map"
+
+
+def test_term_map_creation_rejects_duplicate_source_keys(tmp_path: Path):
+    response = make_client(tmp_path).post(
+        "/api/term-maps",
+        content='{"name":"Duplicate","content":{"Source":"one","Source":"two"}}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "invalid_term_map"
+
+
 def test_term_map_name_uniqueness_is_serialized_under_concurrent_creation(
     tmp_path: Path,
 ):

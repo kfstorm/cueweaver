@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 
 from ..application.errors import ServiceError
 from ..application.term_maps import (
+    MAX_TERM_MAP_BYTES,
     TermMapDetail,
     TermMaps,
     TermMapSummary,
@@ -25,6 +26,9 @@ class JsonPairs(list[tuple[object, object]]):
     """Keep JSON object pairs so case-fold collisions are not silently lost."""
 
 
+MAX_REQUEST_BYTES = MAX_TERM_MAP_BYTES * 2
+
+
 def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
     @app.get("/api/term-maps")
     def list_term_maps() -> dict[str, object]:
@@ -38,15 +42,74 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
 
     @app.post("/api/term-maps")
     async def create_term_map(request: Request) -> dict[str, object]:
-        raw_body = await request.body()
-        try:
-            pairs = json.loads(raw_body, object_pairs_hook=JsonPairs)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raw_body = await _read_limited_body(request)
+        pairs, content_size = _decode_upload(raw_body)
+        if content_size > MAX_TERM_MAP_BYTES:
             raise ServiceError(
-                "invalid_term_map", "Term map upload is not valid JSON"
-            ) from error
+                "invalid_term_map", "Term map must be at most 1 MiB", field="content"
+            )
         name, content = _parse_upload(pairs)
         return summary_body(application.term_maps.create(name, content))
+
+
+async def _read_limited_body(request: Request) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_REQUEST_BYTES:
+            raise ServiceError("invalid_term_map", "Term map upload is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _decode_upload(raw_body: bytes) -> tuple[JsonPairs, int]:
+    try:
+        text = raw_body.decode("utf-8")
+        decoder = json.JSONDecoder(object_pairs_hook=JsonPairs)
+        position = _skip_whitespace(text, 0)
+        if position >= len(text) or text[position] != "{":
+            raise TypeError
+        position += 1
+        pairs: JsonPairs = JsonPairs()
+        content_size: int | None = None
+        while True:
+            position = _skip_whitespace(text, position)
+            if position < len(text) and text[position] == "}":
+                position += 1
+                break
+            key, position = decoder.raw_decode(text, position)
+            if not isinstance(key, str):
+                raise TypeError
+            position = _skip_whitespace(text, position)
+            if position >= len(text) or text[position] != ":":
+                raise TypeError
+            value_start = _skip_whitespace(text, position + 1)
+            value, position = decoder.raw_decode(text, value_start)
+            pairs.append((key, value))
+            if key == "content":
+                content_size = len(text[value_start:position].encode("utf-8"))
+            position = _skip_whitespace(text, position)
+            if position < len(text) and text[position] == ",":
+                position += 1
+                continue
+            if position < len(text) and text[position] == "}":
+                position += 1
+                break
+            raise TypeError
+        if _skip_whitespace(text, position) != len(text):
+            raise TypeError
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
+        raise ServiceError(
+            "invalid_term_map", "Term map upload is not valid JSON"
+        ) from error
+    return pairs, content_size or 0
+
+
+def _skip_whitespace(text: str, position: int) -> int:
+    while position < len(text) and text[position] in " \t\r\n":
+        position += 1
+    return position
 
 
 def _parse_upload(payload: object) -> tuple[str, dict[str, str]]:

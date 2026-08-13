@@ -251,6 +251,28 @@ describe("product shell", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("/api/term-maps", expect.objectContaining({ method: "POST" }));
   });
 
+  it("preserves duplicate JSON keys for server-side validation", async () => {
+    const duplicateContent = '{"Source":"one","Source":"two"}';
+    const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input === "/api/status") {
+        return { ok: true, json: async () => ({ api: { ready: true }, roots: { ready: true }, translation_provider: { ready: true }, worker: { ready: true, mode: "single" } }) };
+      }
+      if (init?.method === "POST") {
+        expect(init.body).toBe(`{"name":"Duplicate","content":${duplicateContent}}`);
+        return { ok: false, json: async () => ({ message: "Source keys must be unique regardless of case" }) };
+      }
+      return { ok: true, json: async () => ({ term_maps: [] }) };
+    });
+    renderTermMapsWithFetch(fetchMock);
+
+    await screen.findByRole("heading", { name: "No Term maps yet" });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Duplicate" } });
+    fireEvent.change(screen.getByLabelText("JSON content"), { target: { value: duplicateContent } });
+    fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("unique regardless of case");
+  });
+
   it("exposes a duplicate-name API error", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
       if (input === "/api/status") {
