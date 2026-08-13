@@ -21,13 +21,13 @@ if [[ "${CI:-}" == "true" ]]; then
 fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
-  corepack pnpm --dir web format:check
-  corepack pnpm --dir web lint
-  corepack pnpm --dir web typecheck
-  corepack pnpm --dir web build
+  pnpm --dir web format:check
+  pnpm --dir web lint
+  pnpm --dir web typecheck
+  pnpm --dir web build
 else
-  corepack pnpm --dir web lint:fix
-  corepack pnpm --dir web format
-  corepack pnpm --dir web typecheck
-  corepack pnpm --dir web build
+  pnpm --dir web lint:fix
+  pnpm --dir web format
+  pnpm --dir web typecheck
+  pnpm --dir web build
 fi

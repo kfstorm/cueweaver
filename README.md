@@ -32,6 +32,20 @@ directory. CueWeaver creates the Work root when absent and verifies it supports
 the filesystem operations required for persistent product state. The roots are
 never returned to Web clients.
 
+For local development, run the API-only backend behind Vite with:
+
+```bash
+scripts/dev.sh
+```
+
+The script requires `uv`, an already-installed Python environment from `uv sync`,
+and `web/node_modules` from `pnpm --dir web install`. By default it preserves
+development data in `.cueweaver/dev/media` and `.cueweaver/dev/work`. Set
+`CUEWEAVER_MEDIA_ROOT` and/or `CUEWEAVER_WORK_ROOT` to use other absolute paths.
+`API_PORT` and `WEB_PORT` override the default ports `8000` and `5173`. Vite is
+available to the local network at `http://<host-ip>:5173`; its `/api` requests
+are proxied to the loopback-only backend.
+
 An unconfigured PySubtrans provider does not prevent startup. The Web shell
 remains available and explains how to enable Translation submission.
 

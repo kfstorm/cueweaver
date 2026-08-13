@@ -85,7 +85,6 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 }
 
 function Translate() {
-  const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
@@ -124,9 +123,7 @@ function Translate() {
       </section>
       <div className="submission-bar">
         <ProviderState />
-        <Button disabled>
-          Start translation
-        </Button>
+        <Button disabled>Start translation</Button>
       </div>
     </>
   );
@@ -163,22 +160,25 @@ function MediaBrowser({
         >
           Media
         </Button>
-        {directory.split("/").filter(Boolean).map((part, index, parts) => {
-          const path = parts.slice(0, index + 1).join("/");
-          return (
-            <span key={path} className="breadcrumb-item">
-              <span aria-hidden="true">/</span>
-              <Button
-                type="button"
-                variant="outline"
-                className="breadcrumb-button"
-                onClick={() => onDirectoryChange(path)}
-              >
-                {part}
-              </Button>
-            </span>
-          );
-        })}
+        {directory
+          .split("/")
+          .filter(Boolean)
+          .map((part, index, parts) => {
+            const path = parts.slice(0, index + 1).join("/");
+            return (
+              <span key={path} className="breadcrumb-item">
+                <span aria-hidden="true">/</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="breadcrumb-button"
+                  onClick={() => onDirectoryChange(path)}
+                >
+                  {part}
+                </Button>
+              </span>
+            );
+          })}
       </div>
       <label className="media-filter">
         <span>Filter this directory</span>
@@ -190,7 +190,11 @@ function MediaBrowser({
         />
       </label>
       <div className="media-results" aria-live="polite">
-        {query.isPending && <div role="status" className="browser-message">Loading Media...</div>}
+        {query.isPending && (
+          <div role="status" className="browser-message">
+            Loading Media...
+          </div>
+        )}
         {query.isError && (
           <div role="alert" className="browser-message error">
             {query.error.message}
@@ -240,9 +244,7 @@ function MediaEntry({
       variant="outline"
       className="media-entry"
       onClick={() =>
-        isDirectory
-          ? onDirectoryChange(entry.path)
-          : onMediaSelect(entry.path)
+        isDirectory ? onDirectoryChange(entry.path) : onMediaSelect(entry.path)
       }
       aria-pressed={!isDirectory ? selected : undefined}
       aria-label={isDirectory ? `Open ${accessibleLabel}` : `Select ${accessibleLabel}`}
@@ -252,7 +254,9 @@ function MediaEntry({
         <strong title={entry.name}>{label}</strong>
         {entry.title && <small title={entry.name}>{entry.name}</small>}
       </span>
-      {!isDirectory && selected && <span className="media-entry-selected">Selected</span>}
+      {!isDirectory && selected && (
+        <span className="media-entry-selected">Selected</span>
+      )}
       {isDirectory && <span aria-hidden="true">-&gt;</span>}
     </Button>
   );

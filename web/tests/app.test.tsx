@@ -26,7 +26,12 @@ function renderRoute(
           ok: true,
           json: async () =>
             path === "Series"
-              ? { path, entries: [{ kind: "media", name: "Episode.mkv", path: "Series/Episode.mkv" }] }
+              ? {
+                  path,
+                  entries: [
+                    { kind: "media", name: "Episode.mkv", path: "Series/Episode.mkv" },
+                  ],
+                }
               : browseResponse,
         });
       }
@@ -103,14 +108,22 @@ describe("product shell", () => {
   it("browses one directory at a time and filters its entries", async () => {
     renderRoute("/translate");
 
-    expect(await screen.findByRole("button", { name: "Open Series" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Open Series" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
 
     const filter = screen.getByRole("searchbox", { name: "Filter this directory" });
     fireEvent.change(filter, { target: { value: "movie" } });
 
-    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Series" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open Series" }),
+    ).not.toBeInTheDocument();
   });
 
   it("navigates with breadcrumbs and preserves Media selection", async () => {
