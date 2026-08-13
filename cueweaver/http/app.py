@@ -19,9 +19,14 @@ BUSINESS_ROUTES = frozenset({"/api/discover", "/api/extract", "/api/translate"})
 
 
 class Application(Protocol):
-    discovery: DiscoveryOperation
-    extraction: ExtractionOperation
-    translation: TranslationOperation
+    @property
+    def discovery(self) -> DiscoveryOperation: ...
+
+    @property
+    def extraction(self) -> ExtractionOperation: ...
+
+    @property
+    def translation(self) -> TranslationOperation: ...
 
 
 def create_app(application: Application) -> FastAPI:

@@ -24,6 +24,11 @@ from .terminology import filter_terminology_for_text
 class PySubtransTranslator:
     """Translate one explicit subtitle file using PySubtrans configuration."""
 
+    @property
+    def available(self) -> bool:
+        """Report provider configuration without exposing its value."""
+        return bool(init_options().provider)
+
     def translate(
         self,
         source: Path,

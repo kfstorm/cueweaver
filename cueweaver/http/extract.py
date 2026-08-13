@@ -21,7 +21,8 @@ class ExtractionOperation(Protocol):
 
 
 class ExtractionApplication(Protocol):
-    extraction: ExtractionOperation
+    @property
+    def extraction(self) -> ExtractionOperation: ...
 
 
 def register_extract(app: FastAPI, application: ExtractionApplication) -> None:

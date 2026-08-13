@@ -21,8 +21,8 @@ repos:
   - repo: local
     hooks:
       - id: quality-checks
-        name: Quality checks
-        entry: scripts/lint.sh --check
+        name: Backend lint and checks
+        entry: scripts/lint-backend.sh --check
         language: system
         types: [python]
         pass_filenames: false
@@ -35,10 +35,24 @@ repos:
         pass_filenames: false
 
       - id: unit-tests
-        name: Unit tests
-        entry: scripts/run-unit-tests.sh
+        name: Backend tests
+        entry: scripts/test-backend.sh
         language: system
         pass_filenames: false
+
+      - id: web-checks
+        name: Frontend lint and checks
+        entry: scripts/lint-frontend.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: web-unit-tests
+        name: Frontend unit tests
+        entry: scripts/test-frontend.sh
+        language: system
+        pass_filenames: false
+        always_run: true
 
       - id: duplication
         name: Duplication check

@@ -7,3 +7,9 @@ htmlcov/
 dist/
 *.py[cod]
 .cueweaver/
+node_modules/
+web/dist/
+web/coverage/
+*.tsbuildinfo
+web/test-results/
+web/playwright-report/

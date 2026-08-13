@@ -25,7 +25,8 @@ class TranslationOperation(Protocol):
 
 
 class TranslationApplication(Protocol):
-    translation: TranslationOperation
+    @property
+    def translation(self) -> TranslationOperation: ...
 
 
 def register_translate(app: FastAPI, application: TranslationApplication) -> None:
