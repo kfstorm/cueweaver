@@ -266,6 +266,24 @@ def test_development_factory_does_not_require_static_assets(
     assert response.status_code == 200
 
 
+def test_development_factory_returns_structured_api_404(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root = configured_roots(tmp_path)
+    monkeypatch.setenv("CUEWEAVER_MEDIA_ROOT", str(media_root))
+    monkeypatch.setenv("CUEWEAVER_WORK_ROOT", str(work_root))
+
+    response = TestClient(
+        create_development_app_from_env(translator=TranslatorFixture())
+    ).get("/api/unknown")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_code": "not_found",
+        "message": "Resource not found",
+    }
+
+
 @pytest.mark.parametrize(
     ("path", "body", "error_code"),
     [

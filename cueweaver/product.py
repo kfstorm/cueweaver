@@ -71,6 +71,7 @@ def _create_api_app(
     _prepare_work_root(work_root)
 
     app = create_app(CueWeaverApplication(translator, media_root))
+    app.add_exception_handler(404, api_not_found_handler)
     provider_ready = _provider_available(translator)
 
     @app.get("/api/status")
@@ -105,6 +106,12 @@ def _api_not_found() -> JSONResponse:
         status_code=404,
         content={"error_code": "not_found", "message": "Resource not found"},
     )
+
+
+async def api_not_found_handler(request: Request, error: Exception) -> Response:
+    if _is_api_path(request.url.path):
+        return _api_not_found()
+    return await http_error_handler(request, error)
 
 
 def _is_api_path(path: str) -> bool:

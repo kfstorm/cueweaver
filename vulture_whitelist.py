@@ -15,6 +15,7 @@ create_product_app_from_env
 # FastAPI middleware callbacks are registered dynamically by the decorator.
 require_json_content_type
 product_status
+api_not_found_handler
 product_not_found
 browse
 
