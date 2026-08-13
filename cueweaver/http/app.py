@@ -61,7 +61,24 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
     async def require_json_content_type(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if request.method == "POST" and request.url.path in BUSINESS_ROUTES:
+        term_map_path = request.url.path.removeprefix("/api/term-maps/")
+        is_term_map_mutation = (
+            request.method in {"PATCH", "PUT", "DELETE"}
+            and bool(term_map_path)
+            and "/" not in term_map_path
+        )
+        if (
+            request.method == "POST"
+            and bool(term_map_path)
+            and "/" not in term_map_path
+        ):
+            return JSONResponse(
+                status_code=404,
+                content={"error_code": "not_found", "message": "Resource not found"},
+            )
+        if request.method in {"POST", "PATCH", "PUT", "DELETE"} and (
+            request.url.path in BUSINESS_ROUTES or is_term_map_mutation
+        ):
             content_type = request.headers.get("content-type", "")
             if (
                 content_type.split(";", maxsplit=1)[0].strip().casefold()
