@@ -8,9 +8,9 @@ CueWeaverApplication
 TranslateRequest.subtitle_path
 TranslateRequest.term_map_path
 create_app
+create_development_app_from_env
 create_product_app
 create_product_app_from_env
-run
 
 # FastAPI middleware callbacks are registered dynamically by the decorator.
 require_json_content_type
@@ -18,7 +18,13 @@ list_term_maps
 get_term_map
 create_term_map
 product_status
-spa
+api_not_found_handler
+product_not_found
+browse
 
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
+BrowseBody.model_config
+expat.ParserCreate().StartDoctypeDeclHandler
+expat.ParserCreate().EntityDeclHandler
+expat.ParserCreate().ExternalEntityRefHandler

@@ -6,6 +6,7 @@ from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
+from .browsing import MediaBrowser
 from .discovery import Discovery
 from .extraction import Extraction
 from .term_maps import TermMaps
@@ -16,12 +17,16 @@ class CueWeaverApplication:
     """Production application composition with explicit operations."""
 
     def __init__(
-        self, translator: Translator | None = None, work_root: Path | None = None
+        self,
+        translator: Translator | None = None,
+        work_root: Path | None = None,
+        media_root: Path | None = None,
     ) -> None:
         media = FfmpegMediaAdapter()
         output = AtomicOutputPublisher()
         self.discovery = Discovery(media)
         self.extraction = Extraction(media, output)
+        self.browsing = MediaBrowser(media_root) if media_root is not None else None
         configured_translator = (
             PySubtransTranslator() if translator is None else translator
         )

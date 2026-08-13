@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cueweaver.application.browsing import BrowseEntry, BrowseRequest, BrowseResult
 from cueweaver.application.discovery import (
     DiscoverRequest,
     DiscoverResult,
@@ -23,6 +24,7 @@ class ApplicationFixture:
         self.discovery = self
         self.extraction = self
         self.translation = self
+        self.browsing = self
 
     def discover(self, request: DiscoverRequest) -> DiscoverResult:
         self.discover_request = request
@@ -53,6 +55,12 @@ class ApplicationFixture:
         self.translate_request = request
         return TranslateResult(request.output_path, request.target_language_code, "srt")
 
+    def browse(self, request: BrowseRequest) -> BrowseResult:
+        return BrowseResult(
+            request.path,
+            [BrowseEntry("Movie.mkv", Path("Movie.mkv"), "media", "Movie", 2024)],
+        )
+
 
 def test_http_routes_requests_to_operations_and_serializes_results():
     application = ApplicationFixture()
@@ -77,6 +85,7 @@ def test_http_routes_requests_to_operations_and_serializes_results():
             "dynamic_terminology_enabled": False,
         },
     )
+    browse = client.post("/api/media/browse", json={"path": "Shows"})
 
     assert discover.status_code == 200
     assert discover.headers["content-type"] == "application/json"
@@ -119,6 +128,111 @@ def test_http_routes_requests_to_operations_and_serializes_results():
         False,
         True,
     )
+    assert browse.json() == {
+        "path": "Shows",
+        "entries": [
+            {
+                "name": "Movie.mkv",
+                "path": "Movie.mkv",
+                "kind": "media",
+                "title": "Movie",
+                "year": 2024,
+            }
+        ],
+    }
+
+
+def test_product_discover_resolves_relative_media_path_and_redacts_absolute_paths(
+    tmp_path: Path,
+):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+
+    class RootApplication(ApplicationFixture):
+        def discover(self, request: DiscoverRequest) -> DiscoverResult:
+            result = super().discover(request)
+            return DiscoverResult(
+                request.media_path,
+                [
+                    SubtitleCandidateResult(
+                        "external",
+                        "srt",
+                        {"language": "en", "title": ""},
+                        path=media_root / "Movie.en.srt",
+                    ),
+                    *result.candidates[1:],
+                ],
+                result.unsupported_candidates,
+            )
+
+    application = RootApplication()
+    client = TestClient(create_app(application, media_root))
+
+    response = client.post("/api/media/discover", json={"path": "Movie.mkv"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "path": "Movie.mkv",
+        "candidates": [
+            {
+                "kind": "external",
+                "path": "Movie.en.srt",
+                "format": "srt",
+                "tags": {"language": "en", "title": ""},
+            },
+            {
+                "kind": "embedded",
+                "stream_index": 3,
+                "format": "ass",
+                "tags": {"language": "zhs", "title": "Chinese"},
+            },
+        ],
+        "unsupported_candidates": [
+            {"kind": "embedded", "stream_index": 4, "reason": "bitmap subtitle"}
+        ],
+    }
+    assert application.discover_request == DiscoverRequest(media_root / "Movie.mkv")
+    assert str(media_root) not in response.text
+
+
+@pytest.mark.parametrize(
+    "path", ["../outside.mkv", "/media/Movie.mkv", "inside\\Movie.mkv"]
+)
+def test_product_discover_rejects_paths_outside_relative_media_contract(
+    tmp_path: Path, path: str
+):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+
+    response = TestClient(create_app(ApplicationFixture(), media_root)).post(
+        "/api/media/discover", json={"path": path}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "invalid_media_path"
+
+
+def test_product_discover_redacts_absolute_paths_from_operation_errors(tmp_path: Path):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+
+    class FailingApplication(ApplicationFixture):
+        def discover(self, request: DiscoverRequest) -> DiscoverResult:
+            raise ServiceError(
+                "media_not_found", "Media does not exist", path=request.media_path
+            )
+
+    response = TestClient(create_app(FailingApplication(), media_root)).post(
+        "/api/media/discover", json={"path": "Missing.mkv"}
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "media_not_found",
+        "message": "Media does not exist",
+        "path": "Missing.mkv",
+    }
+    assert str(media_root) not in response.text
 
 
 @pytest.mark.parametrize(

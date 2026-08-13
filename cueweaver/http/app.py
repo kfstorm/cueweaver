@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Protocol
 
 from fastapi import FastAPI, Request
@@ -12,13 +13,22 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ServiceError
 from ..application.term_maps import TermMaps
+from .browse import BrowseOperation, register_browse
 from .discover import DiscoveryOperation, register_discover
 from .extract import ExtractionOperation, register_extract
+from .media_discover import register_media_discover
 from .term_maps import register_term_maps
 from .translate import TranslationOperation, register_translate
 
 BUSINESS_ROUTES = frozenset(
-    {"/api/discover", "/api/extract", "/api/translate", "/api/term-maps"}
+    {
+        "/api/discover",
+        "/api/extract",
+        "/api/translate",
+        "/api/term-maps",
+        "/api/media/browse",
+        "/api/media/discover",
+    }
 )
 
 
@@ -35,8 +45,11 @@ class Application(Protocol):
     @property
     def term_maps(self) -> TermMaps: ...
 
+    @property
+    def browsing(self) -> BrowseOperation | None: ...
 
-def create_app(application: Application) -> FastAPI:
+
+def create_app(application: Application, media_root: Path | None = None) -> FastAPI:
     """Create the HTTP service without coupling it to CLI startup."""
     app = FastAPI()
     app.add_exception_handler(ServiceError, service_error_handler)
@@ -63,6 +76,10 @@ def create_app(application: Application) -> FastAPI:
     register_extract(app, application)
     register_translate(app, application)
     register_term_maps(app, application)
+    if getattr(application, "browsing", None) is not None:
+        register_browse(app, application)
+    if media_root is not None:
+        register_media_discover(app, application.discovery, media_root)
     return app
 
 

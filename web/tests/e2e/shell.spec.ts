@@ -27,6 +27,16 @@ test("mobile shell renders every product route", async ({ page }) => {
   await expectResponsiveShell(page, true);
 });
 
+test("mobile primary actions meet the touch target", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/translate");
+
+  const button = page.getByRole("button", { name: "Start translation" });
+  const box = await button.boundingBox();
+
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+});
+
 test("unavailable provider is actionable and cannot submit", async ({ page }) => {
   await page.goto("/translate");
 
@@ -100,4 +110,44 @@ test("Term maps API validates and persists a real browser-created resource", asy
   await page.getByRole("button", { name: new RegExp(name) }).press("Enter");
   await page.getByLabel("Search Source or Target").fill("captain");
   await expect(page.getByRole("cell", { name: "Captain" })).toBeVisible();
+});
+
+test("mobile Translate can select a labelled Media", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/translate");
+
+  const media = page.getByRole("button", { name: /Select Example movie/ });
+  await expect(media).toBeVisible();
+  await media.click();
+  await expect(media).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Selected")).toBeVisible();
+});
+
+test.describe("explicit subtitle selection", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} Translate shows and selects discovered subtitles`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/translate");
+
+      await page.getByRole("button", { name: /Select Example movie/ }).click();
+      const external = page.getByRole("button", {
+        name: /Select external subtitle en \(Example\.en\.srt\)/,
+      });
+      const embedded = page.getByRole("button", {
+        name: /Select embedded subtitle/,
+      });
+      await expect(external).toBeVisible();
+      await expect(external).toHaveAttribute("aria-pressed", "false");
+      await expect(embedded).toBeVisible();
+      await expect(embedded).toHaveAttribute("aria-pressed", "false");
+
+      await external.click();
+      await expect(external).toHaveAttribute("aria-pressed", "true");
+    });
+  }
 });
