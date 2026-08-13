@@ -140,7 +140,7 @@ def _validate_static_root(static_root: Path) -> Path:
 
 
 def _provider_available(translator: Translator) -> bool:
-    return bool(getattr(translator, "available", True))
+    return translator.available
 
 
 __all__ = ["create_product_app", "create_product_app_from_env", "run"]

@@ -96,6 +96,70 @@ def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
     assert list(work_root.iterdir()) == []
 
 
+@pytest.mark.parametrize("operation", ["read", "write", "mkdir", "replace"])
+def test_product_startup_rejects_work_root_capability_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+):
+    media_root, work_root = configured_roots(tmp_path)
+    static_root = static_fixture(tmp_path)
+    original_read_bytes = Path.read_bytes
+    original_write_bytes = Path.write_bytes
+
+    if operation == "read":
+
+        def fail_read(path: Path) -> bytes:
+            if path.parent.parent == work_root:
+                raise OSError("read probe failed")
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", fail_read)
+    elif operation == "write":
+
+        def fail_write(path: Path, data: bytes) -> int:
+            if path.parent.parent == work_root:
+                raise OSError("write probe failed")
+            return original_write_bytes(path, data)
+
+        monkeypatch.setattr(Path, "write_bytes", fail_write)
+    elif operation == "mkdir":
+        original_mkdir = Path.mkdir
+
+        def fail_mkdir(path: Path, *args: object, **kwargs: object) -> None:
+            if path == work_root:
+                raise OSError("mkdir probe failed")
+            original_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+    else:
+
+        def fail_replace(source: Path, destination: Path) -> None:
+            if source.parent.parent == work_root:
+                raise OSError("replace probe failed")
+            source.replace(destination)
+
+        monkeypatch.setattr("cueweaver.product.os.replace", fail_replace)
+
+    with pytest.raises(ValueError, match="Work root must support"):
+        create_product_app(
+            media_root, work_root, TranslatorFixture(), static_root=static_root
+        )
+
+
+def test_product_startup_rejects_a_work_root_that_is_not_a_directory(
+    tmp_path: Path,
+):
+    media_root, work_root = configured_roots(tmp_path)
+    work_root.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Work root must support"):
+        create_product_app(
+            media_root,
+            work_root,
+            TranslatorFixture(),
+            static_root=static_fixture(tmp_path),
+        )
+
+
 def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Path):
     media_root, work_root = configured_roots(tmp_path)
     translator = TranslatorFixture()
@@ -150,7 +214,34 @@ def test_product_serves_client_routes_from_the_spa(tmp_path: Path, path: str):
     assert '<div id="root"></div>' in response.text
 
 
-def test_product_keeps_explicit_path_business_routes(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("path", "body", "error_code"),
+    [
+        (
+            "/api/discover",
+            {"media_path": "missing.mkv"},
+            "media_not_found",
+        ),
+        (
+            "/api/extract",
+            {"media_path": "missing.mkv", "stream_index": 1, "output_path": "x.srt"},
+            "media_not_found",
+        ),
+        (
+            "/api/translate",
+            {
+                "subtitle_path": "missing.srt",
+                "target_language_code": "zh-Hans",
+                "output_path": "output.srt",
+                "work_directory": "work",
+            },
+            "subtitle_not_found",
+        ),
+    ],
+)
+def test_product_keeps_explicit_path_business_routes(
+    tmp_path: Path, path: str, body: dict[str, object], error_code: str
+):
     media_root, work_root = configured_roots(tmp_path)
     response = TestClient(
         create_product_app(
@@ -159,10 +250,10 @@ def test_product_keeps_explicit_path_business_routes(tmp_path: Path):
             TranslatorFixture(),
             static_root=static_fixture(tmp_path),
         )
-    ).post("/api/discover", json={"media_path": str(media_root / "missing.mkv")})
+    ).post(path, json=body)
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == "media_not_found"
+    assert response.json()["error_code"] == error_code
 
 
 def test_environment_factory_preserves_a_falsy_injected_translator(

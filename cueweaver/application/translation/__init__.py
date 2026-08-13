@@ -31,6 +31,9 @@ class TranslateResult:
 
 
 class Translator(Protocol):
+    @property
+    def available(self) -> bool: ...
+
     def translate(
         self,
         source: Path,
