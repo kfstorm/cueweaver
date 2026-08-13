@@ -233,6 +233,7 @@ function MediaEntry({
   const label = entry.title
     ? `${entry.title}${entry.year ? ` (${entry.year})` : ""}`
     : entry.name;
+  const accessibleLabel = label === entry.name ? label : `${label} (${entry.name})`;
   return (
     <Button
       type="button"
@@ -244,7 +245,7 @@ function MediaEntry({
           : onMediaSelect(entry.path)
       }
       aria-pressed={!isDirectory ? selected : undefined}
-      aria-label={isDirectory ? `Open ${label}` : `Select ${label}`}
+      aria-label={isDirectory ? `Open ${accessibleLabel}` : `Select ${accessibleLabel}`}
     >
       <span className="media-entry-kind">{isDirectory ? "Directory" : "Media"}</span>
       <span className="media-entry-copy">

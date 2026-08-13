@@ -163,6 +163,23 @@ def test_browse_ignores_utf16_unsafe_nfo(tmp_path: Path):
     assert entry.year is None
 
 
+def test_browse_ignores_utf16_unsafe_nfo_without_bom(tmp_path: Path):
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "Movie.mkv").write_bytes(b"media")
+    unsafe = (
+        "<?xml version='1.0' encoding='UTF-16'?>"
+        "<!DOCTYPE movie [<!ENTITY xxe SYSTEM 'file:///secret'>]>"
+        "<movie><title>&xxe;</title><year>2024</year></movie>"
+    ).encode("utf-16-be")
+    (root / "Movie.nfo").write_bytes(unsafe)
+
+    entry = MediaBrowser(root).browse(BrowseRequest(Path("."))).entries[0]
+
+    assert entry.title is None
+    assert entry.year is None
+
+
 def test_browse_ignores_nfo_symlinked_outside_the_media_root(tmp_path: Path):
     root = tmp_path / "media"
     root.mkdir()

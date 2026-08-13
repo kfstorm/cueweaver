@@ -21,3 +21,6 @@ browse
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
 BrowseBody.model_config
+expat.ParserCreate().StartDoctypeDeclHandler
+expat.ParserCreate().EntityDeclHandler
+expat.ParserCreate().ExternalEntityRefHandler

@@ -6,7 +6,8 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
+from xml.parsers import expat
 
 from ..errors import ServiceError
 
@@ -144,9 +145,7 @@ def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:
         content = path.read_bytes()
         if len(content) > MAX_NFO_BYTES:
             return None, None
-        decoded = _decode_xml(content)
-        if re.search(r"<!\s*(?:doctype|entity)\b", decoded, re.IGNORECASE):
-            return None, None
+        _reject_unsafe_xml(content)
         document = ET.fromstring(content)
         values = {
             element.tag.rsplit("}", 1)[-1].casefold(): (element.text or "").strip()
@@ -164,10 +163,16 @@ def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:
         return None, None
 
 
-def _decode_xml(content: bytes) -> str:
-    if content.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return content.decode("utf-16")
-    return content.decode("utf-8-sig")
+def _reject_unsafe_xml(content: bytes) -> None:
+    parser = expat.ParserCreate()
+
+    def reject(*_args: object) -> None:
+        raise ValueError("unsafe XML")
+
+    parser.StartDoctypeDeclHandler = cast(Any, reject)
+    parser.EntityDeclHandler = cast(Any, reject)
+    parser.ExternalEntityRefHandler = cast(Any, reject)
+    parser.Parse(content, True)
 
 
 __all__ = ["BrowseEntry", "BrowseRequest", "BrowseResult", "MediaBrowser"]

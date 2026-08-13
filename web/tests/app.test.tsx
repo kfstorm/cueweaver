@@ -4,15 +4,19 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
+import type { MediaDirectory } from "../src/browse";
 
-function renderRoute(path: string, providerReady = true) {
-  const browseResponse = {
+function renderRoute(
+  path: string,
+  providerReady = true,
+  browseResponse: MediaDirectory = {
     path: "",
     entries: [
       { kind: "directory", name: "Series", path: "Series" },
       { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
     ],
-  };
+  },
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -130,5 +134,26 @@ describe("product shell", () => {
 
     expect(media).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("Selected")).toBeInTheDocument();
+  });
+
+  it("keeps the real filename in the accessible Media name", async () => {
+    renderRoute("/translate", true, {
+      path: "",
+      entries: [
+        {
+          kind: "media",
+          name: "Actual filename.mkv",
+          path: "Actual filename.mkv",
+          title: "Displayed title",
+          year: 2024,
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Select Displayed title (2024) (Actual filename.mkv)",
+      }),
+    ).toBeInTheDocument();
   });
 });
