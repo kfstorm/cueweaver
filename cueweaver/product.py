@@ -6,9 +6,8 @@ import os
 import tempfile
 from pathlib import Path
 
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .application import CueWeaverApplication
 from .application.translation import Translator
@@ -31,11 +30,37 @@ def create_product_app(
     static_root: Path | None = None,
 ) -> FastAPI:
     """Create the complete product with validated roots and injected translation."""
+    app = _create_api_app(media_root, work_root, translator)
+    static_root = _validate_static_root(static_root or STATIC_ROOT)
+
+    @app.get("/{client_path:path}", include_in_schema=False)
+    def spa(client_path: str) -> Response:
+        if client_path == "api" or client_path.startswith("api/"):
+            return _api_not_found()
+        asset = (static_root / client_path).resolve()
+        if client_path and asset.is_relative_to(static_root) and asset.is_file():
+            return FileResponse(asset)
+        return FileResponse(static_root / "index.html", media_type="text/html")
+
+    return app
+
+
+def create_development_app_from_env(*, translator: Translator | None = None) -> FastAPI:
+    """Create the API-only app used behind the Vite development server."""
+    media_root, work_root, configured_translator = _configured_product_inputs(
+        translator
+    )
+    return _create_api_app(media_root, work_root, configured_translator)
+
+
+def _create_api_app(
+    media_root: Path, work_root: Path, translator: Translator
+) -> FastAPI:
+    """Create the shared product API without choosing a frontend delivery mode."""
     media_root = _require_absolute(media_root, "Media root")
     work_root = _require_absolute(work_root, "Work root")
     _validate_media_root(media_root)
     _prepare_work_root(work_root)
-    static_root = _validate_static_root(static_root or STATIC_ROOT)
 
     app = create_app(CueWeaverApplication(translator))
     provider_ready = _provider_available(translator)
@@ -52,14 +77,22 @@ def create_product_app(
             "worker": {"ready": True, "mode": "single"},
         }
 
-    @app.get("/{client_path:path}", include_in_schema=False)
-    def spa(client_path: str) -> FileResponse:
-        if client_path.startswith("api/"):
-            raise HTTPException(status_code=404)
-        asset = (static_root / client_path).resolve()
-        if client_path and asset.is_relative_to(static_root) and asset.is_file():
-            return FileResponse(asset)
-        return FileResponse(static_root / "index.html", media_type="text/html")
+    @app.api_route(
+        "/api",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    def api_root_not_found() -> JSONResponse:
+        return _api_not_found()
+
+    @app.api_route(
+        "/api/{api_path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    def api_path_not_found(api_path: str) -> JSONResponse:
+        del api_path
+        return _api_not_found()
 
     return app
 
@@ -68,17 +101,28 @@ def create_product_app_from_env(
     *, translator: Translator | None = None, static_root: Path | None = None
 ) -> FastAPI:
     """Create the product from its required process configuration."""
-    media_root = _root_from_env(MEDIA_ROOT_ENV)
-    work_root = _root_from_env(WORK_ROOT_ENV)
-    configured_translator = PySubtransTranslator() if translator is None else translator
+    media_root, work_root, configured_translator = _configured_product_inputs(
+        translator
+    )
     return create_product_app(
         media_root, work_root, configured_translator, static_root=static_root
     )
 
 
-def run() -> None:
-    """Run the officially supported single-worker ASGI server."""
-    uvicorn.run(create_product_app_from_env(), host="0.0.0.0", port=8000, workers=1)
+def _api_not_found() -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={"error_code": "not_found", "message": "Resource not found"},
+    )
+
+
+def _configured_product_inputs(
+    translator: Translator | None,
+) -> tuple[Path, Path, Translator]:
+    media_root = _root_from_env(MEDIA_ROOT_ENV)
+    work_root = _root_from_env(WORK_ROOT_ENV)
+    configured_translator = PySubtransTranslator() if translator is None else translator
+    return media_root, work_root, configured_translator
 
 
 def _root_from_env(name: str) -> Path:
@@ -143,4 +187,8 @@ def _provider_available(translator: Translator) -> bool:
     return translator.available
 
 
-__all__ = ["create_product_app", "create_product_app_from_env", "run"]
+__all__ = [
+    "create_development_app_from_env",
+    "create_product_app",
+    "create_product_app_from_env",
+]

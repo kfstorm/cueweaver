@@ -28,7 +28,7 @@ docker run --detach --name "$CONTAINER" \
 for _attempt in {1..30}; do
   if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
     CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
-      corepack pnpm --dir web test:e2e
+      pnpm --dir web test:e2e
     exit 0
   fi
   sleep 1

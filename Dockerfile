@@ -22,4 +22,4 @@ COPY --from=web-builder /build/web/dist/ cueweaver/static/
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 
-CMD ["cueweaver"]
+CMD ["uvicorn", "cueweaver.product:create_product_app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
