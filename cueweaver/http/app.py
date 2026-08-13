@@ -11,11 +11,15 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ServiceError
+from ..application.term_maps import TermMaps
 from .discover import DiscoveryOperation, register_discover
 from .extract import ExtractionOperation, register_extract
+from .term_maps import register_term_maps
 from .translate import TranslationOperation, register_translate
 
-BUSINESS_ROUTES = frozenset({"/api/discover", "/api/extract", "/api/translate"})
+BUSINESS_ROUTES = frozenset(
+    {"/api/discover", "/api/extract", "/api/translate", "/api/term-maps"}
+)
 
 
 class Application(Protocol):
@@ -27,6 +31,9 @@ class Application(Protocol):
 
     @property
     def translation(self) -> TranslationOperation: ...
+
+    @property
+    def term_maps(self) -> TermMaps: ...
 
 
 def create_app(application: Application) -> FastAPI:
@@ -55,6 +62,7 @@ def create_app(application: Application) -> FastAPI:
     register_discover(app, application)
     register_extract(app, application)
     register_translate(app, application)
+    register_term_maps(app, application)
     return app
 
 

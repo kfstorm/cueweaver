@@ -14,6 +14,9 @@ run
 
 # FastAPI middleware callbacks are registered dynamically by the decorator.
 require_json_content_type
+list_term_maps
+get_term_map
+create_term_map
 product_status
 spa
 
