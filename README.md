@@ -186,13 +186,14 @@ language aliases and must not be supplied as `target_language_code`.
 ## Test
 
 ```bash
-uv run pytest
-pnpm --dir web test
+scripts/test-backend.sh
+scripts/test-frontend.sh
+scripts/test-e2e.sh
 ```
 
 ## Development Checks
 
 ```bash
-scripts/lint.sh --check
-pnpm --dir web build
+scripts/lint-backend.sh --check
+scripts/lint-frontend.sh
 ```

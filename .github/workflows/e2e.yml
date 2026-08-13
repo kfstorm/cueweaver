@@ -29,14 +29,9 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: web
 
-      - name: Build Web product
-        run: pnpm build
-        working-directory: web
-
       - name: Install browser
         run: pnpm exec playwright install --with-deps chromium
         working-directory: web
 
       - name: Run end-to-end tests
-        run: pnpm test:e2e
-        working-directory: web
+        run: scripts/test-e2e.sh

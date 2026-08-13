@@ -21,8 +21,8 @@ repos:
   - repo: local
     hooks:
       - id: quality-checks
-        name: Quality checks
-        entry: scripts/lint.sh --check
+        name: Backend lint and checks
+        entry: scripts/lint-backend.sh --check
         language: system
         types: [python]
         pass_filenames: false
@@ -36,20 +36,20 @@ repos:
 
       - id: unit-tests
         name: Python unit tests
-        entry: scripts/run-unit-tests.sh
+        entry: scripts/test-backend.sh
         language: system
         pass_filenames: false
 
       - id: web-checks
-        name: Web type and build checks
-        entry: corepack pnpm --dir web build
+        name: Frontend lint and checks
+        entry: scripts/lint-frontend.sh
         language: system
         pass_filenames: false
         always_run: true
 
       - id: web-unit-tests
-        name: Web unit tests
-        entry: corepack pnpm --dir web test
+        name: Frontend unit tests
+        entry: scripts/test-frontend.sh
         language: system
         pass_filenames: false
         always_run: true
