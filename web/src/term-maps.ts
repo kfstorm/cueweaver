@@ -48,9 +48,8 @@ export function useCreateTermMap() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ name, content }: { name: string; content: string }) => {
-      let parsedContent: unknown;
       try {
-        parsedContent = JSON.parse(content);
+        JSON.parse(content);
       } catch {
         throw new Error("Term map content must be valid JSON");
       }

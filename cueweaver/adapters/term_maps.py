@@ -161,7 +161,7 @@ class FileTermMapStore:
                 json.dump(payload, output, ensure_ascii=False, separators=(",", ":"))
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary_path, path)
+            temporary_path.replace(path)
             temporary_path = None
         except (OSError, TypeError, ValueError) as error:
             raise ServiceError(

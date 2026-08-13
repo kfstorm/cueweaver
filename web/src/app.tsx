@@ -551,17 +551,22 @@ function TermMapsPage() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    create.mutate({ name, content }, {
-      onSuccess: () => {
-        setName("");
-        setContent('{\n  "Source": "Target"\n}');
+    create.mutate(
+      { name, content },
+      {
+        onSuccess: () => {
+          setName("");
+          setContent('{\n  "Source": "Target"\n}');
+        },
       },
-    });
+    );
   }
 
   const entries = selected.data
     ? Object.entries(selected.data.content).filter(([source, target]) =>
-        `${source} ${target}`.toLocaleLowerCase().includes(deferredSearch.toLocaleLowerCase()),
+        `${source} ${target}`
+          .toLocaleLowerCase()
+          .includes(deferredSearch.toLocaleLowerCase()),
       )
     : [];
 
@@ -604,9 +609,21 @@ function TermMapsPage() {
             <p id="upload-help" className="field-help">
               A non-empty object of Source-to-Target strings, up to 1 MiB.
             </p>
-            {create.isError && <p className="form-error" role="alert">{create.error.message}</p>}
-            {create.isPending && <p className="upload-status" role="status">Uploading Term map</p>}
-            <Button className="primary-action" type="submit" disabled={create.isPending}>
+            {create.isError && (
+              <p className="form-error" role="alert">
+                {create.error.message}
+              </p>
+            )}
+            {create.isPending && (
+              <p className="upload-status" role="status">
+                Uploading Term map
+              </p>
+            )}
+            <Button
+              className="primary-action"
+              type="submit"
+              disabled={create.isPending}
+            >
               {create.isPending ? "Uploading..." : "Upload Term map"}
             </Button>
           </form>
@@ -621,8 +638,16 @@ function TermMapsPage() {
             <span className="count-badge">{maps.data?.term_maps?.length ?? 0}</span>
           </div>
           <div className="term-map-list-state">
-            {maps.isPending && <div className="inline-state" role="status"><SpinnerGapIcon className="spin" /> Loading Term maps</div>}
-            {maps.isError && <div className="inline-state error" role="alert">{maps.error.message}</div>}
+            {maps.isPending && (
+              <div className="inline-state" role="status">
+                <SpinnerGapIcon className="spin" /> Loading Term maps
+              </div>
+            )}
+            {maps.isError && (
+              <div className="inline-state error" role="alert">
+                {maps.error.message}
+              </div>
+            )}
             {maps.data?.term_maps?.length === 0 && (
               <div className="term-map-empty">
                 <ListChecksIcon size={24} aria-hidden="true" />
@@ -641,9 +666,15 @@ function TermMapsPage() {
                 type="button"
                 onClick={() => setSelectedId(map.id)}
               >
-                <span className="term-map-item-name" title={map.name}>{map.name}</span>
-                <span>{map.entry_count} {map.entry_count === 1 ? "entry" : "entries"}</span>
-                <time dateTime={map.updated_at}>{new Date(map.updated_at).toLocaleString()}</time>
+                <span className="term-map-item-name" title={map.name}>
+                  {map.name}
+                </span>
+                <span>
+                  {map.entry_count} {map.entry_count === 1 ? "entry" : "entries"}
+                </span>
+                <time dateTime={map.updated_at}>
+                  {new Date(map.updated_at).toLocaleString()}
+                </time>
               </button>
             ))}
           </div>
@@ -654,7 +685,12 @@ function TermMapsPage() {
         <section className="term-map-detail" aria-labelledby="detail-title">
           <div className="detail-header">
             <div>
-              <Button className="back-action" variant="outline" type="button" onClick={() => setSelectedId(null)}>
+              <Button
+                className="back-action"
+                variant="outline"
+                type="button"
+                onClick={() => setSelectedId(null)}
+              >
                 <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Term maps
               </Button>
               <h2 id="detail-title">{selected.data?.name ?? "Term map details"}</h2>
@@ -662,23 +698,48 @@ function TermMapsPage() {
             </div>
           </div>
           <div className="term-map-detail-state">
-            {selected.isPending && <div className="inline-state" role="status"><SpinnerGapIcon className="spin" /> Loading details</div>}
-            {selected.isError && <div className="inline-state error" role="alert">{selected.error.message}</div>}
+            {selected.isPending && (
+              <div className="inline-state" role="status">
+                <SpinnerGapIcon className="spin" /> Loading details
+              </div>
+            )}
+            {selected.isError && (
+              <div className="inline-state error" role="alert">
+                {selected.error.message}
+              </div>
+            )}
             {selected.data && (
               <>
                 <label className="search-field">
                   <MagnifyingGlassIcon size={17} aria-hidden="true" />
                   <span>Search Source or Target</span>
-                  <Input aria-label="Search Source or Target" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search Source or Target" />
+                  <Input
+                    aria-label="Search Source or Target"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search Source or Target"
+                  />
                 </label>
                 <div className="term-table-wrap">
                   <table>
-                    <thead><tr><th>Source</th><th>Target</th></tr></thead>
+                    <thead>
+                      <tr>
+                        <th>Source</th>
+                        <th>Target</th>
+                      </tr>
+                    </thead>
                     <tbody>
-                      {entries.map(([source, target]) => <tr key={source}><td>{source}</td><td>{target}</td></tr>)}
+                      {entries.map(([source, target]) => (
+                        <tr key={source}>
+                          <td>{source}</td>
+                          <td>{target}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
-                  {entries.length === 0 && <p className="table-empty">No matching terms.</p>}
+                  {entries.length === 0 && (
+                    <p className="table-empty">No matching terms.</p>
+                  )}
                 </div>
               </>
             )}
@@ -707,10 +768,7 @@ export function App() {
             />
           }
         />
-        <Route
-          path="term-maps"
-          element={<TermMapsPage />}
-        />
+        <Route path="term-maps" element={<TermMapsPage />} />
         <Route path="*" element={<Navigate to="/translate" replace />} />
       </Route>
     </Routes>

@@ -46,27 +46,52 @@ test("unavailable provider is actionable and cannot submit", async ({ page }) =>
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });
 
-test("Term maps management works with keyboard and search on desktop and mobile", async ({ page }) => {
+test("Term maps management works with keyboard and search on desktop and mobile", async ({
+  page,
+}) => {
   await page.route("/api/status", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ api: { ready: true }, roots: { ready: true }, translation_provider: { ready: true }, worker: { ready: true, mode: "single" } }),
+      body: JSON.stringify({
+        api: { ready: true },
+        roots: { ready: true },
+        translation_provider: { ready: true },
+        worker: { ready: true, mode: "single" },
+      }),
     }),
   );
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ term_maps: [{ id: "map-1", name: "Characters", entry_count: 2, updated_at: "2026-08-13T12:00:00Z" }] }),
+      body: JSON.stringify({
+        term_maps: [
+          {
+            id: "map-1",
+            name: "Characters",
+            entry_count: 2,
+            updated_at: "2026-08-13T12:00:00Z",
+          },
+        ],
+      }),
     }),
   );
   await page.route("/api/term-maps/map-1", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ id: "map-1", name: "Characters", entry_count: 2, updated_at: "2026-08-13T12:00:00Z", content: { Captain: "队长", Ship: "舰船" } }),
+      body: JSON.stringify({
+        id: "map-1",
+        name: "Characters",
+        entry_count: 2,
+        updated_at: "2026-08-13T12:00:00Z",
+        content: { Captain: "队长", Ship: "舰船" },
+      }),
     }),
   );
 
-  for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1280, height: 800 },
+  ]) {
     await page.setViewportSize(viewport);
     await page.goto("/term-maps");
     await page.getByRole("button", { name: /Characters/ }).press("Enter");
@@ -77,7 +102,9 @@ test("Term maps management works with keyboard and search on desktop and mobile"
   }
 });
 
-test("Term maps API validates and persists a real browser-created resource", async ({ page }) => {
+test("Term maps API validates and persists a real browser-created resource", async ({
+  page,
+}) => {
   const name = `Browser terms ${Date.now()}`;
   const invalidCases = [
     { name: "Empty", content: {} },

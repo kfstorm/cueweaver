@@ -6,6 +6,54 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
 
+function jsonResponse(body: unknown, ok = true) {
+  return { ok, json: async () => body };
+}
+
+function statusResponse(providerReady = true) {
+  return jsonResponse({
+    api: { ready: true },
+    roots: { ready: true },
+    translation_provider: providerReady
+      ? { ready: true }
+      : {
+          ready: false,
+          message:
+            "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
+        },
+    worker: { ready: true, mode: "single" },
+  });
+}
+
+function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
+  vi.stubGlobal("fetch", fetchImplementation);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[path]}>
+        <App />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function termMapFetch(
+  postBodyCheck?: (body: BodyInit | null | undefined) => void,
+  postResponse: unknown = {},
+  postOk = true,
+) {
+  return vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
+    if (input === "/api/status") return statusResponse();
+    if (init?.method === "POST") {
+      postBodyCheck?.(init.body);
+      return jsonResponse(postResponse, postOk);
+    }
+    return jsonResponse({ term_maps: [] });
+  });
+}
+
 function renderRoute(
   path: string,
   providerReady = true,
@@ -42,9 +90,9 @@ function renderRoute(
   > = [],
 ) {
   let discoveryCall = 0;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchMock = vi
+    .fn()
+    .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).includes("/api/media/browse")) {
         const path = init?.body ? JSON.parse(String(init.body)).path : "";
         return Promise.resolve({
@@ -70,33 +118,9 @@ function renderRoute(
             value instanceof Error ? { message: value.message } : value,
         }));
       }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          api: { ready: true },
-          roots: { ready: true },
-          translation_provider: providerReady
-            ? { ready: true }
-            : {
-                ready: false,
-                message:
-                  "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
-              },
-          worker: { ready: true, mode: "single" },
-        }),
-      });
-    }),
-  );
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[path]}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+      return Promise.resolve(statusResponse(providerReady));
+    });
+  return renderWithFetch(path, fetchMock);
 }
 
 function renderTermMaps() {
@@ -106,56 +130,25 @@ function renderTermMaps() {
     entry_count: 2,
     updated_at: "2026-08-13T12:00:00Z",
   };
-  vi.stubGlobal(
-    "fetch",
+  return renderWithFetch(
+    "/term-maps",
     vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") {
-        return {
-          ok: true,
-          json: async () => ({
-            api: { ready: true },
-            roots: { ready: true },
-            translation_provider: { ready: true },
-            worker: { ready: true, mode: "single" },
-          }),
-        };
+        return statusResponse();
       }
       if (input === "/api/term-maps") {
-        return { ok: true, json: async () => ({ term_maps: [summary] }) };
+        return jsonResponse({ term_maps: [summary] });
       }
-      return {
-        ok: true,
-        json: async () => ({
-          ...summary,
-          content: { Captain: "队长", Ship: "舰船" },
-        }),
-      };
+      return jsonResponse({
+        ...summary,
+        content: { Captain: "队长", Ship: "舰船" },
+      });
     }),
-  );
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/term-maps"]}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
   );
 }
 
 function renderTermMapsWithFetch(fetchImplementation: typeof fetch) {
-  vi.stubGlobal("fetch", fetchImplementation);
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/term-maps"]}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+  return renderWithFetch("/term-maps", fetchImplementation);
 }
 
 afterEach(() => {
@@ -206,7 +199,9 @@ describe("product shell", () => {
     expect(map).toHaveTextContent("2 entries");
     fireEvent.click(map);
 
-    expect(await screen.findByRole("heading", { name: "Characters" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Characters" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Captain")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("Search Source or Target"), {
       target: { value: "ship" },
@@ -216,39 +211,39 @@ describe("product shell", () => {
   });
 
   it("shows the empty state and uploads valid JSON", async () => {
-    const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
-      if (input === "/api/status") {
-        return { ok: true, json: async () => ({ api: { ready: true }, roots: { ready: true }, translation_provider: { ready: true }, worker: { ready: true, mode: "single" } }) };
-      }
-      if (input === "/api/term-maps" && init?.method === "POST") {
-        return { ok: true, json: async () => ({ id: "new", name: "New terms", entry_count: 1, updated_at: "2026-08-13T12:00:00Z" }) };
-      }
-      return { ok: true, json: async () => ({ term_maps: [] }) };
+    const fetchMock = termMapFetch(undefined, {
+      id: "new",
+      name: "New terms",
+      entry_count: 1,
+      updated_at: "2026-08-13T12:00:00Z",
     });
     renderTermMapsWithFetch(fetchMock);
 
-    expect(await screen.findByRole("heading", { name: "No Term maps yet" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "No Term maps yet" }),
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New terms" } });
-    fireEvent.change(screen.getByLabelText("JSON content"), { target: { value: '{"Captain":"队长"}' } });
+    fireEvent.change(screen.getByLabelText("JSON content"), {
+      target: { value: '{"Captain":"队长"}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/term-maps",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ name: "New terms", content: { Captain: "队长" } }),
-      }),
-    ));
-    expect(screen.getByRole("heading", { name: "No Term maps yet" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ name: "New terms", content: { Captain: "队长" } }),
+        }),
+      ),
+    );
+    expect(
+      screen.getByRole("heading", { name: "No Term maps yet" }),
+    ).toBeInTheDocument();
   });
 
   it("reports client-side JSON validation without making an upload request", async () => {
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") {
-        return { ok: true, json: async () => ({ api: { ready: true }, roots: { ready: true }, translation_provider: { ready: true }, worker: { ready: true, mode: "single" } }) };
-      }
-      return { ok: true, json: async () => ({ term_maps: [] }) };
-    });
+    const fetchMock = termMapFetch();
     renderTermMapsWithFetch(fetchMock);
 
     await screen.findByRole("heading", { name: "No Term maps yet" });
@@ -257,41 +252,39 @@ describe("product shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("valid JSON");
-    expect(fetchMock).not.toHaveBeenCalledWith("/api/term-maps", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/term-maps",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("preserves duplicate JSON keys for server-side validation", async () => {
     const duplicateContent = '{"Source":"one","Source":"two"}';
-    const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
-      if (input === "/api/status") {
-        return { ok: true, json: async () => ({ api: { ready: true }, roots: { ready: true }, translation_provider: { ready: true }, worker: { ready: true, mode: "single" } }) };
-      }
-      if (init?.method === "POST") {
-        expect(init.body).toBe(`{"name":"Duplicate","content":${duplicateContent}}`);
-        return { ok: false, json: async () => ({ message: "Source keys must be unique regardless of case" }) };
-      }
-      return { ok: true, json: async () => ({ term_maps: [] }) };
-    });
+    const fetchMock = termMapFetch(
+      (body) => expect(body).toBe(`{"name":"Duplicate","content":${duplicateContent}}`),
+      { message: "Source keys must be unique regardless of case" },
+      false,
+    );
     renderTermMapsWithFetch(fetchMock);
 
     await screen.findByRole("heading", { name: "No Term maps yet" });
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Duplicate" } });
-    fireEvent.change(screen.getByLabelText("JSON content"), { target: { value: duplicateContent } });
+    fireEvent.change(screen.getByLabelText("JSON content"), {
+      target: { value: duplicateContent },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("unique regardless of case");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "unique regardless of case",
+    );
   });
 
   it("exposes a duplicate-name API error", async () => {
-    const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
-      if (input === "/api/status") {
-        return { ok: true, json: async () => ({ api: { ready: true }, roots: { ready: true }, translation_provider: { ready: true }, worker: { ready: true, mode: "single" } }) };
-      }
-      if (init?.method === "POST") {
-        return { ok: false, json: async () => ({ message: "A Term map with this name already exists" }) };
-      }
-      return { ok: true, json: async () => ({ term_maps: [] }) };
-    });
+    const fetchMock = termMapFetch(
+      undefined,
+      { message: "A Term map with this name already exists" },
+      false,
+    );
     renderTermMapsWithFetch(fetchMock);
 
     await screen.findByRole("heading", { name: "No Term maps yet" });
