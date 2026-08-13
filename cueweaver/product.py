@@ -37,7 +37,7 @@ def create_product_app(
     _prepare_work_root(work_root)
     static_root = _validate_static_root(static_root or STATIC_ROOT)
 
-    app = create_app(CueWeaverApplication(translator, media_root))
+    app = create_app(CueWeaverApplication(translator, media_root), media_root)
     provider_ready = _provider_available(translator)
 
     @app.get("/api/status")

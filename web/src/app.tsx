@@ -12,7 +12,13 @@ import { useState } from "react";
 import { NavLink, Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
-import { useMediaDirectory, type MediaDirectoryEntry } from "./browse";
+import {
+  useMediaDirectory,
+  useMediaDiscovery,
+  type MediaDirectoryEntry,
+  type SubtitleCandidate,
+  type UnsupportedSubtitleCandidate,
+} from "./browse";
 import { cn } from "./lib/utils";
 import { useProductStatus } from "./status";
 
@@ -89,7 +95,9 @@ function Translate() {
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
+  const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const browser = useMediaDirectory(directory);
+  const discovery = useMediaDiscovery(selectedMedia);
   return (
     <>
       <PageHeader
@@ -107,12 +115,28 @@ function Translate() {
               setDirectory(path);
               setFilter("");
               setSelectedMedia(null);
+              setSelectedSubtitle(null);
             }}
             onFilterChange={setFilter}
             selectedMedia={selectedMedia}
-            onMediaSelect={setSelectedMedia}
+            onMediaSelect={(path) => {
+              setSelectedMedia(path);
+              setSelectedSubtitle(null);
+            }}
             query={browser}
           />
+          {selectedMedia && (
+            <SubtitleDiscovery
+              mediaPath={selectedMedia}
+              selected={selectedSubtitle}
+              onSelect={setSelectedSubtitle}
+              query={discovery}
+              onClear={() => {
+                setSelectedMedia(null);
+                setSelectedSubtitle(null);
+              }}
+            />
+          )}
         </div>
       </section>
       <section className="workflow-panel muted" aria-labelledby="configure-title">
@@ -129,6 +153,133 @@ function Translate() {
         </Button>
       </div>
     </>
+  );
+}
+
+function SubtitleDiscovery({
+  mediaPath,
+  selected,
+  onSelect,
+  query,
+  onClear,
+}: {
+  mediaPath: string;
+  selected: string | null;
+  onSelect: (value: string) => void;
+  query: ReturnType<typeof useMediaDiscovery>;
+  onClear: () => void;
+}) {
+  return (
+    <section className="subtitle-discovery" aria-labelledby="subtitle-title">
+      <div className="subtitle-heading">
+        <div>
+          <h3 id="subtitle-title">Choose a subtitle</h3>
+          <p>Sources discovered for {mediaPath.split("/").pop()}.</p>
+        </div>
+        <Button type="button" variant="outline" onClick={onClear}>
+          Choose another Media
+        </Button>
+      </div>
+      <div className="subtitle-results" aria-live="polite">
+        {query.isPending && (
+          <div role="status" className="discovery-skeleton" aria-label="Loading subtitles">
+            <span /><span /><span />
+          </div>
+        )}
+        {query.isError && (
+          <div role="alert" className="browser-message error">
+            {query.error.message}
+            <Button variant="outline" onClick={() => void query.refetch()}>
+              Try again
+            </Button>
+          </div>
+        )}
+        {query.data &&
+          query.data.candidates.length === 0 &&
+          query.data.unsupported_candidates.length === 0 && (
+            <div className="browser-message">No subtitles were found for this Media.</div>
+          )}
+        {query.data?.candidates.map((candidate, index) => {
+          const key = candidateKey(candidate, index);
+          return (
+            <SubtitleEntry
+              key={key}
+              candidate={candidate}
+              candidateId={key}
+              selected={selected === key}
+              onSelect={onSelect}
+            />
+          );
+        })}
+        {query.data?.unsupported_candidates.map((candidate, index) => (
+          <UnsupportedSubtitleEntry
+            key={`unsupported-${candidateKey(candidate, index)}`}
+            candidate={candidate}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function candidateKey(candidate: SubtitleCandidate | UnsupportedSubtitleCandidate, index: number) {
+  return `${candidate.kind}-${candidate.path ?? candidate.stream_index ?? index}`;
+}
+
+function subtitleLabel(candidate: SubtitleCandidate) {
+  const tags = candidate.tags ?? {};
+  return [tags.language, tags.title].filter(Boolean).join(" / ") || "Metadata unavailable";
+}
+
+function SubtitleEntry({
+  candidate,
+  candidateId,
+  selected,
+  onSelect,
+}: {
+  candidate: SubtitleCandidate;
+  candidateId: string;
+  selected: boolean;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className="subtitle-entry"
+      aria-pressed={selected}
+      aria-label={`Select ${candidate.kind} subtitle ${subtitleLabel(candidate)}`}
+      onClick={() => onSelect(candidateId)}
+    >
+      <span className="subtitle-kind">{candidate.kind === "external" ? "External" : "Embedded"}</span>
+      <span className="subtitle-copy">
+        <strong>{subtitleLabel(candidate)}</strong>
+        <small>{candidate.format?.toUpperCase() ?? "Unknown format"}</small>
+      </span>
+      {selected && <span className="media-entry-selected">Selected</span>}
+    </Button>
+  );
+}
+
+function UnsupportedSubtitleEntry({
+  candidate,
+}: {
+  candidate: UnsupportedSubtitleCandidate;
+}) {
+  return (
+    <div
+      className="subtitle-entry unsupported"
+      role="group"
+      aria-disabled="true"
+      aria-label={`Unsupported ${candidate.kind} subtitle`}
+    >
+      <span className="subtitle-kind">{candidate.kind === "external" ? "External" : "Embedded"}</span>
+      <span className="subtitle-copy">
+        <strong>Unavailable subtitle</strong>
+        <small>{candidate.reason}</small>
+      </span>
+      <span className="disabled-note">Not selectable</span>
+    </div>
   );
 }
 
