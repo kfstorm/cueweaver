@@ -24,13 +24,18 @@ PROVIDER_MESSAGE = (
 
 
 def create_product_app(
-    media_root: Path, work_root: Path, translator: Translator
+    media_root: Path,
+    work_root: Path,
+    translator: Translator,
+    *,
+    static_root: Path | None = None,
 ) -> FastAPI:
     """Create the complete product with validated roots and injected translation."""
     media_root = _require_absolute(media_root, "Media root")
     work_root = _require_absolute(work_root, "Work root")
     _validate_media_root(media_root)
     _prepare_work_root(work_root)
+    static_root = _validate_static_root(static_root or STATIC_ROOT)
 
     app = create_app(CueWeaverApplication(translator))
     provider_ready = _provider_available(translator)
@@ -51,20 +56,24 @@ def create_product_app(
     def spa(client_path: str) -> FileResponse:
         if client_path.startswith("api/"):
             raise HTTPException(status_code=404)
-        asset = (STATIC_ROOT / client_path).resolve()
-        if client_path and asset.is_relative_to(STATIC_ROOT) and asset.is_file():
+        asset = (static_root / client_path).resolve()
+        if client_path and asset.is_relative_to(static_root) and asset.is_file():
             return FileResponse(asset)
-        return FileResponse(STATIC_ROOT / "index.html", media_type="text/html")
+        return FileResponse(static_root / "index.html", media_type="text/html")
 
     return app
 
 
-def create_product_app_from_env(*, translator: Translator | None = None) -> FastAPI:
+def create_product_app_from_env(
+    *, translator: Translator | None = None, static_root: Path | None = None
+) -> FastAPI:
     """Create the product from its required process configuration."""
     media_root = _root_from_env(MEDIA_ROOT_ENV)
     work_root = _root_from_env(WORK_ROOT_ENV)
     configured_translator = PySubtransTranslator() if translator is None else translator
-    return create_product_app(media_root, work_root, configured_translator)
+    return create_product_app(
+        media_root, work_root, configured_translator, static_root=static_root
+    )
 
 
 def run() -> None:
@@ -121,6 +130,13 @@ def _prepare_work_root(work_root: Path) -> None:
         raise ValueError(
             "Work root must support reading, writing, directory creation, and atomic replacement"
         ) from error
+
+
+def _validate_static_root(static_root: Path) -> Path:
+    static_root = Path(static_root).resolve()
+    if not (static_root / "index.html").is_file():
+        raise ValueError("Built Web product is missing")
+    return static_root
 
 
 def _provider_available(translator: Translator) -> bool:

@@ -16,10 +16,6 @@ dependencies = [
 [project.scripts]
 cueweaver = "cueweaver.product:run"
 
-[tool.hatch.build.targets.wheel]
-packages = ["cueweaver"]
-artifacts = ["cueweaver/static/*"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

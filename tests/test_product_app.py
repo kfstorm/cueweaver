@@ -21,6 +21,25 @@ def configured_roots(tmp_path: Path) -> tuple[Path, Path]:
     return media_root, tmp_path / "work"
 
 
+def static_fixture(tmp_path: Path) -> Path:
+    static_root = tmp_path / "static"
+    static_root.mkdir(exist_ok=True)
+    (static_root / "index.html").write_text(
+        '<!doctype html><div id="root"></div>', encoding="utf-8"
+    )
+    return static_root
+
+
+def product_app(tmp_path: Path, translator: TranslatorFixture | None = None):
+    media_root, work_root = configured_roots(tmp_path)
+    return create_product_app(
+        media_root,
+        work_root,
+        TranslatorFixture() if translator is None else translator,
+        static_root=static_fixture(tmp_path),
+    )
+
+
 @pytest.mark.parametrize(
     ("media_value", "work_value", "message"),
     [
@@ -31,6 +50,7 @@ def configured_roots(tmp_path: Path) -> tuple[Path, Path]:
     ],
 )
 def test_product_startup_requires_absolute_root_environment_variables(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     media_value: str | None,
     work_value: str | None,
@@ -46,7 +66,9 @@ def test_product_startup_requires_absolute_root_environment_variables(
         monkeypatch.setenv("CUEWEAVER_WORK_ROOT", work_value)
 
     with pytest.raises(ValueError, match=message):
-        create_product_app_from_env(translator=TranslatorFixture())
+        create_product_app_from_env(
+            translator=TranslatorFixture(), static_root=static_fixture(tmp_path)
+        )
 
 
 def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
@@ -54,11 +76,21 @@ def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
     work_root = tmp_path / "work"
 
     with pytest.raises(ValueError, match="Media root must be a readable directory"):
-        create_product_app(missing_media, work_root, TranslatorFixture())
+        create_product_app(
+            missing_media,
+            work_root,
+            TranslatorFixture(),
+            static_root=static_fixture(tmp_path),
+        )
 
     media_root = tmp_path / "media"
     media_root.mkdir()
-    create_product_app(media_root, work_root, TranslatorFixture())
+    create_product_app(
+        media_root,
+        work_root,
+        TranslatorFixture(),
+        static_root=static_fixture(tmp_path),
+    )
 
     assert work_root.is_dir()
     assert list(work_root.iterdir()) == []
@@ -67,7 +99,14 @@ def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
 def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Path):
     media_root, work_root = configured_roots(tmp_path)
     translator = TranslatorFixture()
-    client = TestClient(create_product_app(media_root, work_root, translator))
+    client = TestClient(
+        create_product_app(
+            media_root,
+            work_root,
+            translator,
+            static_root=static_fixture(tmp_path),
+        )
+    )
 
     response = client.get("/api/status")
 
@@ -87,10 +126,7 @@ def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Pat
 def test_unconfigured_provider_keeps_product_available_with_actionable_status(
     tmp_path: Path,
 ):
-    media_root, work_root = configured_roots(tmp_path)
-    client = TestClient(
-        create_product_app(media_root, work_root, TranslatorFixture(available=False))
-    )
+    client = TestClient(product_app(tmp_path, TranslatorFixture(available=False)))
 
     response = client.get("/api/status")
 
@@ -107,10 +143,7 @@ def test_unconfigured_provider_keeps_product_available_with_actionable_status(
 
 @pytest.mark.parametrize("path", ["/", "/translate", "/jobs", "/term-maps"])
 def test_product_serves_client_routes_from_the_spa(tmp_path: Path, path: str):
-    media_root, work_root = configured_roots(tmp_path)
-    response = TestClient(
-        create_product_app(media_root, work_root, TranslatorFixture())
-    ).get(path)
+    response = TestClient(product_app(tmp_path)).get(path)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
@@ -120,7 +153,12 @@ def test_product_serves_client_routes_from_the_spa(tmp_path: Path, path: str):
 def test_product_keeps_explicit_path_business_routes(tmp_path: Path):
     media_root, work_root = configured_roots(tmp_path)
     response = TestClient(
-        create_product_app(media_root, work_root, TranslatorFixture())
+        create_product_app(
+            media_root,
+            work_root,
+            TranslatorFixture(),
+            static_root=static_fixture(tmp_path),
+        )
     ).post("/api/discover", json={"media_path": str(media_root / "missing.mkv")})
 
     assert response.status_code == 400
@@ -138,7 +176,10 @@ def test_environment_factory_preserves_a_falsy_injected_translator(
     monkeypatch.setenv("CUEWEAVER_MEDIA_ROOT", str(media_root))
     monkeypatch.setenv("CUEWEAVER_WORK_ROOT", str(work_root))
     response = TestClient(
-        create_product_app_from_env(translator=FalsyTranslator(available=False))
+        create_product_app_from_env(
+            translator=FalsyTranslator(available=False),
+            static_root=static_fixture(tmp_path),
+        )
     ).get("/api/status")
 
     assert response.json()["translation_provider"]["ready"] is False

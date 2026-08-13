@@ -14,13 +14,17 @@ or cancellation APIs.
 
 ## Run
 
-Set absolute Media and Work roots, then start the supported single-worker
-server:
+Build the image, then run the supported single-container product with Media and
+Work volumes:
 
 ```bash
-export CUEWEAVER_MEDIA_ROOT=/media
-export CUEWEAVER_WORK_ROOT=/work
-uv run cueweaver
+docker build -t cueweaver .
+docker run --rm -p 8000:8000 \
+  -e CUEWEAVER_MEDIA_ROOT=/media \
+  -e CUEWEAVER_WORK_ROOT=/work \
+  -v /path/to/media:/media \
+  -v cueweaver-work:/work \
+  cueweaver
 ```
 
 Open `http://localhost:8000`. The Media root must already be a readable

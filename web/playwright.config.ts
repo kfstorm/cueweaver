@@ -1,15 +1,15 @@
 import { defineConfig } from "@playwright/test";
 
+const baseUrl = process.env.CUEWEAVER_E2E_BASE_URL;
+
+if (!baseUrl) {
+  throw new Error("Run E2E tests through scripts/test-e2e.sh");
+}
+
 export default defineConfig({
   testDir: "./tests/e2e",
   use: {
-    baseURL: "http://127.0.0.1:8765",
+    baseURL: baseUrl,
     trace: "retain-on-failure",
-  },
-  webServer: {
-    command: "uv run python scripts/e2e_product_server.py",
-    cwd: "..",
-    url: "http://127.0.0.1:8765/api/status",
-    reuseExistingServer: false,
   },
 });

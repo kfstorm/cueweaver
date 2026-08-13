@@ -35,7 +35,7 @@ repos:
         pass_filenames: false
 
       - id: unit-tests
-        name: Python unit tests
+        name: Backend tests
         entry: scripts/test-backend.sh
         language: system
         pass_filenames: false

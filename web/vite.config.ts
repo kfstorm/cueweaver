@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: "../cueweaver/static",
+    outDir: "dist",
     emptyOutDir: true,
   },
   server: {
