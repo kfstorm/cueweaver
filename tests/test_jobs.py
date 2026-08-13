@@ -173,9 +173,12 @@ def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
             },
         ).json()
         second = create_job(client, "ja").json()
+        third = create_job(client, "ko").json()
 
         assert second["status"] == "Queued"
         assert second["queue_position"] == 1
+        assert third["status"] == "Queued"
+        assert third["queue_position"] == 2
         assert first["request"]["dynamic_terminology_enabled"] is False
         assert first["request"]["subtitle_terminology_filter_enabled"] is False
         assert client.get("/api/status").status_code == 200
@@ -184,8 +187,9 @@ def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
         release.set()
         wait_for_status(client, first["id"], "Completed")
         wait_for_status(client, second["id"], "Completed")
+        wait_for_status(client, third["id"], "Completed")
 
-    assert [call["target"] for call in translator.calls] == ["zh-Hans", "ja"]
+    assert [call["target"] for call in translator.calls] == ["zh-Hans", "ja", "ko"]
     assert translator.calls[0]["dynamic_terminology_enabled"] is False
     assert translator.calls[0]["subtitle_terminology_filter_enabled"] is False
 

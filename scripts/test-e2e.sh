@@ -35,7 +35,8 @@ docker run --detach --name "$CONTAINER" \
   --publish 127.0.0.1:8765:8000 \
   --env CUEWEAVER_MEDIA_ROOT=/media \
   --env CUEWEAVER_WORK_ROOT=/work \
-  --volume "$ROOTS/media:/media:ro" \
+  --env CUEWEAVER_E2E_FAKE_TRANSLATOR=1 \
+  --volume "$ROOTS/media:/media" \
   --volume "$ROOTS/work:/work" \
   "$IMAGE" >/dev/null
 

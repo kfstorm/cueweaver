@@ -60,6 +60,7 @@ class Jobs:
         self._jobs_root = work_root / "jobs"
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
+        self._next_queue_sequence = 0
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._closed = threading.Event()
@@ -88,6 +89,7 @@ class Jobs:
                 )
             media, subtitle, output, source_format = self._validate(request)
             term_map = self._snapshot_term_map(request.term_map_id)
+            self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
             record: dict[str, object] = {
@@ -107,6 +109,7 @@ class Jobs:
                     "source_format": source_format,
                 },
                 "error": None,
+                "queue_sequence": self._next_queue_sequence,
             }
             self._write_record(job_id, record)
             with self._lock:
@@ -152,7 +155,7 @@ class Jobs:
             return copied
         queued = sorted(
             (item for item in self._records.values() if item.get("status") == "Queued"),
-            key=lambda item: (str(item["created_at"]), str(item["id"])),
+            key=_queue_sequence,
         )
         copied["queue_position"] = next(
             index + 1 for index, item in enumerate(queued) if item["id"] == record["id"]
@@ -232,6 +235,9 @@ class Jobs:
                 with suppress(OSError):
                     self._write_record(job_id, interrupted)
             _normalize_record(record)
+            self._next_queue_sequence = max(
+                self._next_queue_sequence, _queue_sequence(record)
+            )
             with suppress(OSError):
                 self._write_record(job_id, record)
             self._records[job_id] = record
@@ -495,6 +501,14 @@ def _normalize_record(record: dict[str, object]) -> None:
     request.setdefault("term_map", None)
     request.setdefault("dynamic_terminology_enabled", True)
     request.setdefault("subtitle_terminology_filter_enabled", True)
+    queue_sequence = record.get("queue_sequence")
+    if not isinstance(queue_sequence, int) or queue_sequence < 1:
+        record["queue_sequence"] = 0
+
+
+def _queue_sequence(record: dict[str, object]) -> int:
+    sequence = record.get("queue_sequence")
+    return sequence if isinstance(sequence, int) else 0
 
 
 def _require_writable_directory(directory: Path) -> None:
