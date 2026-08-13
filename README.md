@@ -213,5 +213,5 @@ scripts/test-e2e.sh
 
 ```bash
 scripts/lint-backend.sh --check
-scripts/lint-frontend.sh
+scripts/lint-frontend.sh --check
 ```

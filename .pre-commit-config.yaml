@@ -24,7 +24,7 @@ repos:
         name: Backend lint and checks
         entry: scripts/lint-backend.sh --check
         language: system
-        types: [python]
+        files: ^(cueweaver/|tests/|pyproject\.toml$|uv\.lock$|vulture_whitelist\.py$|scripts/lint-backend\.sh$)
         pass_filenames: false
 
       - id: markdown-lint
@@ -32,32 +32,35 @@ repos:
         entry: uv run pymarkdown -d MD013,MD036 scan -r AGENTS.md CONTEXT.md README.md docs
         language: system
         types: [markdown]
+        files: ^(AGENTS\.md|CONTEXT\.md|README\.md|docs/)
         pass_filenames: false
 
       - id: unit-tests
         name: Backend tests
         entry: scripts/test-backend.sh
         language: system
+        files: ^(cueweaver/|tests/|pyproject\.toml$|uv\.lock$|scripts/test-backend\.sh$)
         pass_filenames: false
 
       - id: web-checks
         name: Frontend lint and checks
-        entry: scripts/lint-frontend.sh
+        entry: scripts/lint-frontend.sh --check
         language: system
+        files: ^(web/(src/|tests/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.prettierignore$|\.prettierrc\.json$|eslint\.config\.js$|.*\.(json|js|ts|tsx|css|html)$)|scripts/lint-frontend\.sh$)
         pass_filenames: false
-        always_run: true
 
       - id: web-unit-tests
         name: Frontend unit tests
         entry: scripts/test-frontend.sh
         language: system
+        files: ^(web/(src/|tests/|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|vite\.config\.ts$)|scripts/test-frontend\.sh$)
         pass_filenames: false
-        always_run: true
 
       - id: duplication
         name: Duplication check
-        entry: npx --yes jscpd
+        entry: pnpm --dir web exec jscpd --config ../.jscpd.json ..
         language: system
+        files: ^(cueweaver/|tests/|web/src/|web/tests/|\.jscpd\.json$|web/package\.json$|web/pnpm-lock\.yaml$)
         pass_filenames: false
 
 default_stages: [pre-commit]

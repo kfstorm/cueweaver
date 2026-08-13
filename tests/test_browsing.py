@@ -27,7 +27,7 @@ def test_browse_lists_directories_then_natural_sorted_media_with_nfo_labels(
         encoding="utf-8",
     )
 
-    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
 
     assert [(entry.kind, entry.name) for entry in result.entries] == [
         ("directory", "Show 2"),
@@ -65,7 +65,7 @@ def test_browse_uses_movie_nfo_after_invalid_media_nfo_and_never_tvshow_nfo(
         encoding="utf-8",
     )
 
-    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
 
     movie = next(entry for entry in result.entries if entry.name == "Movie.mkv")
     series = next(entry for entry in result.entries if entry.name == "Series")
@@ -83,7 +83,7 @@ def test_browse_skips_malformed_media_nfo_before_movie_fallback(tmp_path: Path):
         encoding="utf-8",
     )
 
-    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
 
     entry = result.entries[0]
     assert (entry.title, entry.year) == ("Fallback title", 1999)
@@ -98,7 +98,7 @@ def test_browse_skips_nfo_with_unknown_encoding(tmp_path: Path):
         b"<movie><title>Broken</title><year>2024</year></movie>"
     )
 
-    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
 
     entry = result.entries[0]
     assert (entry.title, entry.year) == (None, None)
@@ -113,7 +113,7 @@ def test_tvshow_nfo_never_labels_a_media_named_tvshow(tmp_path: Path):
         encoding="utf-8",
     )
 
-    entry = MediaBrowser(root).browse(BrowseRequest(Path("."))).entries[0]
+    entry = MediaBrowser(root).browse(BrowseRequest(Path())).entries[0]
 
     assert entry.title is None
     assert entry.year is None
@@ -139,7 +139,7 @@ def test_browse_omits_symlinks_that_escape_and_allows_symlinks_inside(tmp_path: 
     (root / "linked.mkv").symlink_to(root / "inside" / "Movie.mkv")
     (root / "linked-directory").symlink_to(root / "inside", target_is_directory=True)
 
-    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
 
     assert [entry.name for entry in result.entries] == [
         "inside",
@@ -172,7 +172,7 @@ def test_browse_ignores_unsafe_and_oversized_nfo(tmp_path: Path):
     )
     (root / "movie.nfo").write_bytes(b"<movie>" + b"x" * (1024 * 1024) + b"</movie>")
 
-    entry = MediaBrowser(root).browse(BrowseRequest(Path("."))).entries[0]
+    entry = MediaBrowser(root).browse(BrowseRequest(Path())).entries[0]
 
     assert entry.title is None
     assert entry.year is None
@@ -188,7 +188,7 @@ def test_browse_ignores_utf16_unsafe_nfo(tmp_path: Path):
         encoding="utf-16",
     )
 
-    entry = MediaBrowser(root).browse(BrowseRequest(Path("."))).entries[0]
+    entry = MediaBrowser(root).browse(BrowseRequest(Path())).entries[0]
 
     assert entry.title is None
     assert entry.year is None
@@ -205,7 +205,7 @@ def test_browse_ignores_utf16_unsafe_nfo_without_bom(tmp_path: Path):
     ).encode("utf-16-be")
     (root / "Movie.nfo").write_bytes(unsafe)
 
-    entry = MediaBrowser(root).browse(BrowseRequest(Path("."))).entries[0]
+    entry = MediaBrowser(root).browse(BrowseRequest(Path())).entries[0]
 
     assert entry.title is None
     assert entry.year is None
@@ -222,7 +222,7 @@ def test_browse_ignores_nfo_symlinked_outside_the_media_root(tmp_path: Path):
     )
     (root / "Movie.nfo").symlink_to(outside)
 
-    entry = MediaBrowser(root).browse(BrowseRequest(Path("."))).entries[0]
+    entry = MediaBrowser(root).browse(BrowseRequest(Path())).entries[0]
 
     assert entry.title is None
     assert entry.year is None

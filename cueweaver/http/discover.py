@@ -1,5 +1,6 @@
 """HTTP adapter for discovery."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -53,10 +54,7 @@ def candidate_body(candidate: SubtitleCandidateResult) -> dict[str, object]:
         "format": candidate.format,
         "tags": candidate.tags,
     }
-    if candidate.path is not None:
-        body["path"] = str(candidate.path)
-    if candidate.stream_index is not None:
-        body["stream_index"] = candidate.stream_index
+    add_candidate_location(body, candidate, str)
     return body
 
 
@@ -64,8 +62,16 @@ def unsupported_candidate_body(
     candidate: UnsupportedCandidateResult,
 ) -> dict[str, object]:
     body: dict[str, object] = {"kind": candidate.kind, "reason": candidate.reason}
+    add_candidate_location(body, candidate, str)
+    return body
+
+
+def add_candidate_location(
+    body: dict[str, object],
+    candidate: SubtitleCandidateResult | UnsupportedCandidateResult,
+    path_formatter: Callable[[Path], str],
+) -> None:
     if candidate.path is not None:
-        body["path"] = str(candidate.path)
+        body["path"] = path_formatter(candidate.path)
     if candidate.stream_index is not None:
         body["stream_index"] = candidate.stream_index
-    return body
