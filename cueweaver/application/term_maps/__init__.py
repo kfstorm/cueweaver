@@ -1,4 +1,4 @@
-"""Term map creation and inspection operations."""
+"""Term map persistence and inspection operations."""
 
 from __future__ import annotations
 
@@ -32,6 +32,14 @@ class TermMapStore(Protocol):
 
     def create(self, name: str, content: Mapping[str, str]) -> TermMapSummary: ...
 
+    def rename(self, term_map_id: str, name: str) -> TermMapSummary: ...
+
+    def replace(
+        self, term_map_id: str, content: Mapping[str, str]
+    ) -> TermMapSummary: ...
+
+    def delete(self, term_map_id: str, name: str) -> TermMapSummary: ...
+
 
 class TermMaps:
     def __init__(self, store: TermMapStore) -> None:
@@ -47,12 +55,37 @@ class TermMaps:
         validate_term_map(name, content)
         return self._store.create(name, content)
 
+    def rename(self, term_map_id: str, name: str) -> TermMapSummary:
+        validate_term_map_name(name)
+        return self._store.rename(term_map_id, name)
+
+    def replace(self, term_map_id: str, content: Mapping[str, str]) -> TermMapSummary:
+        validate_term_map_content(content)
+        return self._store.replace(term_map_id, content)
+
+    def delete(self, term_map_id: str, name: str) -> TermMapSummary:
+        if not isinstance(name, str) or not name:
+            raise ServiceError(
+                "term_map_delete_confirmation_required",
+                "Enter the current Term map name to confirm deletion",
+                field="name",
+            )
+        return self._store.delete(term_map_id, name)
+
 
 def validate_term_map(name: str, content: Mapping[str, str]) -> None:
+    validate_term_map_name(name)
+    validate_term_map_content(content)
+
+
+def validate_term_map_name(name: str) -> None:
     if not isinstance(name, str) or not name:
         raise ServiceError(
             "invalid_term_map", "Term map name must be non-empty", field="name"
         )
+
+
+def validate_term_map_content(content: Mapping[str, str]) -> None:
     if not isinstance(content, dict) or not content:
         raise ServiceError(
             "invalid_term_map",

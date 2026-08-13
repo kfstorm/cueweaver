@@ -210,6 +210,56 @@ describe("product shell", () => {
     expect(screen.queryByText("Captain")).not.toBeInTheDocument();
   });
 
+  it("renames, replaces, and confirms deletion of a Term map", async () => {
+    const summary = {
+      id: "map-1",
+      name: "Characters",
+      entry_count: 2,
+      updated_at: "2026-08-13T12:00:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/term-maps") return jsonResponse({ term_maps: [summary] });
+        if (init?.method === "PATCH")
+          return jsonResponse({ ...summary, name: "People" });
+        if (init?.method === "PUT") return jsonResponse({ ...summary, entry_count: 1 });
+        if (init?.method === "DELETE") return jsonResponse(summary);
+        return jsonResponse({ ...summary, content: { Captain: "队长", Ship: "舰船" } });
+      });
+    renderTermMapsWithFetch(fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
+    fireEvent.change(await screen.findByLabelText("New Term map name"), {
+      target: { value: "People" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: '{"Captain":"队长"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
+    fireEvent.change(screen.getByLabelText("Confirm Term map name"), {
+      target: { value: "Characters" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete Term map" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps/map-1",
+        expect.objectContaining({ method: "PATCH" }),
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps/map-1",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps/map-1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+  });
+
   it("shows the empty state and uploads valid JSON", async () => {
     const fetchMock = termMapFetch(undefined, {
       id: "new",

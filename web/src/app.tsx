@@ -25,7 +25,14 @@ import {
 } from "./browse";
 import { cn } from "./lib/utils";
 import { useProductStatus } from "./status";
-import { useCreateTermMap, useTermMap, useTermMaps } from "./term-maps";
+import {
+  useCreateTermMap,
+  useDeleteTermMap,
+  useRenameTermMap,
+  useReplaceTermMap,
+  useTermMap,
+  useTermMaps,
+} from "./term-maps";
 
 const routes: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "Translate", path: "/translate", icon: TranslateIcon },
@@ -546,8 +553,14 @@ function TermMapsPage() {
   const deferredSearch = useDeferredValue(search);
   const selected = useTermMap(selectedId);
   const create = useCreateTermMap();
+  const rename = useRenameTermMap();
+  const replace = useReplaceTermMap();
+  const remove = useDeleteTermMap();
   const [name, setName] = useState("");
   const [content, setContent] = useState('{\n  "Source": "Target"\n}');
+  const [renameName, setRenameName] = useState("");
+  const [replacement, setReplacement] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState("");
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -569,6 +582,27 @@ function TermMapsPage() {
           .includes(deferredSearch.toLocaleLowerCase()),
       )
     : [];
+
+  function renameSelected() {
+    if (!selectedId || !renameName.trim()) return;
+    rename.mutate(
+      { id: selectedId, name: renameName },
+      { onSuccess: (summary) => setRenameName(summary.name) },
+    );
+  }
+
+  function deleteSelected() {
+    if (!selectedId || !selected.data || confirmation !== selected.data.name) return;
+    remove.mutate(
+      { id: selectedId, name: confirmation },
+      {
+        onSuccess: () => {
+          setSelectedId(null);
+          setConfirmation("");
+        },
+      },
+    );
+  }
 
   return (
     <>
@@ -664,7 +698,12 @@ function TermMapsPage() {
                 aria-pressed={selectedId === map.id}
                 key={map.id}
                 type="button"
-                onClick={() => setSelectedId(map.id)}
+                onClick={() => {
+                  setSelectedId(map.id);
+                  setRenameName(map.name);
+                  setReplacement(null);
+                  setConfirmation("");
+                }}
               >
                 <span className="term-map-item-name" title={map.name}>
                   {map.name}
@@ -689,12 +728,40 @@ function TermMapsPage() {
                 className="back-action"
                 variant="outline"
                 type="button"
-                onClick={() => setSelectedId(null)}
+                onClick={() => {
+                  setSelectedId(null);
+                  setRenameName("");
+                  setReplacement(null);
+                  setConfirmation("");
+                }}
               >
                 <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Term maps
               </Button>
               <h2 id="detail-title">{selected.data?.name ?? "Term map details"}</h2>
-              {selected.data && <p>{selected.data.entry_count} entries, read-only</p>}
+              {selected.data && <p>{selected.data.entry_count} entries</p>}
+              {selected.data && (
+                <div className="term-map-actions">
+                  <Input
+                    aria-label="New Term map name"
+                    value={renameName}
+                    placeholder={selected.data.name}
+                    onChange={(event) => setRenameName(event.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={renameSelected}
+                    disabled={rename.isPending}
+                  >
+                    Save name
+                  </Button>
+                  {rename.isError && (
+                    <p className="form-error" role="alert">
+                      {rename.error.message}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="term-map-detail-state">
@@ -740,6 +807,65 @@ function TermMapsPage() {
                   {entries.length === 0 && (
                     <p className="table-empty">No matching terms.</p>
                   )}
+                </div>
+                <div className="term-map-management">
+                  <h3>Replace JSON content</h3>
+                  <Textarea
+                    aria-label="Replacement JSON content"
+                    value={
+                      replacement ?? JSON.stringify(selected.data.content, null, 2)
+                    }
+                    onChange={(event) => setReplacement(event.target.value)}
+                    rows={7}
+                    spellCheck={false}
+                  />
+                  {replace.isError && (
+                    <p className="form-error" role="alert">
+                      {replace.error.message}
+                    </p>
+                  )}
+                  <Button
+                    type="button"
+                    className="primary-action"
+                    onClick={() =>
+                      replace.mutate(
+                        {
+                          id: selected.data.id,
+                          content: replacement ?? JSON.stringify(selected.data.content),
+                        },
+                        { onSuccess: () => setReplacement(null) },
+                      )
+                    }
+                    disabled={replace.isPending}
+                  >
+                    {replace.isPending ? "Replacing..." : "Replace content"}
+                  </Button>
+                  <div className="term-map-delete">
+                    <h3>Delete Term map</h3>
+                    <p>
+                      Enter &quot;{selected.data.name}&quot; to confirm permanent
+                      deletion.
+                    </p>
+                    <Input
+                      aria-label="Confirm Term map name"
+                      value={confirmation}
+                      onChange={(event) => setConfirmation(event.target.value)}
+                      placeholder={selected.data.name}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={deleteSelected}
+                      disabled={remove.isPending || confirmation !== selected.data.name}
+                    >
+                      {remove.isPending ? "Deleting..." : "Delete Term map"}
+                    </Button>
+                    {remove.isError && (
+                      <p className="form-error" role="alert">
+                        {remove.error.message}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </>
             )}

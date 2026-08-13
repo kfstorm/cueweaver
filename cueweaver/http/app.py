@@ -61,7 +61,10 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
     async def require_json_content_type(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if request.method == "POST" and request.url.path in BUSINESS_ROUTES:
+        is_term_map_mutation = request.url.path.startswith("/api/term-maps/")
+        if request.method in {"POST", "PATCH", "PUT", "DELETE"} and (
+            request.url.path in BUSINESS_ROUTES or is_term_map_mutation
+        ):
             content_type = request.headers.get("content-type", "")
             if (
                 content_type.split(";", maxsplit=1)[0].strip().casefold()
