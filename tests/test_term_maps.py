@@ -133,6 +133,17 @@ def test_term_map_creation_rejects_duplicate_source_keys(tmp_path: Path):
     assert response.json()["error_code"] == "invalid_term_map"
 
 
+def test_term_map_creation_rejects_trailing_commas(tmp_path: Path):
+    response = make_client(tmp_path).post(
+        "/api/term-maps",
+        content='{"name":"Trailing","content":{"a":"b"},}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "invalid_term_map"
+
+
 def test_term_map_name_uniqueness_is_serialized_under_concurrent_creation(
     tmp_path: Path,
 ):

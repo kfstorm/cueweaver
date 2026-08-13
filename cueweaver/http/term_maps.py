@@ -73,9 +73,12 @@ def _decode_upload(raw_body: bytes) -> tuple[JsonPairs, int]:
         position += 1
         pairs: JsonPairs = JsonPairs()
         content_size: int | None = None
+        after_comma = False
         while True:
             position = _skip_whitespace(text, position)
             if position < len(text) and text[position] == "}":
+                if after_comma:
+                    raise TypeError
                 position += 1
                 break
             key, position = decoder.raw_decode(text, position)
@@ -92,6 +95,7 @@ def _decode_upload(raw_body: bytes) -> tuple[JsonPairs, int]:
             position = _skip_whitespace(text, position)
             if position < len(text) and text[position] == ",":
                 position += 1
+                after_comma = True
                 continue
             if position < len(text) and text[position] == "}":
                 position += 1

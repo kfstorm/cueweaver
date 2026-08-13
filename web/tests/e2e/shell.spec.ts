@@ -98,6 +98,13 @@ test("Term maps API validates and persists a real browser-created resource", asy
   });
   expect(duplicate.status()).toBe(400);
   expect((await duplicate.json()).error_code).toBe("invalid_term_map");
+  const trailingComma = await page.request.fetch("/api/term-maps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    data: '{"name":"Trailing","content":{"a":"b"},}',
+  });
+  expect(trailingComma.status()).toBe(400);
+  expect((await trailingComma.json()).error_code).toBe("invalid_term_map");
 
   const created = await page.request.post("/api/term-maps", {
     data: { name, content: { Captain: "队长", Ship: "舰船" } },
