@@ -338,6 +338,10 @@ test.describe("External subtitle submission", () => {
       await page.goto("/translate");
       await page.getByRole("button", { name: "Select Example.mkv" }).click();
       await page.getByRole("button", { name: /Select external subtitle en/ }).click();
+      await expect(page.locator("#target-languages option")).toHaveCount(15);
+      await expect(
+        page.locator('#target-languages option[value="zh-Hans"]'),
+      ).toHaveCount(1);
       await page.getByLabel("Target language code").fill("zh-Hans");
       await page.getByRole("button", { name: "Start translation" }).click();
 
@@ -404,6 +408,38 @@ test.describe("real translation workflow", () => {
       await expect(page.getByLabel("Target language code")).toHaveValue(targetLanguage);
     });
   }
+
+  test("does not remember a language when Job creation fails", async ({ page }) => {
+    await page.route("**/api/jobs", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error_code: "translation_failed",
+            message: "Translation could not be queued.",
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto("/translate");
+
+    await page.getByRole("button", { name: "Select Example movie" }).click();
+    await page.getByRole("button", { name: /Select external subtitle en/ }).click();
+    await page.getByLabel("Target language code").fill("x-failed");
+    await page.getByRole("button", { name: "Start translation" }).click();
+
+    await expect(page.getByRole("alert")).toContainText(
+      "Translation could not be queued.",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(() => localStorage.getItem("cueweaver.target-language")),
+      )
+      .toBeNull();
+  });
 
   test("serializes Jobs and keeps the API responsive while translating", async ({
     page,
