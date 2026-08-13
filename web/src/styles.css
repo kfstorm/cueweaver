@@ -990,6 +990,10 @@ a {
     margin-top: 30px;
   }
   .term-map-upload .form-control,
+  .term-map-actions .form-control,
+  .term-map-actions button,
+  .term-map-delete .form-control,
+  .term-map-delete button,
   .search-field,
   .search-field .form-control,
   .back-action {

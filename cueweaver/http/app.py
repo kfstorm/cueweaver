@@ -61,7 +61,8 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
     async def require_json_content_type(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        is_term_map_mutation = request.url.path.startswith("/api/term-maps/")
+        term_map_path = request.url.path.removeprefix("/api/term-maps/")
+        is_term_map_mutation = bool(term_map_path) and "/" not in term_map_path
         if request.method in {"POST", "PATCH", "PUT", "DELETE"} and (
             request.url.path in BUSINESS_ROUTES or is_term_map_mutation
         ):

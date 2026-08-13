@@ -10,7 +10,7 @@ import {
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
-import { useDeferredValue, useState, type FormEvent } from "react";
+import { useDeferredValue, useEffect, useRef, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { NavLink, Navigate, Outlet, Route, Routes } from "react-router-dom";
 
@@ -561,6 +561,11 @@ function TermMapsPage() {
   const [renameName, setRenameName] = useState("");
   const [replacement, setReplacement] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState("");
+  const selectedIdRef = useRef(selectedId);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -587,7 +592,11 @@ function TermMapsPage() {
     if (!selectedId || !renameName.trim()) return;
     rename.mutate(
       { id: selectedId, name: renameName },
-      { onSuccess: (summary) => setRenameName(summary.name) },
+      {
+        onSuccess: (summary) => {
+          if (selectedIdRef.current === selectedId) setRenameName(summary.name);
+        },
+      },
     );
   }
 
@@ -597,8 +606,10 @@ function TermMapsPage() {
       { id: selectedId, name: confirmation },
       {
         onSuccess: () => {
-          setSelectedId(null);
-          setConfirmation("");
+          if (selectedIdRef.current === selectedId) {
+            setSelectedId(null);
+            setConfirmation("");
+          }
         },
       },
     );
@@ -838,7 +849,13 @@ function TermMapsPage() {
                           id: selected.data.id,
                           content: replacement ?? JSON.stringify(selected.data.content),
                         },
-                        { onSuccess: () => setReplacement(null) },
+                        {
+                          onSuccess: () => {
+                            if (selectedIdRef.current === selected.data.id) {
+                              setReplacement(null);
+                            }
+                          },
+                        },
                       )
                     }
                     disabled={replace.isPending}

@@ -146,7 +146,14 @@ test("Term map mutations update the browser state", async ({ page }) => {
   });
 
   await page.goto("/term-maps");
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: /Characters/ }).click();
+  expect(
+    (await page.getByLabel("New Term map name").boundingBox())?.height,
+  ).toBeGreaterThanOrEqual(44);
+  expect(
+    (await page.getByRole("button", { name: "Save name" }).boundingBox())?.height,
+  ).toBeGreaterThanOrEqual(44);
   await expect(page.getByText(/Updated 2026-08-13T12:00:00Z/)).toBeVisible();
   await page.getByLabel("New Term map name").fill("People");
   await page.getByRole("button", { name: "Save name" }).click();
@@ -159,6 +166,12 @@ test("Term map mutations update the browser state", async ({ page }) => {
   await expect(page.getByRole("cell", { name: "Ship" })).toBeHidden();
 
   await page.getByLabel("Confirm Term map name").fill("People");
+  expect(
+    (await page.getByLabel("Confirm Term map name").boundingBox())?.height,
+  ).toBeGreaterThanOrEqual(44);
+  expect(
+    (await page.getByRole("button", { name: "Delete Term map" }).boundingBox())?.height,
+  ).toBeGreaterThanOrEqual(44);
   await page.getByRole("button", { name: "Delete Term map" }).click();
   await expect(page.getByRole("heading", { name: "No Term maps yet" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "People" })).toBeHidden();

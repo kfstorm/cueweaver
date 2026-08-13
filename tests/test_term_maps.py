@@ -250,6 +250,16 @@ def test_term_map_replacement_failure_keeps_old_content(
     assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
 
 
+def test_unknown_term_map_api_path_remains_a_structured_not_found(tmp_path: Path):
+    response = make_client(tmp_path).post("/api/term-maps/map-1/unknown")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_code": "not_found",
+        "message": "Resource not found",
+    }
+
+
 def test_term_map_delete_requires_current_name_and_removes_resource(tmp_path: Path):
     client = make_client(tmp_path)
     created = client.post(
