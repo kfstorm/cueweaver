@@ -11,11 +11,14 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.errors import ServiceError
+from .browse import BrowseOperation, register_browse
 from .discover import DiscoveryOperation, register_discover
 from .extract import ExtractionOperation, register_extract
 from .translate import TranslationOperation, register_translate
 
-BUSINESS_ROUTES = frozenset({"/api/discover", "/api/extract", "/api/translate"})
+BUSINESS_ROUTES = frozenset(
+    {"/api/discover", "/api/extract", "/api/translate", "/api/media/browse"}
+)
 
 
 class Application(Protocol):
@@ -27,6 +30,9 @@ class Application(Protocol):
 
     @property
     def translation(self) -> TranslationOperation: ...
+
+    @property
+    def browsing(self) -> BrowseOperation | None: ...
 
 
 def create_app(application: Application) -> FastAPI:
@@ -55,6 +61,8 @@ def create_app(application: Application) -> FastAPI:
     register_discover(app, application)
     register_extract(app, application)
     register_translate(app, application)
+    if getattr(application, "browsing", None) is not None:
+        register_browse(app, application)
     return app
 
 

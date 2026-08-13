@@ -16,6 +16,8 @@ run
 require_json_content_type
 product_status
 spa
+browse
 
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
+BrowseBody.model_config
