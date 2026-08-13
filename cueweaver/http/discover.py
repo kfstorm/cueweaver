@@ -24,7 +24,8 @@ class DiscoveryOperation(Protocol):
 
 
 class DiscoveryApplication(Protocol):
-    discovery: DiscoveryOperation
+    @property
+    def discovery(self) -> DiscoveryOperation: ...
 
 
 def register_discover(app: FastAPI, application: DiscoveryApplication) -> None:

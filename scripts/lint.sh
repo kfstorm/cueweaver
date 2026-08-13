@@ -34,3 +34,7 @@ uv run vulture cueweaver vulture_whitelist.py
 uv run vulture
 uv run tach check-external
 uv run pymarkdown -d MD013,MD036 scan -r AGENTS.md CONTEXT.md README.md docs
+
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm --dir web typecheck
+fi

@@ -1,9 +1,9 @@
 # CueWeaver
 
-CueWeaver is a library for a local HTTP subtitle service. Deploy it behind an
-ASGI server with media and working directories mounted into that server's
-container. Every path in a request is a path in that container. It exposes
-exactly three synchronous JSON operations:
+CueWeaver is a local Web product for subtitle translation. Its official
+single-worker server hosts a responsive Web shell and HTTP API from one ASGI
+application. During the product expansion, it also retains three synchronous
+explicit-path operations:
 
 - `POST /api/discover`
 - `POST /api/extract`
@@ -12,9 +12,28 @@ exactly three synchronous JSON operations:
 Each request receives one final JSON response. There are no Job, event-stream,
 or cancellation APIs.
 
-The project does not provide a CLI or an HTTP server startup entrypoint. An
-embedding service creates its own ASGI application with
-`cueweaver.create_app(cueweaver.CueWeaverApplication())`.
+## Run
+
+Set absolute Media and Work roots, then start the supported single-worker
+server:
+
+```bash
+export CUEWEAVER_MEDIA_ROOT=/media
+export CUEWEAVER_WORK_ROOT=/work
+uv run cueweaver
+```
+
+Open `http://localhost:8000`. The Media root must already be a readable
+directory. CueWeaver creates the Work root when absent and verifies it supports
+the filesystem operations required for persistent product state. The roots are
+never returned to Web clients.
+
+An unconfigured PySubtrans provider does not prevent startup. The Web shell
+remains available and explains how to enable Translation submission.
+
+For embedding and automated tests, use
+`cueweaver.create_product_app(media_root, work_root, translator)`. The original
+`cueweaver.create_app(cueweaver.CueWeaverApplication())` seam remains available.
 
 Translation provider configuration remains PySubtrans service-process
 configuration. CueWeaver does not add provider configuration request fields or
@@ -168,10 +187,12 @@ language aliases and must not be supplied as `target_language_code`.
 
 ```bash
 uv run pytest
+pnpm --dir web test
 ```
 
 ## Development Checks
 
 ```bash
 scripts/lint.sh --check
+pnpm --dir web build
 ```

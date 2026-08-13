@@ -20,4 +20,25 @@ jobs:
       - name: Install project dependencies
         run: uv sync --all-groups
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Install Web dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: web
+
+      - name: Test and build Web product
+        run: pnpm test && pnpm build
+        working-directory: web
+
+      - name: Install browser
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: web
+
+      - name: Test responsive Web product
+        run: pnpm test:e2e
+        working-directory: web
+
       - uses: pre-commit/action@v3.0.1

@@ -1,9 +1,9 @@
 # CueWeaver
 
-CueWeaver is a library for a locally deployed HTTP subtitle service. An
-embedding ASGI server exposes `POST /api/discover`, `POST /api/extract`, and
-`POST /api/translate` over explicit container-local paths. Media and working
-directories are mounted into the server container.
+CueWeaver is a locally deployed Web subtitle product. Its official
+single-worker ASGI server hosts the product shell and API while the existing
+explicit-path operations remain available during product expansion. Media and
+working directories are mounted into the server container.
 
 ## Language
 
@@ -37,3 +37,8 @@ _Avoid_: glossary
 **Work directory**:
 The explicit per-request directory used for PySubtrans translation state.
 _Avoid_: job workspace
+
+**Job**:
+A durable product task that will orchestrate optional Extraction and
+Translation.
+_Avoid_: request, task

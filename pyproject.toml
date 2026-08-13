@@ -10,7 +10,15 @@ dependencies = [
     "pydantic>=2.13.4",
     "pysubtrans==1.6.0",
     "starlette>=1.6.0",
+    "uvicorn>=0.35.0",
 ]
+
+[project.scripts]
+cueweaver = "cueweaver.product:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cueweaver"]
+artifacts = ["cueweaver/static/*"]
 
 [build-system]
 requires = ["hatchling"]
