@@ -613,6 +613,7 @@ function TermMapsPage() {
       {
         onSuccess: () => {
           if (selectedIdRef.current === selectedId) {
+            selectedIdRef.current = null;
             setSelectedId(null);
             setConfirmation("");
           }
@@ -716,6 +717,7 @@ function TermMapsPage() {
                 key={map.id}
                 type="button"
                 onClick={() => {
+                  selectedIdRef.current = map.id;
                   setSelectedId(map.id);
                   setRenameName(map.name);
                   setReplacement(null);
@@ -744,6 +746,7 @@ function TermMapsPage() {
                 variant="outline"
                 type="button"
                 onClick={() => {
+                  selectedIdRef.current = null;
                   setSelectedId(null);
                   setRenameName("");
                   setReplacement(null);

@@ -300,6 +300,7 @@ describe("product shell", () => {
       },
     ];
     let resolveRename!: (response: unknown) => void;
+    let renameSettled = false;
     const renamePending = new Promise((resolve) => {
       resolveRename = resolve;
     });
@@ -307,7 +308,11 @@ describe("product shell", () => {
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
         if (input === "/api/status") return statusResponse();
-        if (init?.method === "PATCH") return renamePending;
+        if (init?.method === "PATCH") {
+          return renamePending.finally(() => {
+            renameSettled = true;
+          });
+        }
         if (input === "/api/term-maps") return jsonResponse({ term_maps: summaries });
         const summary = input.endsWith("map-a") ? summaries[0] : summaries[1];
         return jsonResponse({ ...summary, content: { Source: "Target" } });
@@ -329,6 +334,9 @@ describe("product shell", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     resolveRename(jsonResponse(summaries[0]));
+    await waitFor(() => expect(renameSettled).toBe(true));
+    expect(screen.getByLabelText("New Term map name")).toHaveValue("Beta");
+    expect(screen.getByRole("heading", { name: "Beta" })).toBeInTheDocument();
   });
 
   it("shows the empty state and uploads valid JSON", async () => {
