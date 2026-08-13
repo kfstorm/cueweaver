@@ -29,5 +29,6 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 ## Runtime boundaries
 
 - Docker is the complete production product boundary: it builds `web/dist`, copies it into `cueweaver/static`, and serves it from the production ASGI app. The Python package does not include generated Web assets.
+- The production container operates on user-mounted Media and Work directories and must run as the matching host UID/GID, not root. Docker examples and E2E runs should pass `--user "$(id -u):$(id -g)"`; mounted Media must be readable and Work must be writable by that user.
 - Use `uvicorn cueweaver.product:create_product_app_from_env --factory` for the production server. The development factory is API-only and is intended to run behind Vite.
 - Production SPA fallback applies only to non-API routes. Unknown `/api` paths, including `/api` itself, must remain structured API 404 responses rather than returning `index.html`.

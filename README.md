@@ -19,13 +19,21 @@ Work volumes:
 
 ```bash
 docker build -t cueweaver .
-docker run --rm -p 8000:8000 \
+docker run --rm --user "$(id -u):$(id -g)" -p 8000:8000 \
   -e CUEWEAVER_MEDIA_ROOT=/media \
   -e CUEWEAVER_WORK_ROOT=/work \
   -v /path/to/media:/media \
   -v cueweaver-work:/work \
   cueweaver
 ```
+
+Run the container as the host user that owns the mounted Media and Work
+directories. CueWeaver reads Media and writes persistent Term maps and other
+product state to Work, so running it as root can create host files that the
+actual user cannot manage. The mounted directories must be readable by the
+selected UID/GID; Work must also be writable and support directory creation and
+same-directory atomic replacement. For a named Work volume, initialize its
+ownership for the selected UID/GID before starting CueWeaver.
 
 Open `http://localhost:8000`. The Media root must already be a readable
 directory. CueWeaver creates the Work root when absent and verifies it supports
