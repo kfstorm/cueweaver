@@ -8,6 +8,8 @@ IMAGE="cueweaver-e2e"
 CONTAINER="cueweaver-e2e-$$"
 ROOTS="$(mktemp -d)"
 mkdir "$ROOTS/media" "$ROOTS/work"
+chmod 755 "$ROOTS" "$ROOTS/media" "$ROOTS/work"
+RUN_USER="$(id -u):$(id -g)"
 printf '%s' '<movie><title>Example movie</title><year>2024</year></movie>' \
   >"$ROOTS/media/Example.nfo"
 printf '%s\n' \
@@ -18,19 +20,18 @@ printf '%s\n' \
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
-  docker run --rm --user 0:0 --entrypoint chown --volume "$ROOTS:/cleanup" "$IMAGE" \
-    -R "$(id -u):$(id -g)" /cleanup >/dev/null 2>&1 || true
   rm -rf "$ROOTS"
 }
 trap cleanup EXIT
 
 docker build --tag "$IMAGE" .
-docker run --rm --volume "$ROOTS/media:/media" "$IMAGE" \
+docker run --rm --user "$RUN_USER" --volume "$ROOTS/media:/media" "$IMAGE" \
   ffmpeg -v error -f lavfi -i color=c=black:s=16x16:d=1 \
   -f srt -i /media/Example.en.srt \
   -map 0:v:0 -map 1:0 -c:v mpeg4 -t 1 -c:s srt \
   -metadata:s:s:0 language=en /media/Example.mkv
 docker run --detach --name "$CONTAINER" \
+  --user "$RUN_USER" \
   --publish 127.0.0.1:8765:8000 \
   --env CUEWEAVER_MEDIA_ROOT=/media \
   --env CUEWEAVER_WORK_ROOT=/work \
