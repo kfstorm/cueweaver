@@ -39,6 +39,23 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   );
 }
 
+function jobsFetch(job: unknown) {
+  return vi.fn().mockImplementation(async (input: string) => {
+    if (input === "/api/status") return statusResponse();
+    if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
+    return jsonResponse({ term_maps: [] });
+  });
+}
+
+async function selectExternalSubtitle() {
+  fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+  const subtitle = await screen.findByRole("button", {
+    name: "Select external subtitle en (Movie.en.srt)",
+  });
+  fireEvent.click(subtitle);
+  return subtitle;
+}
+
 function termMapFetch(
   postBodyCheck?: (body: BodyInit | null | undefined) => void,
   postResponse: unknown = {},
@@ -190,6 +207,62 @@ describe("product shell", () => {
       expect(screen.getByText("Translation provider ready")).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("renders a persisted Job with its status and failure context", async () => {
+    const fetchMock = jobsFetch({
+      id: "job-123456789",
+      status: "Failed",
+      created_at: "2026-08-13T12:00:00Z",
+      started_at: "2026-08-13T12:00:01Z",
+      finished_at: "2026-08-13T12:00:02Z",
+      request: {
+        media_path: "Movie.mkv",
+        subtitle_path: "Movie.en.srt",
+        target_language_code: "zh-Hans",
+        output_path: "Movie.zh-Hans.srt",
+        source_format: "srt",
+      },
+      error: {
+        code: "translation_failed",
+        message: "Translation failed",
+        field: "subtitle",
+      },
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(await screen.findByText("Movie.mkv")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Movie.en.srt to zh-Hans")).toBeInTheDocument();
+    expect(screen.getByText("Translation failed")).toBeInTheDocument();
+    expect(screen.getByText("Job job-1234")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Show error details"));
+    expect(screen.getByText("translation_failed")).toBeInTheDocument();
+    expect(screen.getByText("subtitle")).toBeInTheDocument();
+  });
+
+  it("renders an Interrupted Job as a terminal state", async () => {
+    const fetchMock = jobsFetch({
+      id: "interrupted-1",
+      status: "Interrupted",
+      created_at: "2026-08-13T12:00:00Z",
+      started_at: "2026-08-13T12:00:01Z",
+      finished_at: "2026-08-13T12:00:02Z",
+      request: {
+        media_path: "Movie.mkv",
+        subtitle_path: "Movie.en.srt",
+        target_language_code: "zh",
+        output_path: "Movie.zh.srt",
+        source_format: "srt",
+      },
+      error: {
+        code: "job_interrupted",
+        message: "Job was interrupted when CueWeaver stopped",
+      },
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(await screen.findByText("Interrupted")).toBeInTheDocument();
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {
@@ -467,6 +540,47 @@ describe("product shell", () => {
     expect(screen.getByText("Selected")).toBeInTheDocument();
   });
 
+  it("queues an External subtitle with the target language", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+
+    expect(screen.getByText("Suggested output: Movie.zh-Hans.srt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await waitFor(() =>
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/jobs",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            media_path: "Movie.mkv",
+            subtitle_path: "Movie.en.srt",
+            target_language_code: "zh-Hans",
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("disables submission when the Translation provider is unavailable", async () => {
+    renderRoute("/translate", false);
+
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      "/api/jobs",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("keeps the real filename in the accessible Media name", async () => {
     renderRoute("/translate", true, {
       path: "",
@@ -539,11 +653,7 @@ describe("product shell", () => {
   it("clears Discovery and subtitle selection when changing directory", async () => {
     renderRoute("/translate");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
-    const subtitle = await screen.findByRole("button", {
-      name: "Select external subtitle en (Movie.en.srt)",
-    });
-    fireEvent.click(subtitle);
+    const subtitle = await selectExternalSubtitle();
     expect(subtitle).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Open Series" }));

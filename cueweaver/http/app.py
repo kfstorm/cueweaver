@@ -16,6 +16,7 @@ from ..application.term_maps import TermMaps
 from .browse import BrowseOperation, register_browse
 from .discover import DiscoveryOperation, register_discover
 from .extract import ExtractionOperation, register_extract
+from .jobs import JobsOperation, register_jobs
 from .media_discover import register_media_discover
 from .term_maps import register_term_maps
 from .translate import TranslationOperation, register_translate
@@ -28,6 +29,7 @@ BUSINESS_ROUTES = frozenset(
         "/api/term-maps",
         "/api/media/browse",
         "/api/media/discover",
+        "/api/jobs",
     }
 )
 
@@ -47,6 +49,9 @@ class Application(Protocol):
 
     @property
     def browsing(self) -> BrowseOperation | None: ...
+
+    @property
+    def jobs(self) -> JobsOperation: ...
 
 
 def create_app(application: Application, media_root: Path | None = None) -> FastAPI:
@@ -97,6 +102,8 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
         register_browse(app, application)
     if media_root is not None:
         register_media_discover(app, application.discovery, media_root)
+    if getattr(application, "jobs", None) is not None:
+        register_jobs(app, application)
     return app
 
 

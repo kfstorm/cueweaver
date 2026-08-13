@@ -9,6 +9,7 @@ from ..adapters.translation import PySubtransTranslator
 from .browsing import MediaBrowser
 from .discovery import Discovery
 from .extraction import Extraction
+from .jobs import Jobs
 from .term_maps import TermMaps
 from .translation import Translation, Translator
 
@@ -31,6 +32,8 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         self.translation = Translation(configured_translator, output)
+        if work_root is not None and media_root is not None:
+            self.jobs = Jobs(configured_translator, media_root, work_root)
         self.term_maps = TermMaps(FileTermMapStore(work_root or Path.cwd()))
 
 
