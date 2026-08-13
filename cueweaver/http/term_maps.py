@@ -6,6 +6,7 @@ import json
 from typing import Protocol
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from ..application.errors import ServiceError
 from ..application.term_maps import (
@@ -50,6 +51,13 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
             )
         name, content = _parse_upload(pairs)
         return summary_body(application.term_maps.create(name, content))
+
+    @app.post("/api/term-maps/{term_map_id}")
+    def post_term_map_item_not_found(_term_map_id: str) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"error_code": "not_found", "message": "Resource not found"},
+        )
 
     @app.patch("/api/term-maps/{term_map_id}")
     async def rename_term_map(term_map_id: str, request: Request) -> dict[str, object]:

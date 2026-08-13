@@ -17,6 +17,7 @@ require_json_content_type
 list_term_maps
 get_term_map
 create_term_map
+post_term_map_item_not_found
 rename_term_map
 replace_term_map
 delete_term_map

@@ -762,6 +762,7 @@ function TermMapsPage() {
                     value={renameName}
                     placeholder={selected.data.name}
                     onChange={(event) => setRenameName(event.target.value)}
+                    disabled={rename.isPending}
                   />
                   <Button
                     type="button"
@@ -834,6 +835,7 @@ function TermMapsPage() {
                     onChange={(event) => setReplacement(event.target.value)}
                     rows={7}
                     spellCheck={false}
+                    disabled={replace.isPending}
                   />
                   {replace.isError && (
                     <p className="form-error" role="alert">
