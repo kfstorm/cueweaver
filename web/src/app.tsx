@@ -202,20 +202,16 @@ function SubtitleDiscovery({
           </div>
         )}
         {query.isError && (
-          <div role="alert" className="browser-message error">
-            {query.error.message}
-            <Button variant="outline" onClick={() => void query.refetch()}>
-              Try again
-            </Button>
-          </div>
+          <QueryErrorMessage
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+          />
         )}
         {!query.isFetching &&
           query.data &&
           query.data.candidates.length === 0 &&
           query.data.unsupported_candidates.length === 0 && (
-            <div className="browser-message">
-              No subtitles were found for this Media.
-            </div>
+            <EmptyMessage>No subtitles were found for this Media.</EmptyMessage>
           )}
         {!query.isFetching &&
           !query.isError &&
@@ -396,17 +392,15 @@ function MediaBrowser({
           </div>
         )}
         {query.isError && (
-          <div role="alert" className="browser-message error">
-            {query.error.message}
-            <Button variant="outline" onClick={() => void query.refetch()}>
-              Try again
-            </Button>
-          </div>
+          <QueryErrorMessage
+            message={query.error.message}
+            onRetry={() => void query.refetch()}
+          />
         )}
         {query.data && entries?.length === 0 && (
-          <div className="browser-message">
+          <EmptyMessage>
             {filter ? "No matching Media or directories." : "This directory is empty."}
-          </div>
+          </EmptyMessage>
         )}
         {entries?.map((entry) => (
           <MediaEntry
@@ -418,6 +412,27 @@ function MediaBrowser({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function EmptyMessage({ children }: { children: string }) {
+  return <div className="browser-message">{children}</div>;
+}
+
+function QueryErrorMessage({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div role="alert" className="browser-message error">
+      {message}
+      <Button variant="outline" onClick={onRetry}>
+        Try again
+      </Button>
     </div>
   );
 }

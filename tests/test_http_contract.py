@@ -16,6 +16,28 @@ from cueweaver.application.translation import TranslateRequest, TranslateResult
 from cueweaver.http import create_app
 
 
+def expected_discovery_payload(external_path: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "kind": "external",
+                "path": external_path,
+                "format": "srt",
+                "tags": {"language": "en", "title": ""},
+            },
+            {
+                "kind": "embedded",
+                "stream_index": 3,
+                "format": "ass",
+                "tags": {"language": "zhs", "title": "Chinese"},
+            },
+        ],
+        "unsupported_candidates": [
+            {"kind": "embedded", "stream_index": 4, "reason": "bitmap subtitle"}
+        ],
+    }
+
+
 class ApplicationFixture:
     def __init__(self) -> None:
         self.discover_request: DiscoverRequest | None = None
@@ -91,23 +113,7 @@ def test_http_routes_requests_to_operations_and_serializes_results():
     assert discover.headers["content-type"] == "application/json"
     assert discover.json() == {
         "media_path": "/media/Movie.mkv",
-        "candidates": [
-            {
-                "kind": "external",
-                "path": "/media/Movie.en.srt",
-                "format": "srt",
-                "tags": {"language": "en", "title": ""},
-            },
-            {
-                "kind": "embedded",
-                "stream_index": 3,
-                "format": "ass",
-                "tags": {"language": "zhs", "title": "Chinese"},
-            },
-        ],
-        "unsupported_candidates": [
-            {"kind": "embedded", "stream_index": 4, "reason": "bitmap subtitle"}
-        ],
+        **expected_discovery_payload("/media/Movie.en.srt"),
     }
     assert application.discover_request == DiscoverRequest(Path("/media/Movie.mkv"))
     assert extract.json() == {"output_path": "/work/Movie.ass", "format": "ass"}
@@ -173,23 +179,7 @@ def test_product_discover_resolves_relative_media_path_and_redacts_absolute_path
     assert response.status_code == 200
     assert response.json() == {
         "path": "Movie.mkv",
-        "candidates": [
-            {
-                "kind": "external",
-                "path": "Movie.en.srt",
-                "format": "srt",
-                "tags": {"language": "en", "title": ""},
-            },
-            {
-                "kind": "embedded",
-                "stream_index": 3,
-                "format": "ass",
-                "tags": {"language": "zhs", "title": "Chinese"},
-            },
-        ],
-        "unsupported_candidates": [
-            {"kind": "embedded", "stream_index": 4, "reason": "bitmap subtitle"}
-        ],
+        **expected_discovery_payload("Movie.en.srt"),
     }
     assert application.discover_request == DiscoverRequest(media_root / "Movie.mkv")
     assert str(media_root) not in response.text
