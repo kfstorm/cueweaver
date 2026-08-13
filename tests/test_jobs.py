@@ -340,6 +340,34 @@ def test_restart_marks_active_job_interrupted_without_requeueing(tmp_path: Path)
         "code": "job_interrupted",
         "message": "Job was interrupted when CueWeaver stopped",
     }
+    restarted.close()
+
+
+def test_close_returns_while_translation_is_blocked(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingTranslator(FakeTranslator):
+        def translate(
+            self, source: Path, target_language: str, **kwargs: object
+        ) -> bytes:
+            started.set()
+            release.wait(timeout=5)
+            return super().translate(source, target_language, **kwargs)
+
+    jobs = Jobs(BlockingTranslator(), media_root, work_root)
+    jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    closed = threading.Event()
+    shutdown = threading.Thread(target=lambda: (jobs.close(), closed.set()))
+    shutdown.start()
+    assert closed.wait(timeout=0.5)
+
+    release.set()
+    shutdown.join(timeout=5)
+    jobs._worker.join(timeout=5)
 
 
 def test_shutdown_after_publish_persists_completed_job(
