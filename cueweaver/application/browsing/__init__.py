@@ -159,7 +159,15 @@ def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:
         if year <= 0:
             return None, None
         return title, year
-    except (ET.ParseError, OSError, RuntimeError, UnicodeError, ValueError):
+    except (
+        ET.ParseError,
+        expat.ExpatError,
+        LookupError,
+        OSError,
+        RuntimeError,
+        UnicodeError,
+        ValueError,
+    ):
         return None, None
 
 

@@ -73,6 +73,37 @@ def test_browse_uses_movie_nfo_after_invalid_media_nfo_and_never_tvshow_nfo(
     assert (series.title, series.year) == ("Series title", 2010)
 
 
+def test_browse_skips_malformed_media_nfo_before_movie_fallback(tmp_path: Path):
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "Movie.mkv").write_bytes(b"media")
+    (root / "Movie.nfo").write_text("<movie><title>Broken</movie>", encoding="utf-8")
+    (root / "movie.nfo").write_text(
+        "<movie><title>Fallback title</title><year>1999</year></movie>",
+        encoding="utf-8",
+    )
+
+    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+
+    entry = result.entries[0]
+    assert (entry.title, entry.year) == ("Fallback title", 1999)
+
+
+def test_browse_skips_nfo_with_unknown_encoding(tmp_path: Path):
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "Movie.mkv").write_bytes(b"media")
+    (root / "Movie.nfo").write_bytes(
+        b'<?xml version="1.0" encoding="does-not-exist"?>'
+        b"<movie><title>Broken</title><year>2024</year></movie>"
+    )
+
+    result = MediaBrowser(root).browse(BrowseRequest(Path(".")))
+
+    entry = result.entries[0]
+    assert (entry.title, entry.year) == (None, None)
+
+
 def test_tvshow_nfo_never_labels_a_media_named_tvshow(tmp_path: Path):
     root = tmp_path / "media"
     root.mkdir()
