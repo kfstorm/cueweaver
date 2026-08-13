@@ -13,6 +13,9 @@ class CreateJobBody(BaseModel):
     media_path: str = Field(min_length=1)
     subtitle_path: str = Field(min_length=1)
     target_language_code: str = Field(min_length=1)
+    term_map_id: str | None = None
+    dynamic_terminology_enabled: bool = True
+    subtitle_terminology_filter_enabled: bool = True
 
 
 class JobsOperation(Protocol):
@@ -37,7 +40,12 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     def create_job(body: CreateJobBody) -> dict[str, object]:
         return application.jobs.create(
             CreateJobRequest(
-                body.media_path, body.subtitle_path, body.target_language_code
+                body.media_path,
+                body.subtitle_path,
+                body.target_language_code,
+                body.term_map_id,
+                body.dynamic_terminology_enabled,
+                body.subtitle_terminology_filter_enabled,
             )
         )
 

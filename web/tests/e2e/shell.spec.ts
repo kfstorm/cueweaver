@@ -37,6 +37,15 @@ async function stubProductStatus(page: Page, providerReady = true) {
   );
 }
 
+async function readJobs(page: Page) {
+  const response = await page.request.get("/api/jobs");
+  return (await response.json()).jobs as Array<{
+    request: { target_language_code: string };
+    status: string;
+    queue_position?: number | null;
+  }>;
+}
+
 test("desktop shell renders every product route", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await expectResponsiveShell(page, false);
@@ -329,6 +338,10 @@ test.describe("External subtitle submission", () => {
       await page.goto("/translate");
       await page.getByRole("button", { name: "Select Example.mkv" }).click();
       await page.getByRole("button", { name: /Select external subtitle en/ }).click();
+      await expect(page.locator("#target-languages option")).toHaveCount(15);
+      await expect(
+        page.locator('#target-languages option[value="zh-Hans"]'),
+      ).toHaveCount(1);
       await page.getByLabel("Target language code").fill("zh-Hans");
       await page.getByRole("button", { name: "Start translation" }).click();
 
@@ -337,7 +350,141 @@ test.describe("External subtitle submission", () => {
         media_path: "Example.mkv",
         subtitle_path: "Example.en.srt",
         target_language_code: "zh-Hans",
+        term_map_id: null,
+        dynamic_terminology_enabled: true,
+        subtitle_terminology_filter_enabled: true,
       });
     });
   }
+});
+
+test.describe("real translation workflow", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} remembers configuration and resets the source`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/translate");
+
+      await page.getByRole("button", { name: "Select Example movie" }).click();
+      await page.getByRole("button", { name: /Select external subtitle en/ }).click();
+      const targetLanguage = `x-custom-${viewport.name}`;
+      await page.getByLabel("Target language code").fill(targetLanguage);
+      await page.getByText("Advanced settings").click();
+      await page.getByLabel("Dynamic terminology").uncheck();
+      await page.getByLabel("Subtitle terminology filtering").uncheck();
+
+      const requestPromise = page.waitForRequest(
+        (request) => request.url().endsWith("/api/jobs") && request.method() === "POST",
+      );
+      await page.getByRole("button", { name: "Start translation" }).click();
+      const request = await requestPromise;
+      expect(await request.postDataJSON()).toMatchObject({
+        target_language_code: targetLanguage,
+        dynamic_terminology_enabled: false,
+        subtitle_terminology_filter_enabled: false,
+      });
+      await expect(
+        page.getByRole("button", { name: "Select Example movie" }),
+      ).toBeVisible();
+      await expect(page.getByLabel("Target language code")).toHaveValue(targetLanguage);
+      await expect
+        .poll(() =>
+          page.evaluate(() => localStorage.getItem("cueweaver.target-language")),
+        )
+        .toBe(targetLanguage);
+      await expect
+        .poll(async () => {
+          const jobs = await readJobs(page);
+          return jobs.find((job) => job.request.target_language_code === targetLanguage)
+            ?.status;
+        })
+        .toBe("Completed");
+
+      await page.reload();
+      await expect(page.getByLabel("Target language code")).toHaveValue(targetLanguage);
+    });
+  }
+
+  test("does not remember a language when Job creation fails", async ({ page }) => {
+    await page.route("**/api/jobs", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error_code: "translation_failed",
+            message: "Translation could not be queued.",
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto("/translate");
+
+    await page.getByRole("button", { name: "Select Example movie" }).click();
+    await page.getByRole("button", { name: /Select external subtitle en/ }).click();
+    await page.getByLabel("Target language code").fill("x-failed");
+    await page.getByRole("button", { name: "Start translation" }).click();
+
+    await expect(page.getByRole("alert")).toContainText(
+      "Translation could not be queued.",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(() => localStorage.getItem("cueweaver.target-language")),
+      )
+      .toBeNull();
+  });
+
+  test("serializes Jobs and keeps the API responsive while translating", async ({
+    page,
+  }) => {
+    const create = (target_language_code: string) =>
+      page.request.post("/api/jobs", {
+        data: {
+          media_path: "Example.mkv",
+          subtitle_path: "Example.en.srt",
+          target_language_code,
+        },
+      });
+
+    const first = await create("queue-one");
+    const second = await create("queue-two");
+    const third = await create("queue-three");
+    expect(first.ok()).toBeTruthy();
+    expect(second.ok()).toBeTruthy();
+    expect(third.ok()).toBeTruthy();
+    expect((await second.json()).queue_position).toBe(1);
+    expect((await third.json()).queue_position).toBe(2);
+
+    expect((await page.request.get("/api/status")).ok()).toBeTruthy();
+    expect(
+      (await page.request.post("/api/media/browse", { data: { path: "" } })).ok(),
+    ).toBeTruthy();
+    expect(
+      (
+        await page.request.post("/api/media/discover", {
+          data: { path: "Example.mkv" },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    expect((await page.request.get("/api/jobs")).ok()).toBeTruthy();
+
+    await expect
+      .poll(
+        async () => {
+          const jobs = await readJobs(page);
+          return jobs
+            .filter((job) => job.request.target_language_code.startsWith("queue-"))
+            .map((job) => job.status);
+        },
+        { timeout: 15_000 },
+      )
+      .toEqual(["Completed", "Completed", "Completed"]);
+  });
 });

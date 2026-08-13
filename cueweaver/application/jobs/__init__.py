@@ -14,11 +14,13 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ..errors import ServiceError
 from ..media import require_readable_media
+from ..term_maps import TermMapDetail
 from ..translation import OutputPublisher, TranslateRequest, Translation, Translator
 
 JOB_STATUSES = frozenset(
@@ -33,19 +35,32 @@ class CreateJobRequest:
     media_path: str
     subtitle_path: str
     target_language_code: str
+    term_map_id: str | None = None
+    dynamic_terminology_enabled: bool = True
+    subtitle_terminology_filter_enabled: bool = True
+
+
+class TermMapResolver(Protocol):
+    def get(self, term_map_id: str) -> TermMapDetail: ...
 
 
 class Jobs:
     """Validate, persist, execute, and expose one serial stream of Jobs."""
 
     def __init__(
-        self, translator: Translator, media_root: Path, work_root: Path
+        self,
+        translator: Translator,
+        media_root: Path,
+        work_root: Path,
+        term_maps: TermMapResolver | None = None,
     ) -> None:
         self._translator = translator
+        self._term_maps = term_maps
         self._media_root = media_root.resolve()
         self._jobs_root = work_root / "jobs"
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
+        self._next_queue_sequence = 0
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._closed = threading.Event()
@@ -73,6 +88,8 @@ class Jobs:
                     "Translation provider is unavailable; configure a provider and restart CueWeaver",
                 )
             media, subtitle, output, source_format = self._validate(request)
+            term_map = self._snapshot_term_map(request.term_map_id)
+            self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
             record: dict[str, object] = {
@@ -85,20 +102,27 @@ class Jobs:
                     "media_path": str(media.relative_to(self._media_root)),
                     "subtitle_path": str(subtitle.relative_to(self._media_root)),
                     "target_language_code": request.target_language_code,
+                    "term_map": term_map,
+                    "dynamic_terminology_enabled": request.dynamic_terminology_enabled,
+                    "subtitle_terminology_filter_enabled": request.subtitle_terminology_filter_enabled,
                     "output_path": str(output.relative_to(self._media_root)),
                     "source_format": source_format,
                 },
                 "error": None,
+                "queue_sequence": self._next_queue_sequence,
             }
             self._write_record(job_id, record)
             with self._lock:
                 self._records[job_id] = record
             self._pending.put(job_id)
-            return _copy_record(record)
+            return self._record_with_queue_position(record)
 
     def list(self) -> list[dict[str, object]]:
         with self._lock:
-            records = [_copy_record(record) for record in self._records.values()]
+            records = [
+                self._record_with_queue_position(record)
+                for record in self._records.values()
+            ]
         return sorted(
             records, key=lambda record: str(record["created_at"]), reverse=True
         )
@@ -108,7 +132,35 @@ class Jobs:
             record = self._records.get(job_id)
             if record is None:
                 raise ServiceError("job_not_found", "Job does not exist")
-            return _copy_record(record)
+            return self._record_with_queue_position(record)
+
+    def _snapshot_term_map(self, term_map_id: str | None) -> dict[str, object] | None:
+        if term_map_id is None:
+            return None
+        if self._term_maps is None:
+            raise ServiceError("term_map_not_found", "Term map does not exist")
+        detail = self._term_maps.get(term_map_id)
+        return {
+            "id": detail.id,
+            "name": detail.name,
+            "content": dict(detail.content),
+        }
+
+    def _record_with_queue_position(
+        self, record: dict[str, object]
+    ) -> dict[str, object]:
+        copied = _copy_record(record)
+        if copied.get("status") != "Queued":
+            copied["queue_position"] = None
+            return copied
+        queued = sorted(
+            (item for item in self._records.values() if item.get("status") == "Queued"),
+            key=_queue_sequence,
+        )
+        copied["queue_position"] = next(
+            index + 1 for index, item in enumerate(queued) if item["id"] == record["id"]
+        )
+        return copied
 
     def _validate(self, request: CreateJobRequest) -> tuple[Path, Path, Path, str]:
         if (
@@ -182,6 +234,12 @@ class Jobs:
                 record.update(interrupted)
                 with suppress(OSError):
                     self._write_record(job_id, interrupted)
+            _normalize_record(record)
+            self._next_queue_sequence = max(
+                self._next_queue_sequence, _queue_sequence(record)
+            )
+            with suppress(OSError):
+                self._write_record(job_id, record)
             self._records[job_id] = record
 
     def _run(self) -> None:
@@ -213,6 +271,17 @@ class Jobs:
         assert isinstance(request, dict)
         work_directory = self._jobs_root / job_id
         try:
+            term_map_path: Path | None = None
+            term_map = request.get("term_map")
+            if isinstance(term_map, dict):
+                content = term_map.get("content")
+                if not isinstance(content, dict):
+                    raise ServiceError("invalid_term_map", "Job Term map is invalid")
+                work_directory.mkdir(parents=True, exist_ok=True)
+                term_map_path = work_directory / "term-map.json"
+                term_map_path.write_text(
+                    json.dumps(content, ensure_ascii=False), encoding="utf-8"
+                )
             Translation(
                 self._translator,
                 _JobOutputPublisher(
@@ -227,6 +296,9 @@ class Jobs:
                     str(request["target_language_code"]),
                     self._media_root / str(request["output_path"]),
                     work_directory,
+                    term_map_path,
+                    bool(request.get("dynamic_terminology_enabled", True)),
+                    bool(request.get("subtitle_terminology_filter_enabled", True)),
                 )
             )
         except ServiceError as error:
@@ -394,10 +466,49 @@ def _valid_record(record: dict[str, object]) -> bool:
         "output_path",
         "source_format",
     }
-    return required_request_fields <= request.keys() and all(
+    if not required_request_fields <= request.keys() or not all(
         isinstance(request[field], str) and request[field]
         for field in required_request_fields
+    ):
+        return False
+    for field in (
+        "dynamic_terminology_enabled",
+        "subtitle_terminology_filter_enabled",
+    ):
+        if field in request and not isinstance(request[field], bool):
+            return False
+    term_map = request.get("term_map")
+    return term_map is None or (
+        isinstance(term_map, dict)
+        and isinstance(term_map.get("id"), str)
+        and bool(term_map["id"])
+        and isinstance(term_map.get("name"), str)
+        and bool(term_map["name"])
+        and isinstance(term_map.get("content"), dict)
+        and all(
+            isinstance(source, str)
+            and bool(source)
+            and isinstance(target, str)
+            and bool(target)
+            for source, target in term_map["content"].items()
+        )
     )
+
+
+def _normalize_record(record: dict[str, object]) -> None:
+    request = record["request"]
+    assert isinstance(request, dict)
+    request.setdefault("term_map", None)
+    request.setdefault("dynamic_terminology_enabled", True)
+    request.setdefault("subtitle_terminology_filter_enabled", True)
+    queue_sequence = record.get("queue_sequence")
+    if not isinstance(queue_sequence, int) or queue_sequence < 1:
+        record["queue_sequence"] = 0
+
+
+def _queue_sequence(record: dict[str, object]) -> int:
+    sequence = record.get("queue_sequence")
+    return sequence if isinstance(sequence, int) else 0
 
 
 def _require_writable_directory(directory: Path) -> None:
