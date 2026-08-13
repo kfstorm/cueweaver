@@ -35,3 +35,14 @@ test("unavailable provider is actionable and cannot submit", async ({ page }) =>
   );
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });
+
+test("mobile Translate can select a labelled Media", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/translate");
+
+  const media = page.getByRole("button", { name: /Select Example movie/ });
+  await expect(media).toBeVisible();
+  await media.click();
+  await expect(media).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Selected")).toBeVisible();
+});

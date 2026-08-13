@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cueweaver.application.browsing import BrowseEntry, BrowseRequest, BrowseResult
 from cueweaver.application.discovery import (
     DiscoverRequest,
     DiscoverResult,
@@ -23,6 +24,7 @@ class ApplicationFixture:
         self.discovery = self
         self.extraction = self
         self.translation = self
+        self.browsing = self
 
     def discover(self, request: DiscoverRequest) -> DiscoverResult:
         self.discover_request = request
@@ -53,6 +55,12 @@ class ApplicationFixture:
         self.translate_request = request
         return TranslateResult(request.output_path, request.target_language_code, "srt")
 
+    def browse(self, request: BrowseRequest) -> BrowseResult:
+        return BrowseResult(
+            request.path,
+            [BrowseEntry("Movie.mkv", Path("Movie.mkv"), "media", "Movie", 2024)],
+        )
+
 
 def test_http_routes_requests_to_operations_and_serializes_results():
     application = ApplicationFixture()
@@ -77,6 +85,7 @@ def test_http_routes_requests_to_operations_and_serializes_results():
             "dynamic_terminology_enabled": False,
         },
     )
+    browse = client.post("/api/media/browse", json={"path": "Shows"})
 
     assert discover.status_code == 200
     assert discover.headers["content-type"] == "application/json"
@@ -119,6 +128,18 @@ def test_http_routes_requests_to_operations_and_serializes_results():
         False,
         True,
     )
+    assert browse.json() == {
+        "path": "Shows",
+        "entries": [
+            {
+                "name": "Movie.mkv",
+                "path": "Movie.mkv",
+                "kind": "media",
+                "title": "Movie",
+                "year": 2024,
+            }
+        ],
+    }
 
 
 @pytest.mark.parametrize(
