@@ -31,6 +31,13 @@ class OutputFixture:
         write(output_path)
 
 
+class ServiceErrorOutputFixture:
+    def publish(self, _output_path: Path, _write) -> None:
+        raise ServiceError(
+            "output_exists", "Output path already exists", path="output.srt"
+        )
+
+
 def test_translation_passes_request_options_and_publishes_result(tmp_path):
     subtitle = tmp_path / "Movie.en.SRT"
     subtitle.write_bytes(SRT)
@@ -142,3 +149,16 @@ def test_translation_maps_translator_failures_without_publishing(tmp_path):
 
     assert error.value.error_code == "translation_failed"
     assert output.output_path is None
+
+
+def test_translation_preserves_structured_publisher_errors(tmp_path):
+    subtitle = tmp_path / "Movie.srt"
+    subtitle.write_bytes(SRT)
+
+    with pytest.raises(ServiceError) as error:
+        Translation(TranslatorFixture(), ServiceErrorOutputFixture()).translate(
+            TranslateRequest(subtitle, "zh", tmp_path / "output.srt", tmp_path / "work")
+        )
+
+    assert error.value.error_code == "output_exists"
+    assert error.value.context == {"path": "output.srt"}

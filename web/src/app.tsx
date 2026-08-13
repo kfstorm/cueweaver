@@ -26,6 +26,7 @@ import {
 import { cn } from "./lib/utils";
 import { useProductStatus } from "./status";
 import { useCreateTermMap, useTermMap, useTermMaps } from "./term-maps";
+import { useCreateJob, useJobs } from "./jobs";
 
 const routes: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "Translate", path: "/translate", icon: TranslateIcon },
@@ -97,10 +98,13 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 
 function Translate() {
   const queryClient = useQueryClient();
+  const createJob = useCreateJob();
+  const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
+  const [targetLanguage, setTargetLanguage] = useState("");
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
   const clearDiscovery = (previousMedia: string | null) => {
@@ -113,7 +117,18 @@ function Translate() {
     clearDiscovery(previousMedia);
     setSelectedMedia(null);
     setSelectedSubtitle(null);
+    setTargetLanguage("");
   };
+  const selectedCandidate = discovery.data?.candidates.find(
+    (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
+  );
+  const canSubmit =
+    selectedMedia !== null &&
+    selectedCandidate?.kind === "external" &&
+    selectedCandidate.path !== undefined &&
+    targetLanguage.trim() !== "" &&
+    status.data?.translation_provider.ready === true &&
+    !createJob.isPending;
   return (
     <>
       <PageHeader
@@ -158,15 +173,64 @@ function Translate() {
         <div className="step-index">02</div>
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
-          <p>Select media first to choose a source, language, and Term map.</p>
+          <p>Select an External subtitle and enter the target language.</p>
+          <label>
+            Target language code
+            <Input
+              required
+              value={targetLanguage}
+              onChange={(event) => setTargetLanguage(event.target.value)}
+              placeholder="zh-Hans"
+              disabled={selectedCandidate?.kind !== "external"}
+            />
+          </label>
+          {selectedMedia && selectedCandidate?.path && (
+            <p className="field-help">
+              Suggested output:{" "}
+              {suggestedOutput(
+                selectedMedia,
+                targetLanguage,
+                selectedCandidate.format ?? "srt",
+              )}
+            </p>
+          )}
         </div>
       </section>
       <div className="submission-bar">
         <ProviderState />
-        <Button disabled>Start translation</Button>
+        <Button
+          disabled={!canSubmit}
+          onClick={() => {
+            if (selectedMedia && selectedCandidate?.path) {
+              createJob.mutate({
+                media_path: selectedMedia,
+                subtitle_path: selectedCandidate.path,
+                target_language_code: targetLanguage,
+              });
+            }
+          }}
+        >
+          {createJob.isPending ? "Queueing..." : "Start translation"}
+        </Button>
       </div>
+      {createJob.isError && (
+        <p className="form-error" role="alert">
+          {createJob.error.message}
+        </p>
+      )}
+      {createJob.isSuccess && (
+        <p className="upload-status" role="status">
+          Translation queued
+        </p>
+      )}
     </>
   );
+}
+
+function suggestedOutput(mediaPath: string, targetLanguage: string, format: string) {
+  const mediaName = mediaPath.split("/").pop() ?? mediaPath;
+  const stem = mediaName.split(".").slice(0, -1).join(".") || mediaName;
+  return `${stem}.${targetLanguage || "<target language>"}.${format}`;
 }
 
 function SubtitleDiscovery({
@@ -512,28 +576,65 @@ function ProviderState() {
   );
 }
 
-function EmptyPage({
-  title,
-  detail,
-  emptyTitle,
-  emptyDetail,
-  icon: EmptyIcon,
-}: {
-  title: string;
-  detail: string;
-  emptyTitle: string;
-  emptyDetail: string;
-  icon: Icon;
-}) {
+function JobsPage() {
+  const jobs = useJobs();
   return (
     <>
-      <PageHeader title={title} detail={detail} />
-      <section className="empty-state">
-        <span className="empty-icon">
-          <EmptyIcon size={22} aria-hidden="true" />
-        </span>
-        <h2>{emptyTitle}</h2>
-        <p>{emptyDetail}</p>
+      <PageHeader title="Jobs" detail="Track queued and completed translation work." />
+      <section className="job-list" aria-label="Translation jobs">
+        {jobs.isPending && (
+          <div className="inline-state" role="status">
+            Loading Jobs
+          </div>
+        )}
+        {jobs.isError && (
+          <div className="inline-state error" role="alert">
+            {jobs.error.message}
+          </div>
+        )}
+        {!jobs.isPending && !jobs.isError && jobs.data.length === 0 && (
+          <div className="empty-state">
+            <span className="empty-icon">
+              <BriefcaseIcon size={22} aria-hidden="true" />
+            </span>
+            <h2>No jobs yet</h2>
+            <p>Submitted translations will appear here with their current state.</p>
+          </div>
+        )}
+        {(jobs.data ?? []).map((job) => (
+          <article className="job-item" key={job.id}>
+            <div>
+              <small className="job-id">Job {job.id.slice(0, 8)}</small>
+              <strong>{job.request.media_path}</strong>
+              <p>
+                {job.request.subtitle_path} to {job.request.target_language_code}
+              </p>
+            </div>
+            <span className={`job-status status-${job.status.toLowerCase()}`}>
+              {job.status}
+            </span>
+            {job.error && <p className="form-error">{job.error.message}</p>}
+            {job.error && (
+              <details className="job-error-details">
+                <summary>Show error details</summary>
+                <dl>
+                  <div>
+                    <dt>Code</dt>
+                    <dd>{job.error.code}</dd>
+                  </div>
+                  {Object.entries(job.error)
+                    .filter(([key]) => key !== "code" && key !== "message")
+                    .map(([key, value]) => (
+                      <div key={key}>
+                        <dt>{key}</dt>
+                        <dd>{String(value)}</dd>
+                      </div>
+                    ))}
+                </dl>
+              </details>
+            )}
+          </article>
+        ))}
       </section>
     </>
   );
@@ -756,18 +857,7 @@ export function App() {
       <Route element={<Shell />}>
         <Route index element={<Navigate to="/translate" replace />} />
         <Route path="translate" element={<Translate />} />
-        <Route
-          path="jobs"
-          element={
-            <EmptyPage
-              title="Jobs"
-              detail="Track queued and completed translation work."
-              emptyTitle="No jobs yet"
-              emptyDetail="Submitted translations will appear here with their current state."
-              icon={BriefcaseIcon}
-            />
-          }
-        />
+        <Route path="jobs" element={<JobsPage />} />
         <Route path="term-maps" element={<TermMapsPage />} />
         <Route path="*" element={<Navigate to="/translate" replace />} />
       </Route>

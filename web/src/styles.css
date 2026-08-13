@@ -516,6 +516,55 @@ a {
   text-align: center;
 }
 
+.job-list {
+  display: grid;
+  gap: 10px;
+}
+
+.job-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 18px;
+  border: 1px solid #e2e6ed;
+  border-radius: 8px;
+  background: #fff;
+  padding: 16px;
+}
+
+.job-item p {
+  margin: 5px 0 0;
+  color: #697386;
+  font-size: 13px;
+}
+
+.job-id {
+  display: block;
+  margin-bottom: 4px;
+  color: #697386;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.job-status {
+  align-self: start;
+  border-radius: 999px;
+  background: #eef0f4;
+  padding: 4px 9px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.status-completed {
+  background: #e8f7ed;
+  color: #18743a;
+}
+.status-failed {
+  background: #fff0ef;
+  color: #b42318;
+}
+
 .empty-icon {
   display: grid;
   width: 44px;

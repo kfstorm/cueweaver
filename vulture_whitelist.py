@@ -21,6 +21,9 @@ product_status
 api_not_found_handler
 product_not_found
 browse
+create_job
+list_jobs
+get_job
 
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config

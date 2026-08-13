@@ -17,6 +17,20 @@ async function expectResponsiveShell(page: Page, mobile: boolean) {
   }
 }
 
+async function mockReadyStatus(page: Page) {
+  await page.route("**/api/status", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        api: { ready: true },
+        roots: { ready: true },
+        translation_provider: { ready: true },
+        worker: { ready: true, mode: "single" },
+      }),
+    }),
+  );
+}
+
 test("desktop shell renders every product route", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await expectResponsiveShell(page, false);
@@ -49,17 +63,7 @@ test("unavailable provider is actionable and cannot submit", async ({ page }) =>
 test("Term maps management works with keyboard and search on desktop and mobile", async ({
   page,
 }) => {
-  await page.route("/api/status", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        api: { ready: true },
-        roots: { ready: true },
-        translation_provider: { ready: true },
-        worker: { ready: true, mode: "single" },
-      }),
-    }),
-  );
+  await mockReadyStatus(page);
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -189,6 +193,80 @@ test.describe("explicit subtitle selection", () => {
 
       await external.click();
       await expect(external).toHaveAttribute("aria-pressed", "true");
+    });
+  }
+});
+
+test.describe("External subtitle submission", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} Translate submits an External subtitle Job`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await mockReadyStatus(page);
+      await page.route("**/api/media/browse", (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            path: "",
+            entries: [{ kind: "media", name: "Example.mkv", path: "Example.mkv" }],
+          }),
+        }),
+      );
+      await page.route("**/api/media/discover", (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            path: "Example.mkv",
+            candidates: [
+              {
+                kind: "external",
+                path: "Example.en.srt",
+                format: "srt",
+                tags: { language: "en", title: "" },
+              },
+            ],
+            unsupported_candidates: [],
+          }),
+        }),
+      );
+      const jobRequest = page.waitForRequest(
+        (request) => request.url().endsWith("/api/jobs") && request.method() === "POST",
+      );
+      await page.route("**/api/jobs", async (route) => {
+        if (route.request().method() === "POST") {
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              id: "job-1",
+              status: "Queued",
+              request: {
+                media_path: "Example.mkv",
+                subtitle_path: "Example.en.srt",
+                target_language_code: "zh-Hans",
+              },
+            }),
+          });
+          return;
+        }
+        await route.fulfill({ contentType: "application/json", body: '{"jobs":[]}' });
+      });
+
+      await page.goto("/translate");
+      await page.getByRole("button", { name: "Select Example.mkv" }).click();
+      await page.getByRole("button", { name: /Select external subtitle en/ }).click();
+      await page.getByLabel("Target language code").fill("zh-Hans");
+      await page.getByRole("button", { name: "Start translation" }).click();
+
+      const request = await jobRequest;
+      expect(await request.postDataJSON()).toEqual({
+        media_path: "Example.mkv",
+        subtitle_path: "Example.en.srt",
+        target_language_code: "zh-Hans",
+      });
     });
   }
 });
