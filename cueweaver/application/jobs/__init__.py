@@ -56,7 +56,7 @@ class Jobs:
         self._worker.start()
 
     def close(self) -> None:
-        """Stop accepting work and let the worker exit after its current Job."""
+        """Stop accepting work and signal the worker to exit when it can."""
         with self._lifecycle_lock:
             if self._closed.is_set():
                 return
@@ -219,6 +219,7 @@ class Jobs:
                     AtomicOutputPublisher(),
                     self._lifecycle_lock,
                     self._closed,
+                    lambda: self._finish_published(job_id, work_directory),
                 ),
             ).translate(
                 TranslateRequest(
@@ -246,20 +247,22 @@ class Jobs:
                 {"code": "translation_failed", "message": "Translation failed"},
             )
             return
-        with self._lifecycle_lock:
-            try:
-                shutil.rmtree(work_directory)
-            except OSError:
-                self._finish(
-                    job_id,
-                    "Failed",
-                    {
-                        "code": "work_cleanup_failed",
-                        "message": "Completed Job work data could not be cleaned up",
-                    },
-                )
-                return
-            self._finish(job_id, "Completed", None)
+
+    def _finish_published(self, job_id: str, work_directory: Path) -> None:
+        """Commit the published output while holding the lifecycle lock."""
+        try:
+            shutil.rmtree(work_directory)
+        except OSError:
+            self._finish(
+                job_id,
+                "Failed",
+                {
+                    "code": "work_cleanup_failed",
+                    "message": "Completed Job work data could not be cleaned up",
+                },
+            )
+            return
+        self._finish(job_id, "Completed", None)
 
     def _finish(
         self, job_id: str, status: str, error: dict[str, object] | None
@@ -336,10 +339,12 @@ class _JobOutputPublisher:
         publisher: OutputPublisher,
         lifecycle_lock: threading.Lock,
         closed: threading.Event,
+        on_published: Callable[[], None],
     ) -> None:
         self._publisher = publisher
         self._lifecycle_lock = lifecycle_lock
         self._closed = closed
+        self._on_published = on_published
 
     def publish(self, output_path: Path, write: Callable[[Path], None]) -> None:
         with self._lifecycle_lock:
@@ -348,6 +353,7 @@ class _JobOutputPublisher:
                     "job_interrupted", "Job was interrupted when CueWeaver stopped"
                 )
             self._publisher.publish(output_path, write)
+            self._on_published()
 
 
 def _timestamp() -> str:
