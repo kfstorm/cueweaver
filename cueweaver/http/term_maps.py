@@ -6,6 +6,7 @@ import json
 from typing import Protocol
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from ..application.errors import ServiceError
 from ..application.term_maps import (
@@ -50,6 +51,50 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
             )
         name, content = _parse_upload(pairs)
         return summary_body(application.term_maps.create(name, content))
+
+    @app.post("/api/term-maps/{term_map_id}")
+    def post_term_map_item_not_found(_term_map_id: str) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"error_code": "not_found", "message": "Resource not found"},
+        )
+
+    @app.patch("/api/term-maps/{term_map_id}")
+    async def rename_term_map(term_map_id: str, request: Request) -> dict[str, object]:
+        raw_body = await _read_limited_body(request)
+        pairs, _ = _decode_upload(raw_body)
+        name = _parse_string_field(pairs, "name", "invalid_term_map")
+        return summary_body(application.term_maps.rename(term_map_id, name))
+
+    @app.put("/api/term-maps/{term_map_id}")
+    async def replace_term_map(term_map_id: str, request: Request) -> dict[str, object]:
+        raw_body = await _read_limited_body(request)
+        pairs, content_size = _decode_upload(raw_body)
+        if content_size > MAX_TERM_MAP_BYTES:
+            raise ServiceError(
+                "invalid_term_map", "Term map must be at most 1 MiB", field="content"
+            )
+        fields = _parse_fields(pairs, {"content"})
+        raw_content = fields.get("content")
+        if not isinstance(raw_content, JsonPairs):
+            raise ServiceError(
+                "invalid_term_map",
+                "Term map content must be a JSON object",
+                field="content",
+            )
+        content = validate_term_map_entries(raw_content)
+        return summary_body(application.term_maps.replace(term_map_id, content))
+
+    @app.delete("/api/term-maps/{term_map_id}")
+    async def delete_term_map(term_map_id: str, request: Request) -> dict[str, object]:
+        raw_body = await _read_limited_body(request)
+        pairs, _ = _decode_upload(raw_body)
+        name = _parse_string_field(
+            pairs,
+            "name",
+            "term_map_delete_confirmation_required",
+        )
+        return summary_body(application.term_maps.delete(term_map_id, name))
 
 
 async def _read_limited_body(request: Request) -> bytes:
@@ -119,18 +164,7 @@ def _skip_whitespace(text: str, position: int) -> int:
 def _parse_upload(payload: object) -> tuple[str, dict[str, str]]:
     if not isinstance(payload, JsonPairs):
         raise ServiceError("invalid_term_map", "Upload must be a JSON object")
-    fields: dict[object, object] = {}
-    for key, value in payload:
-        if key in fields:
-            raise ServiceError("invalid_term_map", "Upload contains duplicate fields")
-        fields[key] = value
-    unknown_fields = set(fields) - {"name", "content"}
-    if unknown_fields:
-        raise ServiceError(
-            "invalid_term_map",
-            "Upload contains unknown fields",
-            field=min(str(field) for field in unknown_fields),
-        )
+    fields = _parse_fields(payload, {"name", "content"})
     name = fields.get("name")
     raw_content = fields.get("content")
     if not isinstance(name, str):
@@ -144,6 +178,36 @@ def _parse_upload(payload: object) -> tuple[str, dict[str, str]]:
             field="content",
         )
     return name, validate_term_map_entries(raw_content)
+
+
+def _parse_fields(payload: JsonPairs, allowed_fields: set[str]) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for key, value in payload:
+        if not isinstance(key, str):
+            raise ServiceError("invalid_term_map", "Upload field names must be strings")
+        if key in fields:
+            raise ServiceError("invalid_term_map", "Upload contains duplicate fields")
+        fields[key] = value
+    unknown_fields = set(fields) - allowed_fields
+    if unknown_fields:
+        raise ServiceError(
+            "invalid_term_map",
+            "Upload contains unknown fields",
+            field=min(str(field) for field in unknown_fields),
+        )
+    return fields
+
+
+def _parse_string_field(payload: JsonPairs, field: str, error_code: str) -> str:
+    value = _parse_fields(payload, {field}).get(field)
+    if not isinstance(value, str):
+        message = (
+            "Enter the current Term map name to confirm deletion"
+            if error_code == "term_map_delete_confirmation_required"
+            else "Term map name must be a string"
+        )
+        raise ServiceError(error_code, message, field=field)
+    return value
 
 
 def summary_body(summary: TermMapSummary) -> dict[str, object]:

@@ -283,6 +283,135 @@ describe("product shell", () => {
     expect(screen.queryByText("Captain")).not.toBeInTheDocument();
   });
 
+  it("renames, replaces, and confirms deletion of a Term map", async () => {
+    const initial = {
+      id: "map-1",
+      name: "Characters",
+      entry_count: 2,
+      updated_at: "2026-08-13T12:00:00Z",
+    };
+    let summary = initial;
+    let content: Record<string, string> = { Captain: "队长", Ship: "舰船" };
+    let deleted = false;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/term-maps") {
+          return jsonResponse({ term_maps: deleted ? [] : [summary] });
+        }
+        if (init?.method === "PATCH") {
+          summary = { ...summary, name: "People" };
+          return jsonResponse(summary);
+        }
+        if (init?.method === "PUT") {
+          content = { Captain: "队长" };
+          summary = { ...summary, entry_count: 1 };
+          return jsonResponse(summary);
+        }
+        if (init?.method === "DELETE") {
+          deleted = true;
+          return jsonResponse(summary);
+        }
+        return jsonResponse({ ...summary, content });
+      });
+    renderTermMapsWithFetch(fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
+    fireEvent.change(await screen.findByLabelText("New Term map name"), {
+      target: { value: "People" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "People" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: '{"Captain":"队长"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
+    await waitFor(() => expect(screen.getByText(/1 entries/)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Confirm Term map name"), {
+      target: { value: "People" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete Term map" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps/map-1",
+        expect.objectContaining({ method: "PATCH" }),
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps/map-1",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/term-maps/map-1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "People" })).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("heading", { name: "No Term maps yet" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not leak mutation state when switching Term maps", async () => {
+    const summaries = [
+      {
+        id: "map-a",
+        name: "Alpha",
+        entry_count: 1,
+        updated_at: "2026-08-13T12:00:00Z",
+      },
+      {
+        id: "map-b",
+        name: "Beta",
+        entry_count: 1,
+        updated_at: "2026-08-13T12:00:00Z",
+      },
+    ];
+    let resolveRename!: (response: unknown) => void;
+    let renameSettled = false;
+    const renamePending = new Promise((resolve) => {
+      resolveRename = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (init?.method === "PATCH") {
+          return renamePending.finally(() => {
+            renameSettled = true;
+          });
+        }
+        if (input === "/api/term-maps") return jsonResponse({ term_maps: summaries });
+        const summary = input.endsWith("map-a") ? summaries[0] : summaries[1];
+        return jsonResponse({ ...summary, content: { Source: "Target" } });
+      });
+    renderTermMapsWithFetch(fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Alpha/ }));
+    fireEvent.change(await screen.findByLabelText("New Term map name"), {
+      target: { value: "Alpha renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save name" })).toBeDisabled(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+    expect(await screen.findByDisplayValue("Beta")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save name" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    resolveRename(jsonResponse(summaries[0]));
+    await waitFor(() => expect(renameSettled).toBe(true));
+    expect(screen.getByLabelText("New Term map name")).toHaveValue("Beta");
+    expect(screen.getByRole("heading", { name: "Beta" })).toBeInTheDocument();
+  });
+
   it("shows the empty state and uploads valid JSON", async () => {
     const fetchMock = termMapFetch(undefined, {
       id: "new",

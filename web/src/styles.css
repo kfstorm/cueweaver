@@ -804,6 +804,16 @@ a {
   color: #536176;
   font-size: 11px;
 }
+.term-map-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.term-map-actions .form-control {
+  min-height: 36px;
+  max-width: 240px;
+}
 .back-action {
   min-height: 36px;
 }
@@ -864,6 +874,41 @@ a {
   color: #536176;
   font-size: 12px;
   text-align: center;
+}
+.term-map-management {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+  border-top: 1px solid #dfe3ea;
+  padding-top: 20px;
+}
+.term-map-management h3 {
+  margin: 0;
+  color: #273043;
+  font-size: 13px;
+  font-weight: 650;
+}
+.term-map-management textarea {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.term-map-delete {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  border-top: 1px solid #edf0f4;
+  padding-top: 18px;
+}
+.term-map-delete p {
+  margin: 0;
+  color: #536176;
+  font-size: 11px;
+}
+.term-map-delete .form-control {
+  max-width: 360px;
+  min-height: 36px;
 }
 .sr-only {
   position: absolute;
@@ -994,6 +1039,10 @@ a {
     margin-top: 30px;
   }
   .term-map-upload .form-control,
+  .term-map-actions .form-control,
+  .term-map-actions button,
+  .term-map-delete .form-control,
+  .term-map-delete button,
   .search-field,
   .search-field .form-control,
   .back-action {

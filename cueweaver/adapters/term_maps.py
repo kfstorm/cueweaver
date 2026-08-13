@@ -9,7 +9,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +86,74 @@ class FileTermMapStore:
                 raise
             return self._summary(record)
 
+    def rename(self, term_map_id: str, name: str) -> TermMapSummary:
+        with self._locked():
+            records = self._read_index()
+            record = self._find(records, term_map_id)
+            folded_name = name.casefold()
+            if any(
+                item.id != term_map_id and item.name.casefold() == folded_name
+                for item in records
+            ):
+                raise ServiceError(
+                    "duplicate_term_map_name",
+                    "A Term map with this name already exists",
+                    name=name,
+                )
+            updated = _TermMapRecord(
+                id=record.id,
+                name=name,
+                entry_count=record.entry_count,
+                updated_at=_utc_timestamp(),
+                content_file=record.content_file,
+            )
+            self._write_index(
+                [
+                    *records[: records.index(record)],
+                    updated,
+                    *records[records.index(record) + 1 :],
+                ]
+            )
+            return self._summary(updated)
+
+    def replace(self, term_map_id: str, content: Mapping[str, str]) -> TermMapSummary:
+        with self._locked():
+            records = self._read_index()
+            record = self._find(records, term_map_id)
+            replacement_file = f"{record.id}.{uuid.uuid4().hex}.json"
+            replacement_path = self._directory / replacement_file
+            self._write_json(replacement_path, content)
+            updated = _TermMapRecord(
+                id=record.id,
+                name=record.name,
+                entry_count=len(content),
+                updated_at=_utc_timestamp(),
+                content_file=replacement_file,
+            )
+            try:
+                self._write_index(
+                    [updated if item.id == term_map_id else item for item in records]
+                )
+            except ServiceError:
+                replacement_path.unlink(missing_ok=True)
+                raise
+            self._remove_content_file(record.content_file)
+            return self._summary(updated)
+
+    def delete(self, term_map_id: str, name: str) -> TermMapSummary:
+        with self._locked():
+            records = self._read_index()
+            record = self._find(records, term_map_id)
+            if name != record.name:
+                raise ServiceError(
+                    "term_map_delete_confirmation_required",
+                    "Enter the current Term map name to confirm deletion",
+                    field="name",
+                )
+            self._write_index([item for item in records if item.id != term_map_id])
+            self._remove_content_file(record.content_file)
+            return self._summary(record)
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
         with self._thread_lock:
@@ -123,11 +191,27 @@ class FileTermMapStore:
         self._remove_orphans(records)
         return records
 
+    def _write_index(self, records: builtins.list[_TermMapRecord]) -> None:
+        self._write_json(self._index_path, [item.to_json() for item in records])
+
+    def _remove_content_file(self, content_file: str | None) -> None:
+        if not content_file:
+            return
+        with suppress(OSError):
+            (self._directory / content_file).unlink(missing_ok=True)
+
     def _remove_orphans(self, records: builtins.list[_TermMapRecord]) -> None:
         referenced = {record.content_file for record in records}
-        for path in self._directory.glob("*.json"):
-            if path.name != self._index_path.name and path.name not in referenced:
-                path.unlink(missing_ok=True)
+        for path in self._directory.iterdir():
+            if path.name == self._index_path.name or path.name in referenced:
+                continue
+            if (
+                path.suffix == ".json"
+                or path.name.startswith(".deleted-")
+                or (path.name.startswith(".") and ".json." in path.name)
+            ):
+                with suppress(OSError):
+                    path.unlink(missing_ok=True)
 
     @staticmethod
     def _find(
