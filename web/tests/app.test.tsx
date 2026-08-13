@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
-import type { MediaDirectory } from "../src/browse";
+import type { MediaDirectory, MediaDiscovery } from "../src/browse";
 
 function renderRoute(
   path: string,
@@ -16,7 +16,30 @@ function renderRoute(
       { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
     ],
   },
+  discoveryResponse: MediaDiscovery = {
+    path: "Movie.mkv",
+    candidates: [
+      {
+        kind: "external",
+        path: "Movie.en.srt",
+        format: "srt",
+        tags: { language: "en", title: "" },
+      },
+      {
+        kind: "embedded",
+        stream_index: 3,
+        format: "ass",
+        tags: { language: "zhs", title: "Chinese" },
+      },
+    ],
+    unsupported_candidates: [
+      { kind: "embedded", stream_index: 4, reason: "bitmap subtitle" },
+    ],
+  },
+  discoveryFailure = false,
+  discoveryResponses: Array<MediaDiscovery | Error | Promise<MediaDiscovery | Error>> = [],
 ) {
+  let discoveryCall = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -29,6 +52,14 @@ function renderRoute(
               ? { path, entries: [{ kind: "media", name: "Episode.mkv", path: "Series/Episode.mkv" }] }
               : browseResponse,
         });
+      }
+      if (String(input).includes("/api/media/discover")) {
+        const response = discoveryResponses[discoveryCall++] ??
+          (discoveryFailure ? new Error("ffprobe failed") : discoveryResponse);
+        return Promise.resolve(response).then((value) => ({
+          ok: !(value instanceof Error),
+          json: async () => (value instanceof Error ? { message: value.message } : value),
+        }));
       }
       return Promise.resolve({
         ok: true,
@@ -153,6 +184,171 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("button", {
         name: "Select Displayed title (2024) (Actual filename.mkv)",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("automatically discovers all subtitle candidates without selecting one", async () => {
+    renderRoute("/translate");
+
+    await screen.findByRole("button", { name: "Select Movie.mkv" });
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Select external subtitle en (Movie.en.srt)",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select embedded subtitle zhs / Chinese" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("bitmap subtitle")).toBeInTheDocument();
+    expect(screen.getByText("Not selectable")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select external subtitle en (Movie.en.srt)" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("group", { name: "Unsupported embedded subtitle" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("renders a retryable Discovery error", async () => {
+    renderRoute("/translate", true, undefined, undefined, true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("ffprobe failed");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    const discoverCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([input]) => String(input).includes("/api/media/discover"),
+    ).length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() =>
+      expect(
+        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) =>
+          String(input).includes("/api/media/discover"),
+        ).length,
+      ).toBe(discoverCalls + 1),
+    );
+  });
+
+  it("clears Discovery and subtitle selection when changing directory", async () => {
+    renderRoute("/translate");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+    const subtitle = await screen.findByRole("button", {
+      name: "Select external subtitle en (Movie.en.srt)",
+    });
+    fireEvent.click(subtitle);
+    expect(subtitle).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Series" }));
+
+    await screen.findByRole("button", { name: "Select Episode.mkv" });
+    expect(screen.queryByRole("button", { name: "Select external subtitle en (Movie.en.srt)" })).not.toBeInTheDocument();
+  });
+
+  it("clears the selected Media explicitly", async () => {
+    renderRoute("/translate");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Choose another Media" }));
+
+    expect(screen.queryByRole("button", { name: "Choose another Media" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toBeInTheDocument();
+  });
+
+  it("shows an empty Discovery result", async () => {
+    renderRoute("/translate", true, undefined, {
+      path: "Movie.mkv",
+      candidates: [],
+      unsupported_candidates: [],
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(
+      await screen.findByText("No subtitles were found for this Media."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show cached candidates after clearing and selecting Media again", async () => {
+    let resolveSecond!: (value: MediaDiscovery | Error) => void;
+    const secondResponse = new Promise<MediaDiscovery | Error>((resolve) => {
+      resolveSecond = resolve;
+    });
+    renderRoute("/translate", true, undefined, undefined, false, [
+      {
+        path: "Movie.mkv",
+        candidates: [
+          {
+            kind: "external",
+            path: "Movie.en.srt",
+            format: "srt",
+            tags: { language: "en", title: "" },
+          },
+        ],
+        unsupported_candidates: [],
+      },
+      secondResponse,
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+    await screen.findByRole("button", {
+      name: "Select external subtitle en (Movie.en.srt)",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Choose another Media" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(
+      await screen.findByRole("status", { name: "Loading subtitles" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Select external subtitle en (Movie.en.srt)",
+      }),
+    ).not.toBeInTheDocument();
+
+    resolveSecond(new Error("ffprobe failed"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("ffprobe failed");
+    expect(
+      screen.queryByRole("button", {
+        name: "Select external subtitle en (Movie.en.srt)",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("distinguishes External subtitles with the same language", async () => {
+    renderRoute("/translate", true, undefined, {
+      path: "Movie.mkv",
+      candidates: [
+        {
+          kind: "external",
+          path: "Movie.en.forced.srt",
+          format: "srt",
+          tags: { language: "en", title: "" },
+        },
+        {
+          kind: "external",
+          path: "Movie.en.sdh.srt",
+          format: "srt",
+          tags: { language: "en", title: "" },
+        },
+      ],
+      unsupported_candidates: [],
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Select external subtitle en (Movie.en.forced.srt)",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Select external subtitle en (Movie.en.sdh.srt)",
       }),
     ).toBeInTheDocument();
   });
