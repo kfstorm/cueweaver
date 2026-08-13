@@ -181,6 +181,8 @@ def test_term_map_can_be_renamed_without_changing_identity(tmp_path: Path):
         "updated_at": renamed.json()["updated_at"],
     }
     assert client.get(f"/api/term-maps/{created['id']}").json()["name"] == "People"
+    restarted = make_client(tmp_path)
+    assert restarted.get(f"/api/term-maps/{created['id']}").json()["name"] == "People"
 
 
 def test_term_map_replacement_is_persistent_and_updates_metadata(tmp_path: Path):
@@ -265,6 +267,11 @@ def test_term_map_delete_requires_current_name_and_removes_resource(tmp_path: Pa
     assert not_confirmed.json()["error_code"] == "term_map_delete_confirmation_required"
     assert deleted.status_code == 200
     assert after_delete.json()["error_code"] == "term_map_not_found"
+    assert make_client(tmp_path).get(f"/api/term-maps/{created['id']}").json() == {
+        "error_code": "term_map_not_found",
+        "message": "Term map does not exist",
+        "id": created["id"],
+    }
 
 
 def test_term_map_rename_and_replacement_concurrently_preserve_both_changes(
@@ -293,6 +300,33 @@ def test_term_map_rename_and_replacement_concurrently_preserve_both_changes(
 
     detail = client.get(f"/api/term-maps/{created['id']}").json()
     assert sorted(statuses) == [200, 200]
+    assert detail["name"] == "People"
+    assert detail["content"] == {"Captain": "队长", "Ship": "舰船"}
+
+
+@pytest.mark.parametrize("first_operation", ["rename", "replace"])
+def test_term_map_ordered_operations_preserve_both_committed_fields(
+    tmp_path: Path, first_operation: str
+):
+    client = make_client(tmp_path)
+    created = create_term_map(client)
+
+    operations = {
+        "rename": lambda: client.patch(
+            f"/api/term-maps/{created['id']}", json={"name": "People"}
+        ),
+        "replace": lambda: client.put(
+            f"/api/term-maps/{created['id']}",
+            json={"content": {"Captain": "队长", "Ship": "舰船"}},
+        ),
+    }
+    second_operation = "replace" if first_operation == "rename" else "rename"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(operations[first_operation])
+        assert first.result().status_code == 200
+        assert executor.submit(operations[second_operation]).result().status_code == 200
+
+    detail = client.get(f"/api/term-maps/{created['id']}").json()
     assert detail["name"] == "People"
     assert detail["content"] == {"Captain": "队长", "Ship": "舰船"}
 

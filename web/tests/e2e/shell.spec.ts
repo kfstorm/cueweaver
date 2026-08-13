@@ -17,6 +17,26 @@ async function expectResponsiveShell(page: Page, mobile: boolean) {
   }
 }
 
+async function stubProductStatus(page: Page, providerReady = true) {
+  await page.route("/api/status", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        api: { ready: true },
+        roots: { ready: true },
+        translation_provider: providerReady
+          ? { ready: true }
+          : {
+              ready: false,
+              message:
+                "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
+            },
+        worker: { ready: true, mode: "single" },
+      }),
+    }),
+  );
+}
+
 test("desktop shell renders every product route", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await expectResponsiveShell(page, false);
@@ -38,28 +58,19 @@ test("mobile primary actions meet the touch target", async ({ page }) => {
 });
 
 test("unavailable provider is actionable and cannot submit", async ({ page }) => {
+  await stubProductStatus(page, false);
   await page.goto("/translate");
 
-  await expect(page.getByRole("status")).toContainText(
-    "Configure a provider in PySubtrans service settings",
-  );
+  await expect(
+    page.getByRole("status").filter({ hasText: "Configure a provider" }),
+  ).toContainText("Configure a provider in PySubtrans service settings");
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });
 
 test("Term maps management works with keyboard and search on desktop and mobile", async ({
   page,
 }) => {
-  await page.route("/api/status", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        api: { ready: true },
-        roots: { ready: true },
-        translation_provider: { ready: true },
-        worker: { ready: true, mode: "single" },
-      }),
-    }),
-  );
+  await stubProductStatus(page);
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -100,6 +111,57 @@ test("Term maps management works with keyboard and search on desktop and mobile"
     await expect(page.getByRole("cell", { name: "Ship" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Captain" })).toBeHidden();
   }
+});
+
+test("Term map mutations update the browser state", async ({ page }) => {
+  let summary = {
+    id: "map-1",
+    name: "Characters",
+    entry_count: 2,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  let content: Record<string, string> = { Captain: "队长", Ship: "舰船" };
+  let deleted = false;
+  await stubProductStatus(page);
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: deleted ? [] : [summary] }),
+    }),
+  );
+  await page.route("/api/term-maps/map-1", async (route) => {
+    const request = route.request();
+    if (request.method() === "PATCH") {
+      summary = { ...summary, name: (await request.postDataJSON()).name };
+    } else if (request.method() === "PUT") {
+      content = (await request.postDataJSON()).content;
+      summary = { ...summary, entry_count: Object.keys(content).length };
+    } else if (request.method() === "DELETE") {
+      deleted = true;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ...summary, content }),
+    });
+  });
+
+  await page.goto("/term-maps");
+  await page.getByRole("button", { name: /Characters/ }).click();
+  await expect(page.getByText(/Updated 2026-08-13T12:00:00Z/)).toBeVisible();
+  await page.getByLabel("New Term map name").fill("People");
+  await page.getByRole("button", { name: "Save name" }).click();
+  await expect(page.getByRole("heading", { name: "People" })).toBeVisible();
+
+  await page.getByLabel("Replacement JSON content").fill('{"Captain":"队长"}');
+  await page.getByRole("button", { name: "Replace content" }).click();
+  await expect(page.getByText(/1 entries/)).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Captain" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Ship" })).toBeHidden();
+
+  await page.getByLabel("Confirm Term map name").fill("People");
+  await page.getByRole("button", { name: "Delete Term map" }).click();
+  await expect(page.getByRole("heading", { name: "No Term maps yet" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "People" })).toBeHidden();
 });
 
 test("Term maps API validates and persists a real browser-created resource", async ({

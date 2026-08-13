@@ -211,22 +211,36 @@ describe("product shell", () => {
   });
 
   it("renames, replaces, and confirms deletion of a Term map", async () => {
-    const summary = {
+    const initial = {
       id: "map-1",
       name: "Characters",
       entry_count: 2,
       updated_at: "2026-08-13T12:00:00Z",
     };
+    let summary = initial;
+    let content: Record<string, string> = { Captain: "队长", Ship: "舰船" };
+    let deleted = false;
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
         if (input === "/api/status") return statusResponse();
-        if (input === "/api/term-maps") return jsonResponse({ term_maps: [summary] });
-        if (init?.method === "PATCH")
-          return jsonResponse({ ...summary, name: "People" });
-        if (init?.method === "PUT") return jsonResponse({ ...summary, entry_count: 1 });
-        if (init?.method === "DELETE") return jsonResponse(summary);
-        return jsonResponse({ ...summary, content: { Captain: "队长", Ship: "舰船" } });
+        if (input === "/api/term-maps") {
+          return jsonResponse({ term_maps: deleted ? [] : [summary] });
+        }
+        if (init?.method === "PATCH") {
+          summary = { ...summary, name: "People" };
+          return jsonResponse(summary);
+        }
+        if (init?.method === "PUT") {
+          content = { Captain: "队长" };
+          summary = { ...summary, entry_count: 1 };
+          return jsonResponse(summary);
+        }
+        if (init?.method === "DELETE") {
+          deleted = true;
+          return jsonResponse(summary);
+        }
+        return jsonResponse({ ...summary, content });
       });
     renderTermMapsWithFetch(fetchMock);
 
@@ -235,12 +249,16 @@ describe("product shell", () => {
       target: { value: "People" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "People" })).toBeInTheDocument(),
+    );
     fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
       target: { value: '{"Captain":"队长"}' },
     });
     fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
+    await waitFor(() => expect(screen.getByText(/1 entries/)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("Confirm Term map name"), {
-      target: { value: "Characters" },
+      target: { value: "People" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Delete Term map" }));
 
@@ -258,6 +276,12 @@ describe("product shell", () => {
         expect.objectContaining({ method: "DELETE" }),
       );
     });
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "People" })).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("heading", { name: "No Term maps yet" }),
+    ).toBeInTheDocument();
   });
 
   it("shows the empty state and uploads valid JSON", async () => {

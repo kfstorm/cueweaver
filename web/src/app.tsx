@@ -738,7 +738,14 @@ function TermMapsPage() {
                 <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Term maps
               </Button>
               <h2 id="detail-title">{selected.data?.name ?? "Term map details"}</h2>
-              {selected.data && <p>{selected.data.entry_count} entries</p>}
+              {selected.data && (
+                <p>
+                  {selected.data.entry_count} entries · Updated{" "}
+                  <time dateTime={selected.data.updated_at}>
+                    {selected.data.updated_at}
+                  </time>
+                </p>
+              )}
               {selected.data && (
                 <div className="term-map-actions">
                   <Input
