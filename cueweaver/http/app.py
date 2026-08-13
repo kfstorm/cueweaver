@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Protocol
 
 from fastapi import FastAPI, Request
@@ -14,10 +15,17 @@ from ..application.errors import ServiceError
 from .browse import BrowseOperation, register_browse
 from .discover import DiscoveryOperation, register_discover
 from .extract import ExtractionOperation, register_extract
+from .media_discover import register_media_discover
 from .translate import TranslationOperation, register_translate
 
 BUSINESS_ROUTES = frozenset(
-    {"/api/discover", "/api/extract", "/api/translate", "/api/media/browse"}
+    {
+        "/api/discover",
+        "/api/extract",
+        "/api/translate",
+        "/api/media/browse",
+        "/api/media/discover",
+    }
 )
 
 
@@ -35,7 +43,7 @@ class Application(Protocol):
     def browsing(self) -> BrowseOperation | None: ...
 
 
-def create_app(application: Application) -> FastAPI:
+def create_app(application: Application, media_root: Path | None = None) -> FastAPI:
     """Create the HTTP service without coupling it to CLI startup."""
     app = FastAPI()
     app.add_exception_handler(ServiceError, service_error_handler)
@@ -63,6 +71,8 @@ def create_app(application: Application) -> FastAPI:
     register_translate(app, application)
     if getattr(application, "browsing", None) is not None:
         register_browse(app, application)
+    if media_root is not None:
+        register_media_discover(app, application.discovery, media_root)
     return app
 
 

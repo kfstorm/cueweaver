@@ -38,3 +38,57 @@ export function useMediaDirectory(path: string) {
     queryFn: () => fetchDirectory(path),
   });
 }
+
+export interface SubtitleCandidate {
+  kind: "external" | "embedded";
+  path?: string;
+  stream_index?: number;
+  format?: string;
+  tags?: { language?: string; title?: string };
+}
+
+export interface UnsupportedSubtitleCandidate {
+  kind: "external" | "embedded";
+  path?: string;
+  stream_index?: number;
+  reason: string;
+}
+
+export interface MediaDiscovery {
+  path: string;
+  candidates: SubtitleCandidate[];
+  unsupported_candidates: UnsupportedSubtitleCandidate[];
+}
+
+async function fetchDiscovery(
+  path: string,
+  signal: AbortSignal,
+): Promise<MediaDiscovery> {
+  const response = await fetch("/api/media/discover", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+    signal,
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      message?: unknown;
+    } | null;
+    throw new Error(
+      typeof body?.message === "string"
+        ? body.message
+        : "Subtitles could not be discovered.",
+    );
+  }
+  return response.json() as Promise<MediaDiscovery>;
+}
+
+export function useMediaDiscovery(path: string | null) {
+  return useQuery({
+    queryKey: ["media-discovery", path],
+    queryFn: ({ signal }) => fetchDiscovery(path!, signal),
+    enabled: path !== null,
+    retry: false,
+    gcTime: 0,
+  });
+}
