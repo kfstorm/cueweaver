@@ -18,6 +18,8 @@ printf '%s\n' \
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
+  docker run --rm --user 0:0 --entrypoint chown --volume "$ROOTS:/cleanup" "$IMAGE" \
+    -R "$(id -u):$(id -g)" /cleanup >/dev/null 2>&1 || true
   rm -rf "$ROOTS"
 }
 trap cleanup EXIT
