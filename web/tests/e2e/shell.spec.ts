@@ -62,11 +62,13 @@ test.describe("explicit subtitle selection", () => {
       const external = page.getByRole("button", {
         name: /Select external subtitle en \(Example\.en\.srt\)/,
       });
+      const embedded = page.getByRole("button", {
+        name: /Select embedded subtitle/,
+      });
       await expect(external).toBeVisible();
       await expect(external).toHaveAttribute("aria-pressed", "false");
-      await expect(
-        page.getByRole("group", { name: "Unsupported embedded subtitle" }),
-      ).toHaveAttribute("aria-disabled", "true");
+      await expect(embedded).toBeVisible();
+      await expect(embedded).toHaveAttribute("aria-pressed", "false");
 
       await external.click();
       await expect(external).toHaveAttribute("aria-pressed", "true");

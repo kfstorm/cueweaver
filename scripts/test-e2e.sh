@@ -10,8 +10,11 @@ ROOTS="$(mktemp -d)"
 mkdir "$ROOTS/media" "$ROOTS/work"
 printf '%s' '<movie><title>Example movie</title><year>2024</year></movie>' \
   >"$ROOTS/media/Example.nfo"
-printf '%s' 'media' >"$ROOTS/media/Example.mkv"
-
+printf '%s\n' \
+  '1' \
+  '00:00:00,000 --> 00:00:01,000' \
+  'Example subtitle' \
+  >"$ROOTS/media/Example.en.srt"
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
@@ -20,6 +23,11 @@ cleanup() {
 trap cleanup EXIT
 
 docker build --tag "$IMAGE" .
+docker run --rm --volume "$ROOTS/media:/media" "$IMAGE" \
+  ffmpeg -v error -f lavfi -i color=c=black:s=16x16:d=1 \
+  -f srt -i /media/Example.en.srt \
+  -map 0:v:0 -map 1:0 -c:v mpeg4 -t 1 -c:s srt \
+  -metadata:s:s:0 language=en /media/Example.mkv
 docker run --detach --name "$CONTAINER" \
   --publish 127.0.0.1:8765:8000 \
   --env CUEWEAVER_MEDIA_ROOT=/media \
