@@ -562,10 +562,16 @@ function TermMapsPage() {
   const [replacement, setReplacement] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const selectedIdRef = useRef(selectedId);
+  const resetRename = rename.reset;
+  const resetReplace = replace.reset;
+  const resetRemove = remove.reset;
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
-  }, [selectedId]);
+    resetRename();
+    resetReplace();
+    resetRemove();
+  }, [resetRemove, resetRename, resetReplace, selectedId]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

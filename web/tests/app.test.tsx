@@ -284,6 +284,53 @@ describe("product shell", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not leak mutation state when switching Term maps", async () => {
+    const summaries = [
+      {
+        id: "map-a",
+        name: "Alpha",
+        entry_count: 1,
+        updated_at: "2026-08-13T12:00:00Z",
+      },
+      {
+        id: "map-b",
+        name: "Beta",
+        entry_count: 1,
+        updated_at: "2026-08-13T12:00:00Z",
+      },
+    ];
+    let resolveRename!: (response: unknown) => void;
+    const renamePending = new Promise((resolve) => {
+      resolveRename = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (init?.method === "PATCH") return renamePending;
+        if (input === "/api/term-maps") return jsonResponse({ term_maps: summaries });
+        const summary = input.endsWith("map-a") ? summaries[0] : summaries[1];
+        return jsonResponse({ ...summary, content: { Source: "Target" } });
+      });
+    renderTermMapsWithFetch(fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Alpha/ }));
+    fireEvent.change(await screen.findByLabelText("New Term map name"), {
+      target: { value: "Alpha renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save name" })).toBeDisabled(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+    expect(await screen.findByDisplayValue("Beta")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save name" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    resolveRename(jsonResponse(summaries[0]));
+  });
+
   it("shows the empty state and uploads valid JSON", async () => {
     const fetchMock = termMapFetch(undefined, {
       id: "new",

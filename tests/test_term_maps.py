@@ -250,6 +250,22 @@ def test_term_map_replacement_failure_keeps_old_content(
     assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
 
 
+def test_restart_removes_atomic_write_temp_files(tmp_path: Path):
+    client = make_client(tmp_path)
+    created = create_term_map(client)
+    directory = tmp_path / "work" / "term-maps"
+    leftovers = [
+        directory / ".index.json.crash",
+        directory / f".{created['id']}.json.crash",
+    ]
+    for leftover in leftovers:
+        leftover.write_text("incomplete", encoding="utf-8")
+
+    restarted = make_client(tmp_path)
+    assert restarted.get("/api/term-maps").status_code == 200
+    assert all(not leftover.exists() for leftover in leftovers)
+
+
 def test_unknown_term_map_api_path_remains_a_structured_not_found(tmp_path: Path):
     response = make_client(tmp_path).post("/api/term-maps/map-1/unknown")
 

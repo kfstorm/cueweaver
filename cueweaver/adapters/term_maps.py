@@ -205,7 +205,11 @@ class FileTermMapStore:
         for path in self._directory.iterdir():
             if path.name == self._index_path.name or path.name in referenced:
                 continue
-            if path.suffix == ".json" or path.name.startswith(".deleted-"):
+            if (
+                path.suffix == ".json"
+                or path.name.startswith(".deleted-")
+                or (path.name.startswith(".") and ".json." in path.name)
+            ):
                 with suppress(OSError):
                     path.unlink(missing_ok=True)
 
