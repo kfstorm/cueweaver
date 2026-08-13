@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from cueweaver.product import create_product_app, create_product_app_from_env
+from cueweaver.product import (
+    create_development_app_from_env,
+    create_product_app,
+    create_product_app_from_env,
+)
 
 
 class TranslatorFixture:
@@ -212,6 +216,72 @@ def test_product_serves_client_routes_from_the_spa(tmp_path: Path, path: str):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert '<div id="root"></div>' in response.text
+
+
+@pytest.mark.parametrize("path", ["/api", "/api/unknown"])
+def test_product_does_not_fallback_api_paths_to_spa(tmp_path: Path, path: str):
+    response = TestClient(product_app(tmp_path)).get(path)
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_code": "not_found",
+        "message": "Resource not found",
+    }
+
+
+@pytest.mark.parametrize("path", ["/api", "/api/unknown"])
+def test_product_rejects_unknown_api_head_paths(tmp_path: Path, path: str):
+    response = TestClient(product_app(tmp_path)).head(path)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("GET", "/api/discover"), ("POST", "/api/status")],
+)
+def test_product_preserves_method_mismatch_for_known_api_paths(
+    tmp_path: Path, method: str, path: str
+):
+    response = TestClient(product_app(tmp_path)).request(method, path)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "invalid_request",
+        "message": "Request failed",
+    }
+
+
+def test_development_factory_does_not_require_static_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root = configured_roots(tmp_path)
+    monkeypatch.setenv("CUEWEAVER_MEDIA_ROOT", str(media_root))
+    monkeypatch.setenv("CUEWEAVER_WORK_ROOT", str(work_root))
+
+    client = TestClient(create_development_app_from_env(translator=TranslatorFixture()))
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+
+
+def test_development_factory_returns_structured_api_404(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root = configured_roots(tmp_path)
+    monkeypatch.setenv("CUEWEAVER_MEDIA_ROOT", str(media_root))
+    monkeypatch.setenv("CUEWEAVER_WORK_ROOT", str(work_root))
+
+    response = TestClient(
+        create_development_app_from_env(translator=TranslatorFixture())
+    ).get("/api/unknown")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_code": "not_found",
+        "message": "Resource not found",
+    }
 
 
 @pytest.mark.parametrize(
