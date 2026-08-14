@@ -49,3 +49,30 @@ def test_output_publisher_preserves_no_overwrite_when_link_races(tmp_path, monke
 
     assert error.value.error_code == "output_exists"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_output_publisher_atomically_overwrites_only_after_write_succeeds(tmp_path):
+    output = tmp_path / "Movie.srt"
+    output.write_text("old")
+
+    AtomicOutputPublisher().publish(
+        output, lambda temporary: temporary.write_text("new"), overwrite=True
+    )
+
+    assert output.read_text() == "new"
+
+
+def test_output_publisher_preserves_old_output_when_overwrite_write_fails(tmp_path):
+    output = tmp_path / "Movie.srt"
+    output.write_text("old")
+
+    def fail_write(temporary):
+        temporary.write_text("partial")
+        raise OSError("disk full")
+
+    with pytest.raises(ServiceError) as error:
+        AtomicOutputPublisher().publish(output, fail_write, overwrite=True)
+
+    assert error.value.error_code == "output_write_failed"
+    assert output.read_text() == "old"
+    assert list(tmp_path.iterdir()) == [output]

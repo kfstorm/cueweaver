@@ -21,6 +21,7 @@ class TranslateRequest:
     term_map_path: Path | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
+    overwrite: bool = False
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,13 @@ class Translator(Protocol):
 
 
 class OutputPublisher(Protocol):
-    def publish(self, output_path: Path, write: Callable[[Path], None]) -> None: ...
+    def publish(
+        self,
+        output_path: Path,
+        write: Callable[[Path], None],
+        *,
+        overwrite: bool = False,
+    ) -> None: ...
 
 
 class Translation:
@@ -75,7 +82,7 @@ class Translation:
         def write(temporary_path: Path) -> None:
             temporary_path.write_bytes(content)
 
-        self._output.publish(request.output_path, write)
+        self._output.publish(request.output_path, write, overwrite=request.overwrite)
         return TranslateResult(
             request.output_path, request.target_language_code, subtitle_format
         )

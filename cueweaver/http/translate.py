@@ -18,6 +18,7 @@ class TranslateBody(BaseModel):
     term_map_path: str | None = Field(default=None, min_length=1)
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
+    overwrite: bool = False
 
 
 class TranslationOperation(Protocol):
@@ -41,6 +42,7 @@ def register_translate(app: FastAPI, application: TranslationApplication) -> Non
                 Path(body.term_map_path) if body.term_map_path is not None else None,
                 body.dynamic_terminology_enabled,
                 body.subtitle_terminology_filter_enabled,
+                body.overwrite,
             )
         )
         return result_body(result)

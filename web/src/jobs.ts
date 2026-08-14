@@ -18,6 +18,8 @@ export interface Job {
     } | null;
     dynamic_terminology_enabled: boolean;
     subtitle_terminology_filter_enabled: boolean;
+    output_suffix: string;
+    output_conflict_policy: "append-number" | "overwrite";
     output_path: string;
     source_format: string;
   };
@@ -47,6 +49,8 @@ export function useCreateJob() {
       term_map_id: string | null;
       dynamic_terminology_enabled: boolean;
       subtitle_terminology_filter_enabled: boolean;
+      output_suffix: string;
+      output_conflict_policy: "append-number" | "overwrite";
     }): Promise<Job> => {
       const response = await fetch("/api/jobs", {
         method: "POST",

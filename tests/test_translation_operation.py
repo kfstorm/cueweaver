@@ -25,14 +25,14 @@ class OutputFixture:
     def __init__(self) -> None:
         self.output_path: Path | None = None
 
-    def publish(self, output_path: Path, write) -> None:
+    def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
         self.output_path = output_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write(output_path)
 
 
 class ServiceErrorOutputFixture:
-    def publish(self, _output_path: Path, _write) -> None:
+    def publish(self, _output_path: Path, _write, *, overwrite: bool = False) -> None:
         raise ServiceError(
             "output_exists", "Output path already exists", path="output.srt"
         )

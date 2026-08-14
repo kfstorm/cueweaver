@@ -115,6 +115,11 @@ function Translate() {
   const [targetLanguage, setTargetLanguage] = useState(
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
   );
+  const [outputSuffix, setOutputSuffix] = useState(() => targetLanguage);
+  const [outputConflictPolicy, setOutputConflictPolicy] = useState<
+    "append-number" | "overwrite"
+  >("append-number");
+  const suffixEdited = useRef(false);
   const [termMapId, setTermMapId] = useState<string | null>(null);
   const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useState(true);
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
@@ -136,11 +141,17 @@ function Translate() {
   const selectedCandidate = discovery.data?.candidates.find(
     (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
   );
+  const outputFormat = selectedCandidate?.format ?? "srt";
+  const outputParts = selectedMedia
+    ? outputNameParts(selectedMedia, outputFormat)
+    : null;
+  const outputSuffixError = validateOutputSuffix(outputSuffix);
   const canSubmit =
     selectedMedia !== null &&
     selectedCandidate?.kind === "external" &&
     selectedCandidate.path !== undefined &&
     targetLanguage.trim() !== "" &&
+    outputSuffixError === null &&
     status.data?.translation_provider.ready === true &&
     !createJob.isPending;
   return (
@@ -196,7 +207,11 @@ function Translate() {
               required
               aria-describedby="target-language-help"
               value={targetLanguage}
-              onChange={(event) => setTargetLanguage(event.target.value)}
+              onChange={(event) => {
+                const value = event.target.value;
+                setTargetLanguage(value);
+                if (!suffixEdited.current) setOutputSuffix(value);
+              }}
               placeholder="zh-Hans"
               disabled={selectedCandidate?.kind !== "external"}
             />
@@ -248,15 +263,71 @@ function Translate() {
               </label>
             </div>
           </details>
-          {selectedMedia && selectedCandidate?.path && (
-            <p className="field-help">
-              Suggested output:{" "}
-              {suggestedOutput(
-                selectedMedia,
-                targetLanguage,
-                selectedCandidate.format ?? "srt",
+          {selectedMedia && selectedCandidate?.path && outputParts && (
+            <div className="output-name-section">
+              <span id="output-name-label" className="field-label">
+                Output filename
+              </span>
+              <div
+                className="output-name-control"
+                role="group"
+                aria-labelledby="output-name-label"
+              >
+                <Input
+                  aria-label="Media stem"
+                  className="output-name-stem"
+                  readOnly
+                  value={`${outputParts.stem}.`}
+                />
+                <Input
+                  aria-label="Subtitle suffix"
+                  aria-describedby="output-suffix-help"
+                  className="output-name-suffix"
+                  value={outputSuffix}
+                  onChange={(event) => {
+                    suffixEdited.current = true;
+                    setOutputSuffix(event.target.value);
+                  }}
+                />
+                <Input
+                  aria-label="Source format extension"
+                  className="output-name-extension"
+                  readOnly
+                  value={`.${outputParts.format}`}
+                />
+              </div>
+              <p id="output-suffix-help" className="field-help" aria-live="polite">
+                Final name: <strong>{outputParts.name(outputSuffix)}</strong>
+              </p>
+              {outputSuffixError && (
+                <p className="form-error" role="alert">
+                  {outputSuffixError}
+                </p>
               )}
-            </p>
+              <fieldset className="output-conflict-policy">
+                <legend>If the final name already exists</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="output-conflict-policy"
+                    value="append-number"
+                    checked={outputConflictPolicy === "append-number"}
+                    onChange={() => setOutputConflictPolicy("append-number")}
+                  />
+                  Append a number (recommended)
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="output-conflict-policy"
+                    value="overwrite"
+                    checked={outputConflictPolicy === "overwrite"}
+                    onChange={() => setOutputConflictPolicy("overwrite")}
+                  />
+                  Overwrite existing output
+                </label>
+              </fieldset>
+            </div>
           )}
         </div>
       </section>
@@ -270,6 +341,8 @@ function Translate() {
                 media_path: selectedMedia,
                 subtitle_path: selectedCandidate.path,
                 target_language_code: targetLanguage,
+                output_suffix: outputSuffix,
+                output_conflict_policy: outputConflictPolicy,
                 term_map_id: termMapId,
                 dynamic_terminology_enabled: dynamicTerminologyEnabled,
                 subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
@@ -280,6 +353,9 @@ function Translate() {
                     "cueweaver.target-language",
                     targetLanguage,
                   );
+                  suffixEdited.current = false;
+                  setOutputSuffix(targetLanguage);
+                  setOutputConflictPolicy("append-number");
                   clearMedia(selectedMedia);
                 },
               });
@@ -303,10 +379,48 @@ function Translate() {
   );
 }
 
-function suggestedOutput(mediaPath: string, targetLanguage: string, format: string) {
+function outputNameParts(mediaPath: string, format: string) {
   const mediaName = mediaPath.split("/").pop() ?? mediaPath;
-  const stem = mediaName.split(".").slice(0, -1).join(".") || mediaName;
-  return `${stem}.${targetLanguage || "<target language>"}.${format}`;
+  const extensionIndex = mediaName.lastIndexOf(".");
+  const stem = extensionIndex > 0 ? mediaName.slice(0, extensionIndex) : mediaName;
+  return {
+    stem,
+    format,
+    name: (suffix: string) => `${stem}.${suffix || "<subtitle suffix>"}.${format}`,
+  };
+}
+
+function validateOutputSuffix(value: string): string | null {
+  if (!value) return "Subtitle suffix must be non-empty.";
+  const reserved = new Set([
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+    ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
+  ]);
+  for (const segment of value.split(".")) {
+    if (!segment) return "Subtitle suffix segments cannot be empty.";
+    if (/\s$/u.test(segment)) {
+      return "Subtitle suffix segments cannot end in a space.";
+    }
+    if (reserved.has(segment.toLocaleLowerCase())) {
+      return "Subtitle suffix contains a reserved filename segment.";
+    }
+    for (const character of segment) {
+      const codePoint = character.codePointAt(0) ?? 0;
+      if (
+        codePoint < 32 ||
+        codePoint === 127 ||
+        /\p{C}/u.test(character) ||
+        !/[\p{L}\p{N}\s_-]/u.test(character)
+      ) {
+        return "Subtitle suffix contains an unsafe character.";
+      }
+    }
+  }
+  return null;
 }
 
 function SubtitleDiscovery({
@@ -702,7 +816,7 @@ function JobsPage() {
                     <dd>{job.error.code}</dd>
                   </div>
                   {Object.entries(job.error)
-                    .filter(([key]) => key !== "code" && key !== "message")
+                    .filter(([key]) => ["field", "path", "stream_index"].includes(key))
                     .map(([key, value]) => (
                       <div key={key}>
                         <dt>{key}</dt>

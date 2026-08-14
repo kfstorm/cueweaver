@@ -56,6 +56,14 @@ async function selectExternalSubtitle() {
   return subtitle;
 }
 
+function expectJobSubmissionBlocked() {
+  expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  expect(globalThis.fetch).not.toHaveBeenCalledWith(
+    "/api/jobs",
+    expect.objectContaining({ method: "POST" }),
+  );
+}
+
 function termMapFetch(
   postBodyCheck?: (body: BodyInit | null | undefined) => void,
   postResponse: unknown = {},
@@ -549,7 +557,7 @@ describe("product shell", () => {
       target: { value: "zh-Hans" },
     });
 
-    expect(screen.getByText("Suggested output: Movie.zh-Hans.srt")).toBeInTheDocument();
+    expect(screen.getByText("Movie.zh-Hans.srt")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await waitFor(() =>
@@ -561,6 +569,8 @@ describe("product shell", () => {
             media_path: "Movie.mkv",
             subtitle_path: "Movie.en.srt",
             target_language_code: "zh-Hans",
+            output_suffix: "zh-Hans",
+            output_conflict_policy: "append-number",
             term_map_id: null,
             dynamic_terminology_enabled: true,
             subtitle_terminology_filter_enabled: true,
@@ -568,6 +578,56 @@ describe("product shell", () => {
         }),
       ),
     );
+  });
+
+  it("composes a safe output name and supports atomic overwrite", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    expect(screen.getByLabelText("Media stem")).toHaveValue("Movie.");
+    expect(screen.getByLabelText("Media stem")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Source format extension")).toHaveValue(".srt");
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+
+    fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
+      target: { value: "zh-Hans.forced" },
+    });
+    expect(screen.getByText("Movie.zh-Hans.forced.srt")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await waitFor(() =>
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/jobs",
+        expect.objectContaining({
+          body: expect.stringContaining('"output_suffix":"zh-Hans.forced"'),
+        }),
+      ),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jobs",
+      expect.objectContaining({
+        body: expect.stringContaining('"output_conflict_policy":"overwrite"'),
+      }),
+    );
+  });
+
+  it("blocks unsafe output suffixes before submission", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
+      target: { value: "CON" },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("reserved");
+    expectJobSubmissionBlocked();
   });
 
   it("remembers a successful language and resets the source form", async () => {
@@ -598,6 +658,8 @@ describe("product shell", () => {
           media_path: "Movie.mkv",
           subtitle_path: "Movie.en.srt",
           target_language_code: "x-custom",
+          output_suffix: "x-custom",
+          output_conflict_policy: "append-number",
           term_map_id: null,
           dynamic_terminology_enabled: false,
           subtitle_terminology_filter_enabled: true,
@@ -614,11 +676,7 @@ describe("product shell", () => {
       target: { value: "zh-Hans" },
     });
 
-    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
-    expect(globalThis.fetch).not.toHaveBeenCalledWith(
-      "/api/jobs",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expectJobSubmissionBlocked();
   });
 
   it("keeps the real filename in the accessible Media name", async () => {

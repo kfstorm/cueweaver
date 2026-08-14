@@ -343,6 +343,33 @@ test.describe("External subtitle submission", () => {
         page.locator('#target-languages option[value="zh-Hans"]'),
       ).toHaveCount(1);
       await page.getByLabel("Target language code").fill("zh-Hans");
+      const outputGroup = page.getByRole("group", { name: "Output filename" });
+      await expect(outputGroup).toBeVisible();
+      await expect(page.getByLabel("Media stem")).toHaveValue("Example.");
+      await expect(page.getByLabel("Media stem")).toHaveAttribute("readonly");
+      await expect(page.getByLabel("Subtitle suffix")).toHaveValue("zh-Hans");
+      await expect(page.getByLabel("Source format extension")).toHaveValue(".srt");
+      await expect(page.getByText("Example.zh-Hans.srt")).toBeVisible();
+      await expect(page.getByLabel("Append a number (recommended)")).toBeChecked();
+      await expect(page.getByLabel("Overwrite existing output")).not.toBeChecked();
+      const outputFits = await outputGroup.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      );
+      expect(outputFits).toBe(true);
+      if (viewport.name === "mobile") {
+        const suffixBox = await page.getByLabel("Subtitle suffix").boundingBox();
+        expect(suffixBox?.height).toBeGreaterThanOrEqual(44);
+        for (const label of [
+          "Append a number (recommended)",
+          "Overwrite existing output",
+        ]) {
+          const box = await page
+            .locator(".output-conflict-policy label")
+            .filter({ hasText: label })
+            .boundingBox();
+          expect(box?.height).toBeGreaterThanOrEqual(44);
+        }
+      }
       await page.getByRole("button", { name: "Start translation" }).click();
 
       const request = await jobRequest;
@@ -350,6 +377,8 @@ test.describe("External subtitle submission", () => {
         media_path: "Example.mkv",
         subtitle_path: "Example.en.srt",
         target_language_code: "zh-Hans",
+        output_suffix: "zh-Hans",
+        output_conflict_policy: "append-number",
         term_map_id: null,
         dynamic_terminology_enabled: true,
         subtitle_terminology_filter_enabled: true,
@@ -384,6 +413,8 @@ test.describe("real translation workflow", () => {
       const request = await requestPromise;
       expect(await request.postDataJSON()).toMatchObject({
         target_language_code: targetLanguage,
+        output_suffix: targetLanguage,
+        output_conflict_policy: "append-number",
         dynamic_terminology_enabled: false,
         subtitle_terminology_filter_enabled: false,
       });
@@ -454,6 +485,13 @@ test.describe("real translation workflow", () => {
       });
 
     const first = await create("queue-one");
+    await expect
+      .poll(async () => {
+        const jobs = await readJobs(page);
+        return jobs.find((job) => job.request.target_language_code === "queue-one")
+          ?.status;
+      })
+      .toBe("Translating");
     const second = await create("queue-two");
     const third = await create("queue-three");
     expect(first.ok()).toBeTruthy();
