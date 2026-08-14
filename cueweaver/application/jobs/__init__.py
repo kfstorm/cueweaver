@@ -642,15 +642,27 @@ class Jobs:
         stream_index = request["stream_index"]
         assert isinstance(stream_index, int)
         subtitle_path = work_directory / f"source.{source_format}"
-        subtitle_path.unlink(missing_ok=True)
-        self._extraction.extract(
-            ExtractRequest(
-                self._media_root / str(request["media_path"]),
-                stream_index,
-                subtitle_path,
-            )
+        work_directory.mkdir(parents=True, exist_ok=True)
+        descriptor, raw_path = tempfile.mkstemp(
+            dir=work_directory,
+            prefix=f".{subtitle_path.name}.retry.",
+            suffix=subtitle_path.suffix,
         )
-        digest = _content_digest(subtitle_path)
+        os.close(descriptor)
+        candidate_path = Path(raw_path)
+        candidate_path.unlink()
+        try:
+            self._extraction.extract(
+                ExtractRequest(
+                    self._media_root / str(request["media_path"]),
+                    stream_index,
+                    candidate_path,
+                )
+            )
+            _replace_extracted_source(candidate_path, subtitle_path)
+            digest = _content_digest(subtitle_path)
+        finally:
+            candidate_path.unlink(missing_ok=True)
         with self._lifecycle_lock:
             if self._closed.is_set():
                 return None
@@ -875,6 +887,26 @@ class _JobOutputPublisher:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _replace_extracted_source(candidate: Path, destination: Path) -> None:
+    diagnostic: Path | None = None
+    if destination.is_dir():
+        descriptor, raw_path = tempfile.mkstemp(
+            dir=destination.parent,
+            prefix=f"{destination.name}.invalid.",
+        )
+        os.close(descriptor)
+        diagnostic = Path(raw_path)
+        diagnostic.unlink()
+        destination.replace(diagnostic)
+    try:
+        candidate.replace(destination)
+    except OSError:
+        if diagnostic is not None:
+            diagnostic.replace(destination)
+        raise
+    _fsync_directory(destination.parent)
 
 
 def _content_digest(path: Path) -> str:

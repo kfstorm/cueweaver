@@ -415,6 +415,52 @@ def test_embedded_retry_reextracts_when_the_intermediate_is_a_symlink(
     jobs.close()
 
 
+def test_embedded_retry_keeps_intermediate_and_marker_when_reprobe_fails(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    work_root, media, media_adapter, jobs, queued = failed_embedded_job_for_fallback(
+        tmp_path, translator
+    )
+    work_directory = work_root / "jobs" / str(queued["id"])
+    source = work_directory / "source.srt"
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    original_marker = json.loads(record_path.read_text(encoding="utf-8"))["extraction"]
+    media_adapter.streams = []
+
+    jobs.retry(str(queued["id"]))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"]["code"] == "stream_not_found"
+    assert source.read_bytes() == b"tampered"
+    persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    assert persisted["extraction"] == original_marker
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 1
+    jobs.close()
+
+
+def test_embedded_retry_quarantines_a_directory_intermediate_after_reextraction(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    work_root, _media, _media_adapter, jobs, queued = failed_embedded_work_directory(
+        tmp_path, translator
+    )
+    work_directory = work_root / "jobs" / str(queued["id"])
+    source = work_directory / "source.srt"
+    source.unlink()
+    source.mkdir()
+
+    jobs.retry(str(queued["id"]))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"]["code"] == "translation_failed"
+    assert source.read_bytes() == SRT
+    assert len(list(work_directory.glob("source.srt.invalid.*"))) == 1
+    jobs.close()
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("path", "source.ass"), ("format", "ass"), ("content_digest", "0" * 64)],
@@ -888,7 +934,7 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     assert media_adapter.extract_calls[0][:2] == (_media, 3)
     extracted_path = media_adapter.extract_calls[0][2]
     assert extracted_path.parent == work_root / "jobs" / str(queued["id"])
-    assert extracted_path.name.startswith(f".source.{source_format}.")
+    assert extracted_path.name != f"source.{source_format}"
     assert extracted_path.suffix == f".{source_format}"
     assert translator.sources == [
         work_root / "jobs" / str(queued["id"]) / f"source.{source_format}"
