@@ -164,6 +164,7 @@ async function readJobs(page: Page) {
   const response = await page.request.get("/api/jobs");
   return (await response.json()).jobs as Array<{
     id: string;
+    attempt: number;
     request: {
       target_language_code: string;
       stream_index?: number;
@@ -870,6 +871,16 @@ test.describe("real translation workflow", () => {
 test("production release matrix covers durable Job behavior", async ({ page }) => {
   test.skip(process.env.CUEWEAVER_E2E_PHASE === "restart");
 
+  const snapshotBlocker = await page.request.post("/api/jobs", {
+    data: {
+      media_path: "Example.mkv",
+      subtitle_path: "Example.en.srt",
+      target_language_code: "e2e-snapshot-blocker",
+    },
+  });
+  expect(snapshotBlocker.ok()).toBeTruthy();
+  await waitForJob(page, "e2e-snapshot-blocker", "Translating");
+
   const termMapResponse = await page.request.post("/api/term-maps", {
     data: {
       name: "Release matrix terms",
@@ -888,6 +899,22 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     },
   });
   expect(external.ok()).toBeTruthy();
+  const updatedTermMap = await page.request.put(`/api/term-maps/${termMap.id}`, {
+    data: { content: { Captain: "舰长", Ship: "舰船" } },
+  });
+  expect(updatedTermMap.ok()).toBeTruthy();
+  const updatedTermMapDetail = await page.request.get(`/api/term-maps/${termMap.id}`);
+  expect((await updatedTermMapDetail.json()).content).toEqual({
+    Captain: "舰长",
+    Ship: "舰船",
+  });
+  const queuedExternal = await waitForJob(page, "e2e-term-map", "Queued");
+  expect(queuedExternal.request.term_map).toMatchObject({
+    name: "Release matrix terms",
+    content: { Captain: "队长", Ship: "舰船" },
+  });
+  const completedBlocker = await waitForJob(page, "e2e-snapshot-blocker", "Completed");
+  expect(completedBlocker.status).toBe("Completed");
   const completedExternal = await waitForJob(page, "e2e-term-map", "Completed");
   expect(completedExternal.request.term_map).toMatchObject({
     name: "Release matrix terms",
@@ -987,20 +1014,34 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
   expect(deleted.ok()).toBeTruthy();
   expect((await readJobs(page)).some((job) => job.id === failedJob.id)).toBe(false);
 
-  const restartMarker = await page.request.post("/api/jobs", {
+  const restartJob = await page.request.post("/api/jobs", {
     data: {
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
-      target_language_code: "e2e-restart-marker",
+      target_language_code: "e2e-interrupted-retry",
     },
   });
-  expect(restartMarker.ok()).toBeTruthy();
-  await waitForJob(page, "e2e-restart-marker", "Completed");
+  expect(restartJob.ok()).toBeTruthy();
+  await waitForJob(page, "e2e-interrupted-retry", "Translating");
 });
 
-test("production restart preserves terminal Job history", async ({ page }) => {
+test("production restart recovers and retries an Interrupted Job", async ({ page }) => {
   test.skip(process.env.CUEWEAVER_E2E_PHASE !== "restart");
 
-  const marker = await waitForJob(page, "e2e-restart-marker", "Completed");
-  expect(marker.request.media_path).toBe("Example.mkv");
+  const interrupted = await waitForJob(page, "e2e-interrupted-retry", "Interrupted");
+  expect(interrupted.error?.code).toBe("job_interrupted");
+  const retry = await page.request.post(`/api/jobs/${interrupted.id}/retry`);
+  expect(retry.ok()).toBeTruthy();
+  const completed = await waitForJob(page, "e2e-interrupted-retry", "Completed");
+  expect(completed.id).toBe(interrupted.id);
+  expect(completed.attempt).toBe(2);
+
+  const historical = (await readJobs(page)).find(
+    (job) => job.request.target_language_code === "e2e-term-map",
+  );
+  expect(historical?.status).toBe("Completed");
+  expect(historical?.request.term_map).toMatchObject({
+    name: "Release matrix terms",
+    content: { Captain: "队长", Ship: "舰船" },
+  });
 });
