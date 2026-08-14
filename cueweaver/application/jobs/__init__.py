@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -68,13 +69,15 @@ class Jobs:
         self._term_maps = term_maps
         self._extraction = extraction
         self._media_root = media_root.resolve()
-        self._jobs_root = work_root / "jobs"
+        self._work_root = work_root.resolve()
+        self._jobs_root = self._work_root / "jobs"
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
         self._next_queue_sequence = 0
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._closed = threading.Event()
+        self._check_jobs_root()
         self._load_records()
         self._worker = threading.Thread(
             target=self._run, daemon=True, name="cueweaver-job-worker"
@@ -136,6 +139,8 @@ class Jobs:
                 "error": None,
                 "queue_sequence": self._next_queue_sequence,
             }
+            if subtitle is None:
+                record["extraction"] = None
             self._write_record(job_id, record)
             with self._lock:
                 self._records[job_id] = record
@@ -154,11 +159,13 @@ class Jobs:
                 if (
                     status not in {"Failed", "Interrupted"}
                     or not isinstance(request, dict)
-                    or "subtitle_path" not in request
+                    or (
+                        "subtitle_path" not in request and "stream_index" not in request
+                    )
                 ):
                     raise ServiceError(
                         "job_retry_conflict",
-                        "Only Failed or Interrupted External subtitle Jobs can be retried",
+                        "Only Failed or Interrupted subtitle Jobs can be retried",
                         status=status,
                     )
             if self._closed.is_set():
@@ -169,7 +176,11 @@ class Jobs:
                     "Translation provider is unavailable; configure a provider and restart CueWeaver",
                 )
             try:
-                self._validate_retry_sources(request)
+                self._job_work_directory(job_id)
+                if "stream_index" in request:
+                    self._validate_retry_media(request)
+                else:
+                    self._validate_retry_sources(request)
             except ServiceError as error:
                 context = self._error_context(error.context)
                 safe_error = ServiceError(error.error_code, error.message, **context)
@@ -317,15 +328,7 @@ class Jobs:
         subtitle_value = request.get("subtitle_path")
         assert isinstance(media_value, str)
         assert isinstance(subtitle_value, str)
-        try:
-            media = self._media_path(media_value, "invalid_media_path")
-        except ServiceError as error:
-            raise ServiceError(
-                error.error_code,
-                error.message,
-                media_path=_safe_input_path(media_value),
-            ) from error
-        require_readable_media(media)
+        media = self._retry_media_path(media_value)
         try:
             subtitle = self._media_path(subtitle_value, "invalid_external_subtitle")
         except ServiceError as error:
@@ -335,6 +338,23 @@ class Jobs:
                 path=_safe_input_path(subtitle_value),
             ) from error
         self._validate_external_subtitle(media, subtitle, path=subtitle_value)
+
+    def _validate_retry_media(self, request: dict[str, object]) -> None:
+        media_value = request.get("media_path")
+        self._retry_media_path(media_value)
+
+    def _retry_media_path(self, media_value: object) -> Path:
+        assert isinstance(media_value, str)
+        try:
+            media = self._media_path(media_value, "invalid_media_path")
+        except ServiceError as error:
+            raise ServiceError(
+                error.error_code,
+                error.message,
+                media_path=_safe_input_path(media_value),
+            ) from error
+        require_readable_media(media)
+        return media
 
     def _validate_external_subtitle(
         self, media: Path, subtitle: Path, *, path: str | None = None
@@ -425,38 +445,27 @@ class Jobs:
                 self._pending.task_done()
 
     def _execute(self, job_id: str) -> None:
-        with self._lifecycle_lock:
-            if self._closed.is_set():
-                return
-            with self._lock:
-                record = self._records[job_id]
-                request = record["request"]
-                assert isinstance(request, dict)
-                embedded = "stream_index" in request
-                record["status"] = "Extracting" if embedded else "Translating"
-                record["started_at"] = _timestamp()
-                output_path = self._execution_output_path(request)
-                request["output_path"] = str(output_path.relative_to(self._media_root))
-                self._write_record(job_id, record)
-        assert isinstance(request, dict)
-        work_directory = self._jobs_root / job_id
-        extracting = "stream_index" in request
+        prepared = self._prepare_execution(job_id)
+        if prepared is None:
+            return
+        request, embedded, work_directory, record = prepared
+        subtitle_path: Path | None = None
+        extracting = embedded
         try:
-            if extracting:
-                if self._extraction is None:
-                    raise ServiceError(
-                        "extraction_unavailable",
-                        "Embedded subtitle Extraction is unavailable",
-                    )
-                source_format = str(request["source_format"])
-                subtitle_path = work_directory / f"source.{source_format}"
-                self._extraction.extract(
-                    ExtractRequest(
-                        self._media_root / str(request["media_path"]),
-                        int(request["stream_index"]),
-                        subtitle_path,
-                    )
+            work_directory = self._job_work_directory(job_id)
+            if embedded:
+                subtitle_path, should_stop = self._reuse_extracted_source(
+                    job_id, record, work_directory
                 )
+                if should_stop:
+                    return
+                extracting = subtitle_path is None
+            if extracting:
+                subtitle_path = self._extract_embedded_source(
+                    job_id, request, work_directory
+                )
+                if subtitle_path is None:
+                    return
                 extracting = False
                 with self._lifecycle_lock:
                     if self._closed.is_set():
@@ -465,8 +474,9 @@ class Jobs:
                         record = self._records[job_id]
                         record["status"] = "Translating"
                         self._write_record(job_id, record)
-            else:
+            if not embedded:
                 subtitle_path = self._media_root / str(request["subtitle_path"])
+            assert subtitle_path is not None
             term_map_path: Path | None = None
             term_map = request.get("term_map")
             if isinstance(term_map, dict):
@@ -535,6 +545,24 @@ class Jobs:
             )
             return
 
+    def _prepare_execution(
+        self, job_id: str
+    ) -> tuple[dict[str, object], bool, Path, dict[str, object]] | None:
+        with self._lifecycle_lock:
+            if self._closed.is_set():
+                return None
+            with self._lock:
+                record = self._records[job_id]
+                request = record["request"]
+                assert isinstance(request, dict)
+                embedded = "stream_index" in request
+                record["status"] = "Extracting" if embedded else "Translating"
+                record["started_at"] = _timestamp()
+                output_path = self._execution_output_path(request)
+                request["output_path"] = str(output_path.relative_to(self._media_root))
+                self._write_record(job_id, record)
+                return request, embedded, self._jobs_root / job_id, record
+
     def _execution_output_path(self, request: dict[str, object]) -> Path:
         output = self._media_path(str(request["output_path"]), "invalid_output_path")
         if request.get("output_conflict_policy", "append-number") == "overwrite":
@@ -551,6 +579,91 @@ class Jobs:
         return media.with_name(
             f"{media.stem}.{request['output_suffix']}.{request['source_format']}"
         )
+
+    def _verified_extracted_source(
+        self, record: dict[str, object], work_directory: Path
+    ) -> Path | None:
+        request = record.get("request")
+        marker = record.get("extraction")
+        if not isinstance(request, dict) or not isinstance(marker, dict):
+            return None
+        source_format = request.get("source_format")
+        if (
+            not isinstance(source_format, str)
+            or source_format not in EXTERNAL_FORMATS.values()
+            or marker.get("status") != "Completed"
+            or marker.get("path") != f"source.{source_format}"
+            or marker.get("format") != source_format
+            or not isinstance(marker.get("content_digest"), str)
+        ):
+            return None
+        source = work_directory / f"source.{source_format}"
+        try:
+            if (
+                source.is_symlink()
+                or not source.is_file()
+                or _content_digest(source) != marker["content_digest"]
+            ):
+                return None
+        except OSError:
+            return None
+        return source
+
+    def _reuse_extracted_source(
+        self,
+        job_id: str,
+        record: dict[str, object],
+        work_directory: Path,
+    ) -> tuple[Path | None, bool]:
+        source = self._verified_extracted_source(record, work_directory)
+        if source is None:
+            return None, False
+        with self._lifecycle_lock:
+            if self._closed.is_set():
+                return None, True
+            with self._lock:
+                current_record = self._records[job_id]
+                current_record["status"] = "Translating"
+                self._write_record(job_id, current_record)
+        return source, False
+
+    def _extract_embedded_source(
+        self,
+        job_id: str,
+        request: dict[str, object],
+        work_directory: Path,
+    ) -> Path | None:
+        if self._extraction is None:
+            raise ServiceError(
+                "extraction_unavailable",
+                "Embedded subtitle Extraction is unavailable",
+            )
+        source_format = str(request["source_format"])
+        stream_index = request["stream_index"]
+        assert isinstance(stream_index, int)
+        subtitle_path = work_directory / f"source.{source_format}"
+        subtitle_path.unlink(missing_ok=True)
+        self._extraction.extract(
+            ExtractRequest(
+                self._media_root / str(request["media_path"]),
+                stream_index,
+                subtitle_path,
+            )
+        )
+        digest = _content_digest(subtitle_path)
+        with self._lifecycle_lock:
+            if self._closed.is_set():
+                return None
+            with self._lock:
+                record = self._records[job_id]
+                record["extraction"] = {
+                    "status": "Completed",
+                    "path": subtitle_path.name,
+                    "format": source_format,
+                    "content_digest": digest,
+                }
+                self._write_record(job_id, record)
+        return subtitle_path
 
     def _error_context(self, context: dict[str, object]) -> dict[str, object]:
         roots = (self._media_root, self._jobs_root.parent.resolve())
@@ -575,6 +688,7 @@ class Jobs:
     def _finish_published(self, job_id: str, work_directory: Path) -> None:
         """Commit the published output while holding the lifecycle lock."""
         try:
+            self._job_work_directory(job_id)
             shutil.rmtree(work_directory)
         except OSError:
             self._finish(
@@ -623,7 +737,7 @@ class Jobs:
                     self._write_record(job_id, record)
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
-        self._jobs_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_jobs_root()
         destination = self._jobs_root / f"{job_id}.json"
         previous = destination.read_bytes() if destination.exists() else None
         descriptor, raw_path = tempfile.mkstemp(
@@ -646,6 +760,45 @@ class Jobs:
             raise
         finally:
             temporary.unlink(missing_ok=True)
+
+    def _ensure_jobs_root(self) -> None:
+        self._check_jobs_root()
+        try:
+            self._jobs_root.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ServiceError(
+                "invalid_work_directory",
+                "Job Work root cannot be created",
+            ) from error
+
+    def _check_jobs_root(self) -> None:
+        if self._jobs_root.is_symlink():
+            raise ServiceError(
+                "invalid_work_directory",
+                "Job Work root must not be a symbolic link",
+            )
+
+    def _job_work_directory(self, job_id: str) -> Path:
+        self._ensure_jobs_root()
+        work_directory = self._jobs_root / job_id
+        if work_directory.is_symlink():
+            raise ServiceError(
+                "invalid_work_directory",
+                "Job Work directory must not be a symbolic link",
+            )
+        try:
+            resolved = work_directory.resolve()
+        except OSError as error:
+            raise ServiceError(
+                "invalid_work_directory",
+                "Job Work directory cannot be resolved",
+            ) from error
+        if not resolved.is_relative_to(self._work_root):
+            raise ServiceError(
+                "invalid_work_directory",
+                "Job Work directory must remain inside the Work root",
+            )
+        return work_directory
 
 
 def _source_format(value: str | None) -> str:
@@ -722,6 +875,14 @@ class _JobOutputPublisher:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _content_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _safe_input_path(value: str) -> str:

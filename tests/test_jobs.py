@@ -54,10 +54,12 @@ class MediaExtractorFixture:
         *,
         started: threading.Event | None = None,
         release: threading.Event | None = None,
+        error: Exception | None = None,
     ):
         self.streams = streams
         self.started = started
         self.release = release
+        self.error = error
         self.probe_calls: list[Path] = []
         self.extract_calls: list[tuple[Path, int, Path]] = []
 
@@ -73,6 +75,8 @@ class MediaExtractorFixture:
             self.started.set()
         if self.release is not None:
             self.release.wait(timeout=5)
+        if self.error is not None:
+            raise self.error
         output_path.write_bytes(SRT)
 
 
@@ -147,6 +151,50 @@ def create_failed_external_job(tmp_path: Path, translator: FakeTranslator):
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     return media_root, work_root, media, subtitle, jobs, queued
+
+
+def create_failed_embedded_job(tmp_path: Path, translator: FakeTranslator):
+    media_root, work_root, media, _subtitle = make_roots(tmp_path)
+    media_adapter = MediaExtractorFixture([{"index": 3, "codec_name": "subrip"}])
+    extraction = Extraction(media_adapter, AtomicOutputPublisher())
+    jobs = Jobs(translator, media_root, work_root, extraction=extraction)
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    return media_root, work_root, media, media_adapter, jobs, queued
+
+
+def persisted_failed_embedded_job(tmp_path: Path, translator: FakeTranslator):
+    _media_root, work_root, media, media_adapter, jobs, queued = (
+        create_failed_embedded_job(tmp_path, translator)
+    )
+    jobs.close()
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    return _media_root, work_root, media, media_adapter, queued, record_path, record
+
+
+def failed_embedded_job_for_fallback(tmp_path: Path, translator: FakeTranslator):
+    _media_root, work_root, media, media_adapter, jobs, queued = (
+        create_failed_embedded_job(tmp_path, translator)
+    )
+    (work_root / "jobs" / str(queued["id"]) / "source.srt").write_bytes(b"tampered")
+    translator.error = None
+    return work_root, media, media_adapter, jobs, queued
+
+
+def failed_embedded_work_directory(tmp_path: Path, translator: FakeTranslator):
+    _media_root, work_root, media, media_adapter, jobs, queued = (
+        create_failed_embedded_job(tmp_path, translator)
+    )
+    return work_root, media, media_adapter, jobs, queued
 
 
 def assert_failed_record_persisted(jobs: Jobs, work_root: Path, job_id: str) -> None:
@@ -291,6 +339,330 @@ def test_failed_external_job_retries_in_place_and_reuses_work_directory(
     assert completed["id"] == queued["id"]
     assert completed["attempt"] == 2
     assert translator.sources == [subtitle, subtitle]
+    assert (
+        translator.calls[0]["work_directory"] == translator.calls[1]["work_directory"]
+    )
+    assert not work_directory.exists()
+    jobs.close()
+
+
+def test_failed_embedded_job_retries_in_place_and_reuses_extraction(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    work_root, media, media_adapter, jobs, queued = failed_embedded_work_directory(
+        tmp_path, translator
+    )
+    work_directory = work_root / "jobs" / str(queued["id"])
+    extracted = work_directory / "source.srt"
+    assert extracted.is_file()
+
+    translator.error = None
+    retried = jobs.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert retried["id"] == queued["id"]
+    assert retried["attempt"] == 2
+    assert completed["attempt"] == 2
+    assert media_adapter.probe_calls == [media]
+    assert len(media_adapter.extract_calls) == 1
+    assert translator.sources == [extracted, extracted]
+    assert not work_directory.exists()
+    jobs.close()
+
+
+def test_embedded_retry_reextracts_when_the_intermediate_is_tampered(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    work_root, media, media_adapter, jobs, queued = failed_embedded_work_directory(
+        tmp_path, translator
+    )
+    work_directory = work_root / "jobs" / str(queued["id"])
+    (work_directory / "source.srt").write_bytes(b"tampered")
+
+    translator.error = None
+    jobs.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert completed["status"] == "Completed"
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 2
+    assert not work_directory.exists()
+    jobs.close()
+
+
+def test_embedded_retry_reextracts_when_the_intermediate_is_a_symlink(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    _media_root, work_root, media, media_adapter, jobs, queued = (
+        create_failed_embedded_job(tmp_path, translator)
+    )
+    source = work_root / "jobs" / str(queued["id"]) / "source.srt"
+    outside = tmp_path / "outside.srt"
+    outside.write_bytes(SRT)
+    source.unlink()
+    source.symlink_to(outside)
+
+    translator.error = None
+    jobs.retry(str(queued["id"]))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 2
+    assert outside.read_bytes() == SRT
+    jobs.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("path", "source.ass"), ("format", "ass"), ("content_digest", "0" * 64)],
+)
+def test_embedded_retry_reextracts_when_completion_marker_is_tampered(
+    tmp_path: Path, field: str, value: str
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    media_root, work_root, media, media_adapter, queued, record_path, record = (
+        persisted_failed_embedded_job(tmp_path, translator)
+    )
+    record["extraction"][field] = value
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    translator.error = None
+
+    restarted = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=Extraction(media_adapter, AtomicOutputPublisher()),
+    )
+    restarted.retry(str(queued["id"]))
+    wait_for_status_from_jobs(restarted, str(queued["id"]), "Completed")
+
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 2
+    restarted.close()
+
+
+def test_embedded_retry_keeps_terminal_context_when_the_stream_disappears(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    work_root, media, media_adapter, jobs, queued = failed_embedded_job_for_fallback(
+        tmp_path, translator
+    )
+    media_adapter.streams = []
+
+    jobs.retry(str(queued["id"]))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"] == {
+        "code": "stream_not_found",
+        "message": "Embedded subtitle stream was not found",
+        "media_path": "Movie.mkv",
+        "stream_index": 3,
+    }
+    assert failed["attempt"] == 2
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 1
+    assert (work_root / "jobs" / str(queued["id"])).is_dir()
+    jobs.close()
+
+
+def test_embedded_retry_rejects_missing_media_and_keeps_the_job_terminal(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    _media_root, _work_root, media, _media_adapter, jobs, queued = (
+        create_failed_embedded_job(tmp_path, translator)
+    )
+    media.unlink()
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.retry(str(queued["id"]))
+
+    assert raised.value.error_code == "media_not_found"
+    current = jobs.get(str(queued["id"]))
+    assert current["status"] == "Failed"
+    assert current["attempt"] == 1
+    assert current["error"] == {
+        "code": "media_not_found",
+        "message": "Media does not exist",
+        "path": "Movie.mkv",
+    }
+    jobs.close()
+
+
+def test_embedded_retry_reports_a_changed_codec_after_fallback_extraction(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    _work_root, media, media_adapter, jobs, queued = failed_embedded_job_for_fallback(
+        tmp_path, translator
+    )
+    media_adapter.streams = [{"index": 3, "codec_name": "ass"}]
+
+    jobs.retry(str(queued["id"]))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"] == {
+        "code": "format_mismatch",
+        "message": "Output format must match the Embedded subtitle stream format",
+        "media_path": "Movie.mkv",
+        "stream_index": 3,
+    }
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 1
+    jobs.close()
+
+
+def test_interrupted_embedded_job_retries_using_its_verified_extraction(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    media_root, work_root, media, media_adapter, queued, record_path, record = (
+        persisted_failed_embedded_job(tmp_path, translator)
+    )
+    record["status"] = "Interrupted"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    translator.error = None
+
+    restarted = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=Extraction(media_adapter, AtomicOutputPublisher()),
+    )
+    assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
+
+    restarted.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(restarted, str(queued["id"]), "Completed")
+
+    assert completed["attempt"] == 2
+    assert media_adapter.probe_calls == [media]
+    assert len(media_adapter.extract_calls) == 1
+    restarted.close()
+
+
+def test_embedded_retry_rejects_a_job_work_directory_symlink(
+    tmp_path: Path,
+):
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    media_root, work_root, media, media_adapter, jobs, queued = (
+        create_failed_embedded_job(tmp_path, translator)
+    )
+    jobs.close()
+    work_directory = work_root / "jobs" / str(queued["id"])
+    backup = work_root / "backup-job-work"
+    work_directory.rename(backup)
+    work_directory.symlink_to(media_root, target_is_directory=True)
+    original_media = media.read_bytes()
+    restarted = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=Extraction(media_adapter, AtomicOutputPublisher()),
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        restarted.retry(str(queued["id"]))
+
+    assert raised.value.error_code == "invalid_work_directory"
+    assert media.read_bytes() == original_media
+    restarted.close()
+    work_directory.unlink()
+    shutil.rmtree(backup)
+
+
+def test_embedded_extraction_failure_can_be_retried_successfully(
+    tmp_path: Path,
+):
+    media_root, work_root, media, _subtitle = make_roots(tmp_path)
+    media_adapter = MediaExtractorFixture(
+        [{"index": 3, "codec_name": "subrip"}], error=RuntimeError("ffmpeg")
+    )
+    extraction = Extraction(media_adapter, AtomicOutputPublisher())
+    translator = FakeTranslator()
+    jobs = Jobs(translator, media_root, work_root, extraction=extraction)
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    assert failed["error"]["code"] == "extraction_failed"
+    media_adapter.error = None
+
+    retried = jobs.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert retried["attempt"] == 2
+    assert completed["attempt"] == 2
+    assert media_adapter.probe_calls == [media, media]
+    assert len(media_adapter.extract_calls) == 2
+    assert (media_root / "Movie.zh-Hans.srt").read_bytes() == SRT
+    assert not (work_root / "jobs" / str(queued["id"])).exists()
+    jobs.close()
+
+
+@pytest.mark.parametrize("output_conflict_policy", ["append-number", "overwrite"])
+def test_embedded_retry_reuses_checkpoint_and_output_policy(
+    tmp_path: Path, output_conflict_policy: str
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    output = media_root / "Movie.zh-Hans.srt"
+    output.write_bytes(b"existing")
+    release = threading.Event()
+    release.set()
+    translator = RecordingTranslator(release)
+    translator.error = RuntimeError("boom")
+    media_adapter = MediaExtractorFixture([{"index": 3, "codec_name": "subrip"}])
+    jobs = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=Extraction(media_adapter, AtomicOutputPublisher()),
+    )
+
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            output_conflict_policy=output_conflict_policy,
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    work_directory = work_root / "jobs" / str(queued["id"])
+    (work_directory / "checkpoint-marker").write_text("keep", encoding="utf-8")
+    translator.error = None
+    release.clear()
+    translator.started.clear()
+
+    jobs.retry(str(queued["id"]))
+    checkpoint_marker = work_directory / "checkpoint-marker"
+    assert checkpoint_marker.read_text(encoding="utf-8") == "keep"
+    assert translator.started.wait(timeout=5)
+    release.set()
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    expected_output = (
+        "Movie.zh-Hans.srt"
+        if output_conflict_policy == "overwrite"
+        else "Movie.zh-Hans.2.srt"
+    )
+    assert completed["request"]["output_conflict_policy"] == output_conflict_policy
+    assert completed["request"]["output_path"] == expected_output
+    assert output.read_bytes() == (
+        SRT if output_conflict_policy == "overwrite" else b"existing"
+    )
     assert (
         translator.calls[0]["work_directory"] == translator.calls[1]["work_directory"]
     )
@@ -491,10 +863,18 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     assert extracting_record["status"] == "Extracting"
     assert "subtitle_path" not in extracting_record["request"]
     assert extracting_record["request"]["stream_index"] == 3
+    assert extracting_record["extraction"] is None
 
     release.set()
     assert translating.wait(timeout=5)
-    assert jobs.get(str(queued["id"]))["status"] == "Translating"
+    translating_record = jobs.get(str(queued["id"]))
+    assert translating_record["status"] == "Translating"
+    extraction_record = translating_record["extraction"]
+    assert isinstance(extraction_record, dict)
+    assert extraction_record["status"] == "Completed"
+    assert extraction_record["path"] == f"source.{source_format}"
+    assert extraction_record["format"] == source_format
+    assert isinstance(extraction_record["content_digest"], str)
     translation_release.set()
     deadline = time.monotonic() + 5
     while jobs.get(str(queued["id"]))["status"] != "Completed":

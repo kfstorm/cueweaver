@@ -835,26 +835,25 @@ function JobsPage() {
               {job.status}
             </span>
             {job.error && <p className="form-error">{job.error.message}</p>}
-            {(job.status === "Failed" || job.status === "Interrupted") &&
-              job.request.subtitle_path && (
-                <div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={retryJob.isPending}
-                    onClick={() => retryJob.mutate(job.id)}
-                  >
-                    {retryJob.isPending && retryJob.variables === job.id
-                      ? "Retrying..."
-                      : "Retry"}
-                  </Button>
-                  {retryJob.isError && retryJob.variables === job.id && (
-                    <p className="form-error" role="alert">
-                      {retryJob.error.message}
-                    </p>
-                  )}
-                </div>
-              )}
+            {(job.status === "Failed" || job.status === "Interrupted") && (
+              <div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={retryJob.isPending}
+                  onClick={() => retryJob.mutate(job.id)}
+                >
+                  {retryJob.isPending && retryJob.variables === job.id
+                    ? "Retrying..."
+                    : "Retry"}
+                </Button>
+                {retryJob.isError && retryJob.variables === job.id && (
+                  <p className="form-error" role="alert">
+                    {retryJob.error.message}
+                  </p>
+                )}
+              </div>
+            )}
             {job.error && (
               <details className="job-error-details">
                 <summary>Show error details</summary>

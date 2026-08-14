@@ -56,6 +56,58 @@ function jobsFetch(job: unknown) {
   });
 }
 
+function embeddedJob(id: string, status: "Failed" | "Interrupted", target = "zh-Hans") {
+  return {
+    id,
+    attempt: 1,
+    status,
+    created_at: "2026-08-13T12:00:00Z",
+    started_at: "2026-08-13T12:00:01Z",
+    finished_at: "2026-08-13T12:00:02Z",
+    request: {
+      media_path: "Movie.mkv",
+      stream_index: 3,
+      target_language_code: target,
+      term_map: null,
+      dynamic_terminology_enabled: true,
+      subtitle_terminology_filter_enabled: true,
+      output_suffix: target,
+      output_conflict_policy: "append-number",
+      output_path: `Movie.${target}.srt`,
+      source_format: "srt",
+    },
+    error: {
+      code: status === "Failed" ? "translation_failed" : "job_interrupted",
+      message: status === "Failed" ? "Translation failed" : "Job was interrupted",
+    },
+  };
+}
+
+function retryFetch(job: object, firstFailure?: string) {
+  let attempts = 0;
+  let response: { status: string; attempt: number } | null = null;
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input === "/api/status") return statusResponse();
+      if (input.endsWith("/retry") && init?.method === "POST") {
+        attempts += 1;
+        if (firstFailure && attempts === 1) {
+          return jsonResponse({ message: firstFailure }, false);
+        }
+        response = { status: "Queued", attempt: 2 };
+        return jsonResponse({ ...job, ...response, error: null });
+      }
+      if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
+      return jsonResponse({ term_maps: [] });
+    });
+  return {
+    fetchMock,
+    attempts: () => attempts,
+    response: () => response,
+  };
+}
+
 async function selectExternalSubtitle() {
   fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
   const subtitle = await screen.findByRole("button", {
@@ -346,30 +398,13 @@ describe("product shell", () => {
       },
       error: { code: "translation_failed", message: "Translation failed" },
     };
-    let retryAttempts = 0;
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
-        if (input.endsWith("/retry") && init?.method === "POST") {
-          retryAttempts += 1;
-          if (retryAttempts === 1) {
-            return jsonResponse(
-              { message: "External subtitle does not exist." },
-              false,
-            );
-          }
-          return jsonResponse({ ...job, status: "Queued", attempt: 2, error: null });
-        }
-        if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
-        return jsonResponse({ term_maps: [] });
-      });
-    renderWithFetch("/jobs", fetchMock);
+    const retry = retryFetch(job, "External subtitle does not exist.");
+    renderWithFetch("/jobs", retry.fetchMock);
 
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-retry-1/retry", {
+      expect(retry.fetchMock).toHaveBeenCalledWith("/api/jobs/job-retry-1/retry", {
         method: "POST",
       }),
     );
@@ -377,8 +412,43 @@ describe("product shell", () => {
       "External subtitle does not exist.",
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(retryAttempts).toBe(2));
+    await waitFor(() => expect(retry.attempts()).toBe(2));
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("offers retry for a failed Embedded Job", async () => {
+    const job = embeddedJob("job-embedded-retry", "Failed");
+    const retry = retryFetch(job, "Embedded subtitle stream disappeared.");
+    renderWithFetch("/jobs", retry.fetchMock);
+
+    expect(await screen.findByText("Embedded stream 3 to zh-Hans")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retry.attempts()).toBe(1));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Embedded subtitle stream disappeared.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retry.attempts()).toBe(2));
+    expect(retry.response()).toEqual(
+      expect.objectContaining({ status: "Queued", attempt: 2 }),
+    );
+  });
+
+  it("offers retry for an Interrupted Embedded Job", async () => {
+    const job = embeddedJob("interrupted-embedded-1", "Interrupted", "zh");
+    const retry = retryFetch(job);
+    renderWithFetch("/jobs", retry.fetchMock);
+
+    expect(await screen.findByText("Embedded stream 3 to zh")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retry.attempts()).toBe(1));
+    expect(retry.fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/interrupted-embedded-1/retry",
+      { method: "POST" },
+    );
+    expect(retry.response()).toEqual(
+      expect.objectContaining({ status: "Queued", attempt: 2 }),
+    );
   });
 
   it("renders an Interrupted Job as a terminal state", async () => {
