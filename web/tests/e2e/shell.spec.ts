@@ -37,6 +37,64 @@ async function stubProductStatus(page: Page, providerReady = true) {
   );
 }
 
+function jobRecord(id: string, status: "Queued" | "Completed" = "Completed") {
+  return {
+    id,
+    attempt: 1,
+    status,
+    created_at: "2026-08-13T12:00:00Z",
+    started_at: "2026-08-13T12:00:01Z",
+    finished_at: status === "Completed" ? "2026-08-13T12:00:02Z" : null,
+    queue_position: status === "Queued" ? 1 : null,
+    request: {
+      media_path: "Example.mkv",
+      subtitle_path: "Example.en.srt",
+      target_language_code: "zh-Hans",
+      term_map: null,
+      dynamic_terminology_enabled: true,
+      subtitle_terminology_filter_enabled: true,
+      output_suffix: "zh-Hans",
+      output_conflict_policy: "append-number",
+      output_path: "Example.zh-Hans.srt",
+      source_format: "srt",
+    },
+    error: null,
+  };
+}
+
+async function stubJobs(page: Page, jobs: Array<ReturnType<typeof jobRecord>>) {
+  await page.route("**/api/jobs", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ jobs }),
+    });
+  });
+  await page.route("**/api/jobs/*", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    const id = new URL(route.request().url()).pathname.split("/").pop();
+    const job = jobs.find((candidate) => candidate.id === id);
+    if (job === undefined) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "Job does not exist" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(job),
+    });
+  });
+}
+
 async function readJobs(page: Page) {
   const response = await page.request.get("/api/jobs");
   return (await response.json()).jobs as Array<{
@@ -89,6 +147,64 @@ test("mobile primary actions meet the touch target", async ({ page }) => {
   const box = await button.boundingBox();
 
   expect(box?.height).toBeGreaterThanOrEqual(44);
+});
+
+test.describe("Job history layouts", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} supports list to full detail navigation`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await stubProductStatus(page);
+      await stubJobs(page, [jobRecord("job-e2e")]);
+      await page.goto("/jobs");
+
+      await page.getByRole("button", { name: /Example\.mkv/ }).click();
+      await expect(page).toHaveURL(/\/jobs\/job-e2e$/);
+      await expect(
+        page.getByRole("heading", { name: "Request summary" }),
+      ).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Example.mkv" })).toBeFocused();
+      await expect(page.getByRole("button", { name: "Back to Jobs" })).toBeVisible();
+
+      const list = page.getByRole("list", { name: "Translation Jobs" });
+      await expect(list)[viewport.name === "mobile" ? "toBeHidden" : "toBeVisible"]();
+      if (viewport.name === "mobile") {
+        expect(
+          (await page.getByRole("button", { name: "Back to Jobs" }).boundingBox())
+            ?.height,
+        ).toBeGreaterThanOrEqual(44);
+      }
+
+      await page.getByRole("button", { name: "Back to Jobs" }).click();
+      await expect(page).toHaveURL(/\/jobs$/);
+      if (viewport.name === "mobile") {
+        await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
+      } else {
+        await expect(page.getByRole("heading", { name: "Select a Job" })).toBeVisible();
+      }
+    });
+  }
+});
+
+test("desktop Job history keeps a long list scrollable", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await stubProductStatus(page);
+  await stubJobs(
+    page,
+    Array.from({ length: 30 }, (_, index) => jobRecord(`job-${index}`)),
+  );
+  await page.goto("/jobs");
+
+  await expect(page.getByRole("listitem")).toHaveCount(30);
+  expect(
+    await page
+      .locator(".job-list")
+      .evaluate((element) => element.scrollHeight > element.clientHeight),
+  ).toBe(true);
 });
 
 test("unavailable provider is actionable and cannot submit", async ({ page }) => {

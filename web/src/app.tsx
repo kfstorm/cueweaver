@@ -25,7 +25,8 @@ import {
 } from "./browse";
 import { cn } from "./lib/utils";
 import { useProductStatus } from "./status";
-import { useCreateJob, useJobs, useRetryJob } from "./jobs";
+import { useCreateJob, useJobs, useJobNotifications } from "./jobs";
+import { JobNotificationRegion, JobsPage } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
   useCreateTermMap,
@@ -64,6 +65,8 @@ function Navigation({ mobile = false }: { mobile?: boolean }) {
 
 function Shell() {
   const status = useProductStatus();
+  const jobs = useJobs();
+  const jobNotifications = useJobNotifications(jobs.data);
   const ready = status.data?.api.ready && status.data?.roots.ready;
   return (
     <div className="product-shell">
@@ -88,6 +91,7 @@ function Shell() {
         <Outlet />
       </main>
       <Navigation mobile />
+      <JobNotificationRegion {...jobNotifications} />
     </div>
   );
 }
@@ -786,108 +790,6 @@ function ProviderState() {
   );
 }
 
-function JobsPage() {
-  const jobs = useJobs();
-  const retryJob = useRetryJob();
-  return (
-    <>
-      <PageHeader title="Jobs" detail="Track queued and completed translation work." />
-      <section className="job-list" aria-label="Translation jobs">
-        {jobs.isPending && (
-          <div className="inline-state" role="status">
-            Loading Jobs
-          </div>
-        )}
-        {jobs.isError && (
-          <div className="inline-state error" role="alert">
-            {jobs.error.message}
-          </div>
-        )}
-        {!jobs.isPending && !jobs.isError && jobs.data.length === 0 && (
-          <div className="empty-state">
-            <span className="empty-icon">
-              <BriefcaseIcon size={22} aria-hidden="true" />
-            </span>
-            <h2>No jobs yet</h2>
-            <p>Submitted translations will appear here with their current state.</p>
-          </div>
-        )}
-        {(jobs.data ?? []).map((job) => (
-          <article className="job-item" key={job.id}>
-            <div>
-              <small className="job-id">Job {job.id.slice(0, 8)}</small>
-              <strong>{job.request.media_path}</strong>
-              <p>
-                {job.request.subtitle_path
-                  ? job.request.subtitle_path
-                  : `Embedded stream ${job.request.stream_index}`}{" "}
-                to {job.request.target_language_code}
-              </p>
-              {job.request.term_map && (
-                <small>Term map: {job.request.term_map.name}</small>
-              )}
-              {job.attempt > 1 && <small>Attempt {job.attempt}</small>}
-              {job.queue_position !== null && job.queue_position !== undefined && (
-                <small>Queue position {job.queue_position}</small>
-              )}
-            </div>
-            <span className={`job-status status-${job.status.toLowerCase()}`}>
-              {job.status}
-            </span>
-            {job.error && <p className="form-error">{job.error.message}</p>}
-            {(job.status === "Failed" || job.status === "Interrupted") && (
-              <div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={retryJob.isPending}
-                  onClick={() => retryJob.mutate(job.id)}
-                >
-                  {retryJob.isPending && retryJob.variables === job.id
-                    ? "Retrying..."
-                    : "Retry"}
-                </Button>
-                {retryJob.isError && retryJob.variables === job.id && (
-                  <p className="form-error" role="alert">
-                    {retryJob.error.message}
-                  </p>
-                )}
-              </div>
-            )}
-            {job.error && (
-              <details className="job-error-details">
-                <summary>Show error details</summary>
-                <dl>
-                  <div>
-                    <dt>Code</dt>
-                    <dd>{job.error.code}</dd>
-                  </div>
-                  {Object.entries(job.error)
-                    .filter(([key]) =>
-                      [
-                        "field",
-                        "media_path",
-                        "output_path",
-                        "path",
-                        "stream_index",
-                      ].includes(key),
-                    )
-                    .map(([key, value]) => (
-                      <div key={key}>
-                        <dt>{key}</dt>
-                        <dd>{String(value)}</dd>
-                      </div>
-                    ))}
-                </dl>
-              </details>
-            )}
-          </article>
-        ))}
-      </section>
-    </>
-  );
-}
-
 function TermMapsPage() {
   const maps = useTermMaps();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1258,6 +1160,7 @@ export function App() {
         <Route index element={<Navigate to="/translate" replace />} />
         <Route path="translate" element={<Translate />} />
         <Route path="jobs" element={<JobsPage />} />
+        <Route path="jobs/:jobId" element={<JobsPage />} />
         <Route path="term-maps" element={<TermMapsPage />} />
         <Route path="*" element={<Navigate to="/translate" replace />} />
       </Route>
