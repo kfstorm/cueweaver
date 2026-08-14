@@ -1212,6 +1212,43 @@ def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
     assert not translator.started.is_set()
 
 
+def test_external_job_retries_after_restart_recovery(tmp_path: Path):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = "Translating"
+    record["finished_at"] = None
+    record["error"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    work_directory = work_root / "jobs" / queued["id"]
+    work_directory.mkdir()
+    (work_directory / "checkpoint-marker").write_text("keep", encoding="utf-8")
+    translator = FakeTranslator(error=RuntimeError("must not run before retry"))
+
+    restarted = Jobs(translator, media_root, work_root)
+
+    recovered = restarted.get(queued["id"])
+    assert recovered["status"] == "Interrupted"
+    assert recovered["id"] == queued["id"]
+    assert recovered["attempt"] == 1
+    assert recovered["error"] == {
+        "code": "job_interrupted",
+        "message": "Job was interrupted when CueWeaver stopped",
+    }
+    assert (work_directory / "checkpoint-marker").read_text(encoding="utf-8") == "keep"
+    translator.error = None
+
+    retried = restarted.retry(queued["id"])
+    completed = wait_for_status_from_jobs(restarted, queued["id"], "Completed")
+
+    assert retried["id"] == queued["id"]
+    assert retried["attempt"] == 2
+    assert completed["attempt"] == 2
+    assert (media_root / "Movie.zh-Hans.srt").read_bytes() == SRT
+    assert not work_directory.exists()
+    restarted.close()
+
+
 @pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])
 def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status: str):
     media_root, work_root, queued, record_path, record = persisted_external_job(
