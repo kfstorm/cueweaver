@@ -79,8 +79,7 @@ Unknown request fields are rejected. In particular, there are no `media_path`,
 
 ### Product Operations
 
-The production shell uses these APIs. Mutation requests use
-`Content-Type: application/json`.
+The production shell uses these APIs.
 
 - `GET /api/status` reports API, roots, Translation provider, and single-worker
   readiness. It never includes absolute root paths or provider credentials. A
