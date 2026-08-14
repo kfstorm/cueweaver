@@ -7,6 +7,13 @@ import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
 import type { TermMapSummary } from "../src/term-maps";
 
+const CHARACTERS_TERM_MAP: TermMapSummary = {
+  id: "map-1",
+  name: "Characters",
+  entry_count: 1,
+  updated_at: "2026-08-13T12:00:00Z",
+};
+
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
@@ -31,13 +38,14 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 function jobsFetch(job: unknown) {
@@ -162,7 +170,7 @@ function renderRoute(
         }));
       }
       if (String(input) === "/api/term-maps") {
-        return Promise.resolve(jsonResponse({ term_maps: termMaps }));
+        return Promise.resolve(jsonResponse({ term_maps: [...termMaps] }));
       }
       return Promise.resolve(statusResponse(providerReady));
     });
@@ -598,14 +606,7 @@ describe("product shell", () => {
       undefined,
       false,
       [],
-      [
-        {
-          id: "map-1",
-          name: "Characters",
-          entry_count: 1,
-          updated_at: "2026-08-13T12:00:00Z",
-        },
-      ],
+      [CHARACTERS_TERM_MAP],
     );
 
     await selectExternalSubtitle();
@@ -620,6 +621,30 @@ describe("product shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await expectQueuedJobRequest("zh-Hans", "map-1", true, true);
+  });
+
+  it("clears a Term map selection after the refreshed list removes it", async () => {
+    const termMaps = [CHARACTERS_TERM_MAP];
+    const { queryClient } = renderRoute(
+      "/translate",
+      true,
+      undefined,
+      undefined,
+      false,
+      [],
+      termMaps,
+    );
+
+    fireEvent.click(screen.getByText("Advanced settings"));
+    await screen.findByRole("option", { name: "Characters" });
+    const termMap = screen.getByLabelText("Term map");
+    fireEvent.change(termMap, { target: { value: "map-1" } });
+    expect(termMap).toHaveValue("map-1");
+
+    termMaps.length = 0;
+    await queryClient.invalidateQueries({ queryKey: ["term-maps"] });
+
+    await waitFor(() => expect(termMap).toHaveValue(""));
   });
 
   it("remembers a successful language and resets the source form", async () => {
