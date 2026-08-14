@@ -25,7 +25,7 @@ import {
 } from "./browse";
 import { cn } from "./lib/utils";
 import { useProductStatus } from "./status";
-import { useCreateJob, useJobs } from "./jobs";
+import { useCreateJob, useJobs, useRetryJob } from "./jobs";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
   useCreateTermMap,
@@ -788,6 +788,7 @@ function ProviderState() {
 
 function JobsPage() {
   const jobs = useJobs();
+  const retryJob = useRetryJob();
   return (
     <>
       <PageHeader title="Jobs" detail="Track queued and completed translation work." />
@@ -825,6 +826,7 @@ function JobsPage() {
               {job.request.term_map && (
                 <small>Term map: {job.request.term_map.name}</small>
               )}
+              {job.attempt > 1 && <small>Attempt {job.attempt}</small>}
               {job.queue_position !== null && job.queue_position !== undefined && (
                 <small>Queue position {job.queue_position}</small>
               )}
@@ -833,6 +835,26 @@ function JobsPage() {
               {job.status}
             </span>
             {job.error && <p className="form-error">{job.error.message}</p>}
+            {(job.status === "Failed" || job.status === "Interrupted") &&
+              job.request.subtitle_path && (
+                <div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={retryJob.isPending}
+                    onClick={() => retryJob.mutate(job.id)}
+                  >
+                    {retryJob.isPending && retryJob.variables === job.id
+                      ? "Retrying..."
+                      : "Retry"}
+                  </Button>
+                  {retryJob.isError && retryJob.variables === job.id && (
+                    <p className="form-error" role="alert">
+                      {retryJob.error.message}
+                    </p>
+                  )}
+                </div>
+              )}
             {job.error && (
               <details className="job-error-details">
                 <summary>Show error details</summary>

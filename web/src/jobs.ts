@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export interface Job {
   id: string;
+  attempt: number;
   status:
     "Queued" | "Extracting" | "Translating" | "Completed" | "Failed" | "Interrupted";
   created_at: string;
@@ -64,6 +65,21 @@ export function useCreateJob() {
       const body = (await response.json()) as Job & { message?: string };
       if (!response.ok)
         throw new Error(body.message ?? "Translation could not be queued.");
+      return body;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useRetryJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (jobId: string): Promise<Job> => {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/retry`, {
+        method: "POST",
+      });
+      const body = (await response.json()) as Job & { message?: string };
+      if (!response.ok) throw new Error(body.message ?? "Job could not be retried.");
       return body;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),

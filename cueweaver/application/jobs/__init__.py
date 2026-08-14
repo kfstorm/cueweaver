@@ -128,6 +128,7 @@ class Jobs:
             record: dict[str, object] = {
                 "id": job_id,
                 "status": "Queued",
+                "attempt": 1,
                 "created_at": now,
                 "started_at": None,
                 "finished_at": None,
@@ -140,6 +141,69 @@ class Jobs:
                 self._records[job_id] = record
             self._pending.put(job_id)
             return self._record_with_queue_position(record)
+
+    def retry(self, job_id: str) -> dict[str, object]:
+        """Requeue a failed External subtitle Job without changing its identity."""
+        with self._lifecycle_lock:
+            with self._lock:
+                record = self._records.get(job_id)
+                if record is None:
+                    raise ServiceError("job_not_found", "Job does not exist")
+                status = record.get("status")
+                request = record.get("request")
+                if (
+                    status not in {"Failed", "Interrupted"}
+                    or not isinstance(request, dict)
+                    or "subtitle_path" not in request
+                ):
+                    raise ServiceError(
+                        "job_retry_conflict",
+                        "Only Failed or Interrupted External subtitle Jobs can be retried",
+                        status=status,
+                    )
+            if self._closed.is_set():
+                raise ServiceError("worker_unavailable", "Job worker is shutting down")
+            if not self._translator.available:
+                raise ServiceError(
+                    "provider_unavailable",
+                    "Translation provider is unavailable; configure a provider and restart CueWeaver",
+                )
+            try:
+                self._validate_retry_sources(request)
+            except ServiceError as error:
+                context = self._error_context(error.context)
+                safe_error = ServiceError(error.error_code, error.message, **context)
+                with self._lock:
+                    failed_record = _copy_record(record)
+                    failed_record["error"] = {
+                        "code": error.error_code,
+                        "message": error.message,
+                        **context,
+                    }
+                    self._write_record(job_id, failed_record)
+                    self._records[job_id] = failed_record
+                raise safe_error from error
+            with self._lock:
+                retry_record = _copy_record(record)
+                retry_request = retry_record["request"]
+                assert isinstance(retry_request, dict)
+                next_queue_sequence = self._next_queue_sequence + 1
+                retry_record["status"] = "Queued"
+                attempt = retry_record.get("attempt", 1)
+                assert isinstance(attempt, int)
+                retry_record["attempt"] = attempt + 1
+                retry_record["started_at"] = None
+                retry_record["finished_at"] = None
+                retry_record["error"] = None
+                retry_request["output_path"] = str(
+                    self._base_output_path(retry_request).relative_to(self._media_root)
+                )
+                retry_record["queue_sequence"] = next_queue_sequence
+                self._write_record(job_id, retry_record)
+                self._records[job_id] = retry_record
+                self._next_queue_sequence = next_queue_sequence
+                self._pending.put(job_id)
+                return self._record_with_queue_position(retry_record)
 
     def list(self) -> list[dict[str, object]]:
         with self._lock:
@@ -232,25 +296,7 @@ class Jobs:
                 request.subtitle_path, "invalid_external_subtitle"
             )
         if subtitle is not None:
-            if not subtitle.is_file():
-                raise ServiceError(
-                    "invalid_external_subtitle", "External subtitle does not exist"
-                )
-            if subtitle.parent != media.parent or (
-                subtitle.stem != media.stem
-                and not subtitle.stem.startswith(f"{media.stem}.")
-            ):
-                raise ServiceError(
-                    "invalid_external_subtitle",
-                    "External subtitle must be beside the Media and share its stem",
-                )
-            external_format = EXTERNAL_FORMATS.get(subtitle.suffix.casefold())
-            if external_format is None:
-                raise ServiceError(
-                    "unsupported_subtitle_format",
-                    "External subtitle must use a supported extension",
-                )
-            source_format = external_format
+            source_format = self._validate_external_subtitle(media, subtitle)
         output_suffix = (
             request.target_language_code
             if request.output_suffix is None
@@ -265,6 +311,66 @@ class Jobs:
         output = media.with_name(f"{media.stem}.{output_suffix}.{source_format}")
         _require_writable_directory(output.parent)
         return media, subtitle, output, source_format
+
+    def _validate_retry_sources(self, request: dict[str, object]) -> None:
+        media_value = request.get("media_path")
+        subtitle_value = request.get("subtitle_path")
+        assert isinstance(media_value, str)
+        assert isinstance(subtitle_value, str)
+        try:
+            media = self._media_path(media_value, "invalid_media_path")
+        except ServiceError as error:
+            raise ServiceError(
+                error.error_code,
+                error.message,
+                media_path=_safe_input_path(media_value),
+            ) from error
+        require_readable_media(media)
+        try:
+            subtitle = self._media_path(subtitle_value, "invalid_external_subtitle")
+        except ServiceError as error:
+            raise ServiceError(
+                error.error_code,
+                error.message,
+                path=_safe_input_path(subtitle_value),
+            ) from error
+        self._validate_external_subtitle(media, subtitle, path=subtitle_value)
+
+    def _validate_external_subtitle(
+        self, media: Path, subtitle: Path, *, path: str | None = None
+    ) -> str:
+        if not subtitle.is_file():
+            raise ServiceError(
+                "invalid_external_subtitle",
+                "External subtitle does not exist",
+                **({"path": path} if path is not None else {}),
+            )
+        try:
+            with subtitle.open("rb"):
+                pass
+        except OSError as error:
+            raise ServiceError(
+                "invalid_external_subtitle",
+                "External subtitle cannot be read",
+                **({"path": path} if path is not None else {}),
+            ) from error
+        if subtitle.parent != media.parent or (
+            subtitle.stem != media.stem
+            and not subtitle.stem.startswith(f"{media.stem}.")
+        ):
+            raise ServiceError(
+                "invalid_external_subtitle",
+                "External subtitle must be beside the Media and share its stem",
+                **({"path": path} if path is not None else {}),
+            )
+        external_format = EXTERNAL_FORMATS.get(subtitle.suffix.casefold())
+        if external_format is None:
+            raise ServiceError(
+                "unsupported_subtitle_format",
+                "External subtitle must use a supported extension",
+                **({"path": path} if path is not None else {}),
+            )
+        return external_format
 
     def _media_path(self, value: str, error_code: str) -> Path:
         path = Path(value)
@@ -440,6 +546,12 @@ class Jobs:
             number += 1
         return candidate
 
+    def _base_output_path(self, request: dict[str, object]) -> Path:
+        media = self._media_path(str(request["media_path"]), "invalid_media_path")
+        return media.with_name(
+            f"{media.stem}.{request['output_suffix']}.{request['source_format']}"
+        )
+
     def _error_context(self, context: dict[str, object]) -> dict[str, object]:
         roots = (self._media_root, self._jobs_root.parent.resolve())
         safe: dict[str, object] = {}
@@ -512,22 +624,26 @@ class Jobs:
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
         self._jobs_root.mkdir(parents=True, exist_ok=True)
+        destination = self._jobs_root / f"{job_id}.json"
+        previous = destination.read_bytes() if destination.exists() else None
         descriptor, raw_path = tempfile.mkstemp(
             dir=self._jobs_root, prefix=f".{job_id}."
         )
         temporary = Path(raw_path)
+        replaced = False
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as file:
                 json.dump(record, file, ensure_ascii=True, indent=2)
                 file.write("\n")
                 file.flush()
                 os.fsync(file.fileno())
-            temporary.replace(self._jobs_root / f"{job_id}.json")
-            directory_descriptor = os.open(self._jobs_root, os.O_RDONLY)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
+            temporary.replace(destination)
+            replaced = True
+            _fsync_directory(self._jobs_root)
+        except OSError:
+            if replaced:
+                _restore_record(destination, previous)
+            raise
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -608,6 +724,39 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _safe_input_path(value: str) -> str:
+    normalized = value.replace("\\", "/").rstrip("/")
+    return normalized.rsplit("/", maxsplit=1)[-1] or "<invalid path>"
+
+
+def _fsync_directory(directory: Path) -> None:
+    directory_descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _restore_record(destination: Path, previous: bytes | None) -> None:
+    if previous is None:
+        destination.unlink(missing_ok=True)
+        _fsync_directory(destination.parent)
+        return
+    descriptor, raw_path = tempfile.mkstemp(
+        dir=destination.parent, prefix=f".{destination.name}.restore."
+    )
+    temporary = Path(raw_path)
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(previous)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.replace(destination)
+        _fsync_directory(destination.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _copy_record(record: dict[str, object]) -> dict[str, object]:
     copied = json.loads(json.dumps(record))
     if not isinstance(copied, dict):
@@ -631,7 +780,17 @@ def _valid_record(record: dict[str, object]) -> bool:
     request = record.get("request")
     if not isinstance(job_id, str) or not job_id:
         return False
-    if not isinstance(status, str) or status not in JOB_STATUSES:
+    attempt = record.get("attempt")
+    if (
+        not isinstance(status, str)
+        or status not in JOB_STATUSES
+        or (
+            attempt is not None
+            and (
+                not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1
+            )
+        )
+    ):
         return False
     if not isinstance(request, dict):
         return False
@@ -719,6 +878,9 @@ def _normalize_record(record: dict[str, object]) -> None:
     request.setdefault("subtitle_terminology_filter_enabled", True)
     request.setdefault("output_suffix", str(request["target_language_code"]))
     request.setdefault("output_conflict_policy", "append-number")
+    attempt = record.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        record["attempt"] = 1
     queue_sequence = record.get("queue_sequence")
     if not isinstance(queue_sequence, int) or queue_sequence < 1:
         record["queue_sequence"] = 0

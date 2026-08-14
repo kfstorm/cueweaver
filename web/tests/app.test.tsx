@@ -324,6 +324,63 @@ describe("product shell", () => {
     expect(screen.getByText("subtitle")).toBeInTheDocument();
   });
 
+  it("offers retry for a failed External Job without exposing its configuration", async () => {
+    const job = {
+      id: "job-retry-1",
+      attempt: 1,
+      status: "Failed",
+      created_at: "2026-08-13T12:00:00Z",
+      started_at: "2026-08-13T12:00:01Z",
+      finished_at: "2026-08-13T12:00:02Z",
+      request: {
+        media_path: "Movie.mkv",
+        subtitle_path: "Movie.en.srt",
+        target_language_code: "zh-Hans",
+        term_map: null,
+        dynamic_terminology_enabled: true,
+        subtitle_terminology_filter_enabled: true,
+        output_suffix: "zh-Hans",
+        output_conflict_policy: "append-number",
+        output_path: "Movie.zh-Hans.srt",
+        source_format: "srt",
+      },
+      error: { code: "translation_failed", message: "Translation failed" },
+    };
+    let retryAttempts = 0;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input.endsWith("/retry") && init?.method === "POST") {
+          retryAttempts += 1;
+          if (retryAttempts === 1) {
+            return jsonResponse(
+              { message: "External subtitle does not exist." },
+              false,
+            );
+          }
+          return jsonResponse({ ...job, status: "Queued", attempt: 2, error: null });
+        }
+        if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
+        return jsonResponse({ term_maps: [] });
+      });
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-retry-1/retry", {
+        method: "POST",
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "External subtitle does not exist.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retryAttempts).toBe(2));
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
   it("renders an Interrupted Job as a terminal state", async () => {
     const fetchMock = jobsFetch({
       id: "interrupted-1",
@@ -346,6 +403,7 @@ describe("product shell", () => {
     renderWithFetch("/jobs", fetchMock);
 
     expect(await screen.findByText("Interrupted")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {
