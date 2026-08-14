@@ -34,6 +34,16 @@ class FakeTranslator:
         return SRT
 
 
+class RecordingTranslator(FakeTranslator):
+    def __init__(self, delay: threading.Event):
+        super().__init__(delay=delay)
+        self.calls: list[dict[str, object]] = []
+
+    def translate(self, source: Path, target_language: str, **kwargs: object) -> bytes:
+        self.calls.append({"target": target_language, **kwargs})
+        return super().translate(source, target_language, **kwargs)
+
+
 def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -143,24 +153,32 @@ def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
     assert not (media_root / "Movie.zh-Hans.srt").exists()
 
 
+def test_job_rejects_missing_term_map_before_queueing(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Movie.mkv",
+                "subtitle_path": "Movie.en.srt",
+                "target_language_code": "zh-Hans",
+                "term_map_id": "missing-map",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_code"] == "term_map_not_found"
+        assert client.get("/api/jobs").json()["jobs"] == []
+        assert list((work_root / "jobs").glob("*.json")) == []
+
+
 def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
     tmp_path: Path,
 ):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     release = threading.Event()
 
-    class RecordingTranslator(FakeTranslator):
-        def __init__(self):
-            super().__init__(delay=release)
-            self.calls: list[dict[str, object]] = []
-
-        def translate(
-            self, source: Path, target_language: str, **kwargs: object
-        ) -> bytes:
-            self.calls.append({"target": target_language, **kwargs})
-            return super().translate(source, target_language, **kwargs)
-
-    translator = RecordingTranslator()
+    translator = RecordingTranslator(release)
     with make_client(media_root, work_root, translator) as client:
         first = client.post(
             "/api/jobs",
@@ -190,13 +208,135 @@ def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
         wait_for_status(client, third["id"], "Completed")
 
     assert [call["target"] for call in translator.calls] == ["zh-Hans", "ja", "ko"]
+    assert translator.calls[0]["user_overrides"] == {}
     assert translator.calls[0]["dynamic_terminology_enabled"] is False
     assert translator.calls[0]["subtitle_terminology_filter_enabled"] is False
 
 
-def test_job_snapshots_term_map_configuration(tmp_path: Path):
+def test_running_and_queued_jobs_use_term_map_snapshots_after_rename_and_delete(
+    tmp_path: Path,
+):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    with make_client(media_root, work_root, FakeTranslator()) as client:
+    release = threading.Event()
+
+    translator = RecordingTranslator(release)
+    with make_client(media_root, work_root, translator) as client:
+        running_term_map = client.post(
+            "/api/term-maps",
+            json={"name": "Characters", "content": {"Captain": "队长"}},
+        ).json()
+        first = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Movie.mkv",
+                "subtitle_path": "Movie.en.srt",
+                "target_language_code": "zh-Hans",
+                "term_map_id": running_term_map["id"],
+            },
+        ).json()
+        wait_for_status(client, first["id"], "Translating")
+        queued_term_map = client.post(
+            "/api/term-maps",
+            json={"name": "Ships", "content": {"Enterprise": "企业号"}},
+        ).json()
+        queued = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Movie.mkv",
+                "subtitle_path": "Movie.en.srt",
+                "target_language_code": "ja",
+                "term_map_id": queued_term_map["id"],
+            },
+        ).json()
+
+        assert first["request"]["term_map"] == {
+            "id": running_term_map["id"],
+            "name": "Characters",
+            "content": {"Captain": "队长"},
+        }
+        assert queued["request"]["term_map"] == {
+            "id": queued_term_map["id"],
+            "name": "Ships",
+            "content": {"Enterprise": "企业号"},
+        }
+        assert queued["status"] == "Queued"
+        assert queued["queue_position"] == 1
+        assert (
+            client.put(
+                f"/api/term-maps/{running_term_map['id']}",
+                json={"content": {"Captain": "船长"}},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                f"/api/term-maps/{running_term_map['id']}",
+                json={"name": "Renamed characters"},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.request(
+                "DELETE",
+                f"/api/term-maps/{running_term_map['id']}",
+                json={"name": "Renamed characters"},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                f"/api/term-maps/{queued_term_map['id']}",
+                json={"content": {"Enterprise": "进取号"}},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch(
+                f"/api/term-maps/{queued_term_map['id']}",
+                json={"name": "Renamed ships"},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.request(
+                "DELETE",
+                f"/api/term-maps/{queued_term_map['id']}",
+                json={"name": "Renamed ships"},
+            ).status_code
+            == 200
+        )
+        assert client.get(f"/api/term-maps/{running_term_map['id']}").status_code == 400
+        assert client.get(f"/api/term-maps/{queued_term_map['id']}").status_code == 400
+        assert client.get(f"/api/jobs/{first['id']}").json()["request"]["term_map"] == {
+            "id": running_term_map["id"],
+            "name": "Characters",
+            "content": {"Captain": "队长"},
+        }
+        assert client.get(f"/api/jobs/{queued['id']}").json()["request"][
+            "term_map"
+        ] == {
+            "id": queued_term_map["id"],
+            "name": "Ships",
+            "content": {"Enterprise": "企业号"},
+        }
+
+        release.set()
+        wait_for_status(client, first["id"], "Completed")
+        completed = wait_for_status(client, queued["id"], "Completed")
+
+        assert completed["request"]["term_map"]["name"] == "Ships"
+
+    assert translator.calls[0]["user_overrides"] == {"Captain": "队长"}
+    assert translator.calls[1]["user_overrides"] == {"Enterprise": "企业号"}
+    assert not (work_root / "jobs" / first["id"]).exists()
+    assert not (work_root / "jobs" / queued["id"]).exists()
+
+
+def test_failed_term_map_job_retains_immutable_working_copy(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(
+        media_root, work_root, FakeTranslator(error=RuntimeError("boom"))
+    ) as client:
         term_map = client.post(
             "/api/term-maps",
             json={"name": "Characters", "content": {"Captain": "队长"}},
@@ -211,18 +351,14 @@ def test_job_snapshots_term_map_configuration(tmp_path: Path):
             },
         ).json()
 
-        assert queued["request"]["term_map"] == {
-            "id": term_map["id"],
-            "name": "Characters",
-            "content": {"Captain": "队长"},
-        }
-        client.put(
-            f"/api/term-maps/{term_map['id']}",
-            json={"content": {"Captain": "船长"}},
-        )
-        assert client.get(f"/api/jobs/{queued['id']}").json()["request"]["term_map"][
-            "content"
-        ] == {"Captain": "队长"}
+        failed = wait_for_status(client, queued["id"], "Failed")
+
+        assert failed["request"]["term_map"]["content"] == {"Captain": "队长"}
+        assert json.loads(
+            (work_root / "jobs" / queued["id"] / "term-map.json").read_text(
+                encoding="utf-8"
+            )
+        ) == {"Captain": "队长"}
 
 
 def test_failed_job_retains_structured_error_context(tmp_path: Path, monkeypatch):

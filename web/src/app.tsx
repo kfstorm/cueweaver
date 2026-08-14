@@ -685,6 +685,9 @@ function JobsPage() {
               <p>
                 {job.request.subtitle_path} to {job.request.target_language_code}
               </p>
+              {job.request.term_map && (
+                <small>Term map: {job.request.term_map.name}</small>
+              )}
               {job.queue_position !== null && job.queue_position !== undefined && (
                 <small>Queue position {job.queue_position}</small>
               )}
