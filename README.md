@@ -27,10 +27,18 @@ docker run --rm -p 8000:8000 \
   cueweaver
 ```
 
-Open `http://localhost:8000`. The Media root must already be a readable
-directory. CueWeaver creates the Work root when absent and verifies it supports
-the filesystem operations required for persistent product state. The roots are
-never returned to Web clients.
+Open `http://localhost:8000`. The Media root must already be a readable and
+writable directory: Jobs publish translated subtitles beside the source Media,
+and Job creation fails with `output_directory_unwritable` when it cannot write
+there. CueWeaver creates the Work root when absent and verifies it supports the
+filesystem operations required for persistent Job state. Keep the Work volume
+across container replacements and restarts; Queued, Extracting, and Translating
+Jobs found during startup become `Interrupted` and can be retried, while
+terminal Job history remains available.
+
+This product is a trusted-local service with no authentication. Bind port 8000
+only to trusted local access or place it behind your own authenticated reverse
+proxy before exposing it to another network.
 
 For local development, run the API-only backend behind Vite with:
 
@@ -66,6 +74,37 @@ on a specific status code or fine-grained error-code string.
 
 Unknown request fields are rejected. In particular, there are no `media_path`,
 `source_language`, or `no_op` fields on translation requests.
+
+### Product Operations
+
+The production shell uses these APIs. Mutation requests use
+`Content-Type: application/json`.
+
+- `GET /api/status` reports API, roots, Translation provider, and single-worker
+  readiness. It never includes absolute root paths or provider credentials. A
+  provider can be unavailable while browsing and Job history remain usable;
+  Translation submission is disabled until PySubtrans is configured and the
+  container is restarted.
+- `POST /api/media/browse` accepts a Media-relative `path` and returns the
+  readable directory entries. `POST /api/media/discover` accepts a Media-relative
+  `path` and returns usable External and Embedded subtitle candidates.
+- `GET /api/term-maps` lists Term maps. `POST /api/term-maps` creates one from
+  `{"name":"...","content":{"source":"target"}}`; the detail endpoint is
+  `/api/term-maps/{id}` and supports `GET`, `PATCH`, `PUT`, and `DELETE` for
+  inspection and management.
+- `POST /api/jobs` creates an External or Embedded subtitle Job. External Jobs
+  provide `media_path` and `subtitle_path`; Embedded Jobs provide `media_path`,
+  `stream_index`, and `source_format` (`srt`, `ass`, or `vtt`). Both require
+  `target_language_code` and may set `term_map_id`, terminology flags,
+  `output_suffix`, and `output_conflict_policy` (`append-number` or
+  `overwrite`).
+- `GET /api/jobs` lists durable Job history and `GET /api/jobs/{id}` returns one
+  Job. Jobs move through `Queued`, `Extracting`, `Translating`, and a terminal
+  `Completed`, `Failed`, or `Interrupted` state. `POST /api/jobs/{id}/retry`
+  retries a Failed or Interrupted Job; `DELETE /api/jobs/{id}` deletes an
+  eligible terminal Job; and `DELETE /api/jobs/completed` clears Completed
+  history. Legacy
+  `/api/discover`, `/api/extract`, and `/api/translate` remain available.
 
 ### Discover
 
