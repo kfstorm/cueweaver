@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from ...subtitle_formats import BITMAP_CODECS, EXTERNAL_FORMATS, TEXT_CODEC_FORMATS
+from ...subtitle_formats import BITMAP_CODECS, EXTERNAL_FORMATS, EXTRACT_CODEC_FORMATS
 from ..errors import ServiceError
 from ..media import require_readable_media, stream_index
 
@@ -58,11 +58,11 @@ class Discovery:
             if index is None:
                 continue
             codec = str(stream.get("codec_name", "")).casefold()
-            if codec in TEXT_CODEC_FORMATS:
+            if codec in EXTRACT_CODEC_FORMATS:
                 candidates.append(
                     SubtitleCandidateResult(
                         "embedded",
-                        TEXT_CODEC_FORMATS[codec],
+                        EXTRACT_CODEC_FORMATS[codec],
                         _stream_tags(stream),
                         stream_index=index,
                     )

@@ -1,4 +1,4 @@
-"""Durable External subtitle translation Jobs."""
+"""Durable subtitle translation Jobs."""
 
 from __future__ import annotations
 
@@ -20,28 +20,33 @@ from unicodedata import category
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ..errors import ServiceError
+from ..extraction import Extraction, ExtractRequest
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
 from ..translation import OutputPublisher, TranslateRequest, Translation, Translator
 
 JOB_STATUSES = frozenset(
-    {"Queued", "Translating", "Completed", "Failed", "Interrupted"}
+    {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
 )
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
-APPROVED_ERROR_CONTEXT_KEYS = frozenset({"field", "path", "stream_index"})
+APPROVED_ERROR_CONTEXT_KEYS = frozenset(
+    {"field", "media_path", "output_path", "path", "stream_index"}
+)
 
 
 @dataclass(frozen=True)
 class CreateJobRequest:
     media_path: str
-    subtitle_path: str
+    subtitle_path: str | None
     target_language_code: str
     term_map_id: str | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
     output_suffix: str | None = None
     output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
+    stream_index: int | None = None
+    source_format: str | None = None
 
 
 class TermMapResolver(Protocol):
@@ -57,9 +62,11 @@ class Jobs:
         media_root: Path,
         work_root: Path,
         term_maps: TermMapResolver | None = None,
+        extraction: Extraction | None = None,
     ) -> None:
         self._translator = translator
         self._term_maps = term_maps
+        self._extraction = extraction
         self._media_root = media_root.resolve()
         self._jobs_root = work_root / "jobs"
         self._pending: queue.Queue[str | None] = queue.Queue()
@@ -96,28 +103,35 @@ class Jobs:
             self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
+            job_request: dict[str, object] = {
+                "media_path": str(media.relative_to(self._media_root)),
+                "target_language_code": request.target_language_code,
+                "term_map": term_map,
+                "dynamic_terminology_enabled": request.dynamic_terminology_enabled,
+                "subtitle_terminology_filter_enabled": request.subtitle_terminology_filter_enabled,
+                "output_suffix": (
+                    request.target_language_code
+                    if request.output_suffix is None
+                    else request.output_suffix
+                ),
+                "output_conflict_policy": request.output_conflict_policy,
+                "output_path": str(output.relative_to(self._media_root)),
+                "source_format": source_format,
+            }
+            if subtitle is not None:
+                job_request["subtitle_path"] = str(
+                    subtitle.relative_to(self._media_root)
+                )
+            else:
+                assert request.stream_index is not None
+                job_request["stream_index"] = request.stream_index
             record: dict[str, object] = {
                 "id": job_id,
                 "status": "Queued",
                 "created_at": now,
                 "started_at": None,
                 "finished_at": None,
-                "request": {
-                    "media_path": str(media.relative_to(self._media_root)),
-                    "subtitle_path": str(subtitle.relative_to(self._media_root)),
-                    "target_language_code": request.target_language_code,
-                    "term_map": term_map,
-                    "dynamic_terminology_enabled": request.dynamic_terminology_enabled,
-                    "subtitle_terminology_filter_enabled": request.subtitle_terminology_filter_enabled,
-                    "output_suffix": (
-                        request.target_language_code
-                        if request.output_suffix is None
-                        else request.output_suffix
-                    ),
-                    "output_conflict_policy": request.output_conflict_policy,
-                    "output_path": str(output.relative_to(self._media_root)),
-                    "source_format": source_format,
-                },
+                "request": job_request,
                 "error": None,
                 "queue_sequence": self._next_queue_sequence,
             }
@@ -172,7 +186,9 @@ class Jobs:
         )
         return copied
 
-    def _validate(self, request: CreateJobRequest) -> tuple[Path, Path, Path, str]:
+    def _validate(
+        self, request: CreateJobRequest
+    ) -> tuple[Path, Path | None, Path, str]:
         if (
             not request.target_language_code.strip()
             or "\\" in request.target_language_code
@@ -188,26 +204,53 @@ class Jobs:
                 "Target language must be non-empty and filename-safe",
             )
         media = self._media_path(request.media_path, "invalid_media_path")
-        subtitle = self._media_path(request.subtitle_path, "invalid_external_subtitle")
         require_readable_media(media)
-        if not subtitle.is_file():
-            raise ServiceError(
-                "invalid_external_subtitle", "External subtitle does not exist"
+        if request.stream_index is not None:
+            if (
+                isinstance(request.stream_index, bool)
+                or not isinstance(request.stream_index, int)
+                or request.stream_index < 0
+            ):
+                raise ServiceError(
+                    "invalid_embedded_subtitle",
+                    "Embedded subtitle stream index must be a non-negative integer",
+                )
+            if request.subtitle_path is not None:
+                raise ServiceError(
+                    "invalid_embedded_subtitle",
+                    "Embedded subtitle Jobs must not provide an Extraction path",
+                )
+            source_format = _source_format(request.source_format)
+            subtitle = None
+        else:
+            if request.subtitle_path is None:
+                raise ServiceError(
+                    "invalid_external_subtitle",
+                    "External subtitle path is required",
+                )
+            subtitle = self._media_path(
+                request.subtitle_path, "invalid_external_subtitle"
             )
-        if subtitle.parent != media.parent or (
-            subtitle.stem != media.stem
-            and not subtitle.stem.startswith(f"{media.stem}.")
-        ):
-            raise ServiceError(
-                "invalid_external_subtitle",
-                "External subtitle must be beside the Media and share its stem",
-            )
-        source_format = EXTERNAL_FORMATS.get(subtitle.suffix.casefold())
-        if source_format is None:
-            raise ServiceError(
-                "unsupported_subtitle_format",
-                "External subtitle must use a supported extension",
-            )
+        if subtitle is not None:
+            if not subtitle.is_file():
+                raise ServiceError(
+                    "invalid_external_subtitle", "External subtitle does not exist"
+                )
+            if subtitle.parent != media.parent or (
+                subtitle.stem != media.stem
+                and not subtitle.stem.startswith(f"{media.stem}.")
+            ):
+                raise ServiceError(
+                    "invalid_external_subtitle",
+                    "External subtitle must be beside the Media and share its stem",
+                )
+            external_format = EXTERNAL_FORMATS.get(subtitle.suffix.casefold())
+            if external_format is None:
+                raise ServiceError(
+                    "unsupported_subtitle_format",
+                    "External subtitle must use a supported extension",
+                )
+            source_format = external_format
         output_suffix = (
             request.target_language_code
             if request.output_suffix is None
@@ -246,7 +289,7 @@ class Jobs:
             status = record.get("status")
             assert isinstance(job_id, str)
             assert isinstance(status, str)
-            if status in {"Queued", "Translating"}:
+            if status in {"Queued", "Extracting", "Translating"}:
                 interrupted = _interrupted_record(record)
                 record.update(interrupted)
                 with suppress(OSError):
@@ -281,16 +324,43 @@ class Jobs:
                 return
             with self._lock:
                 record = self._records[job_id]
-                record["status"] = "Translating"
-                record["started_at"] = _timestamp()
                 request = record["request"]
                 assert isinstance(request, dict)
+                embedded = "stream_index" in request
+                record["status"] = "Extracting" if embedded else "Translating"
+                record["started_at"] = _timestamp()
                 output_path = self._execution_output_path(request)
                 request["output_path"] = str(output_path.relative_to(self._media_root))
                 self._write_record(job_id, record)
         assert isinstance(request, dict)
         work_directory = self._jobs_root / job_id
+        extracting = "stream_index" in request
         try:
+            if extracting:
+                if self._extraction is None:
+                    raise ServiceError(
+                        "extraction_unavailable",
+                        "Embedded subtitle Extraction is unavailable",
+                    )
+                source_format = str(request["source_format"])
+                subtitle_path = work_directory / f"source.{source_format}"
+                self._extraction.extract(
+                    ExtractRequest(
+                        self._media_root / str(request["media_path"]),
+                        int(request["stream_index"]),
+                        subtitle_path,
+                    )
+                )
+                extracting = False
+                with self._lifecycle_lock:
+                    if self._closed.is_set():
+                        return
+                    with self._lock:
+                        record = self._records[job_id]
+                        record["status"] = "Translating"
+                        self._write_record(job_id, record)
+            else:
+                subtitle_path = self._media_root / str(request["subtitle_path"])
             term_map_path: Path | None = None
             term_map = request.get("term_map")
             if isinstance(term_map, dict):
@@ -312,7 +382,7 @@ class Jobs:
                 ),
             ).translate(
                 TranslateRequest(
-                    self._media_root / str(request["subtitle_path"]),
+                    subtitle_path,
                     str(request["target_language_code"]),
                     self._media_root / str(request["output_path"]),
                     work_directory,
@@ -323,13 +393,18 @@ class Jobs:
                 )
             )
         except ServiceError as error:
+            context = self._error_context(error.context)
+            if embedded:
+                context = _embedded_error_context(
+                    context, request, self._media_root, work_directory
+                )
             self._finish_if_active(
                 job_id,
                 "Failed",
                 {
                     "code": error.error_code,
                     "message": error.message,
-                    **self._error_context(error.context),
+                    **context,
                 },
             )
             return
@@ -338,7 +413,19 @@ class Jobs:
             self._finish_if_active(
                 job_id,
                 "Failed",
-                {"code": "translation_failed", "message": "Translation failed"},
+                {
+                    "code": "extraction_failed" if extracting else "translation_failed",
+                    "message": "Extraction failed"
+                    if extracting
+                    else "Translation failed",
+                    **(
+                        _embedded_error_context(
+                            {}, request, self._media_root, work_directory
+                        )
+                        if embedded
+                        else {}
+                    ),
+                },
             )
             return
 
@@ -440,6 +527,38 @@ class Jobs:
             temporary.unlink(missing_ok=True)
 
 
+def _source_format(value: str | None) -> str:
+    if not isinstance(value, str) or value.casefold() not in EXTERNAL_FORMATS.values():
+        raise ServiceError(
+            "unsupported_subtitle_format",
+            "Embedded subtitle format must be srt, ass, or vtt",
+        )
+    return value.casefold()
+
+
+def _embedded_error_context(
+    context: dict[str, object],
+    request: dict[str, object],
+    media_root: Path,
+    work_directory: Path,
+) -> dict[str, object]:
+    context = dict(context)
+    context["media_path"] = request["media_path"]
+    context["stream_index"] = request["stream_index"]
+    for key, value in context.items():
+        if key == "output_path" and not Path(str(value)).is_absolute():
+            context[key] = "Job Work directory"
+            continue
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            continue
+        resolved_path = Path(value).resolve()
+        if resolved_path.is_relative_to(media_root):
+            context[key] = str(resolved_path.relative_to(media_root))
+        else:
+            context[key] = "Job Work directory"
+    return context
+
+
 def _interrupted_record(record: dict[str, object]) -> dict[str, object]:
     interrupted = _copy_record(record)
     interrupted["status"] = "Interrupted"
@@ -511,21 +630,17 @@ def _valid_record(record: dict[str, object]) -> bool:
         return False
     if not isinstance(request, dict):
         return False
-    required_request_fields = {
-        "media_path",
-        "subtitle_path",
-        "target_language_code",
-        "output_path",
-        "source_format",
-    }
+    if not _valid_request(request):
+        return False
+    for field in (
+        "dynamic_terminology_enabled",
+        "subtitle_terminology_filter_enabled",
+    ):
+        if field in request and not isinstance(request[field], bool):
+            return False
     term_map = request.get("term_map")
     return (
-        required_request_fields <= request.keys()
-        and all(
-            isinstance(request[field], str) and request[field]
-            for field in required_request_fields
-        )
-        and (
+        (
             "output_suffix" not in request
             or (
                 isinstance(request["output_suffix"], str)
@@ -564,6 +679,30 @@ def _valid_record(record: dict[str, object]) -> bool:
                 )
             )
         )
+    )
+
+
+def _valid_request(request: dict[str, object]) -> bool:
+    required_request_fields = {
+        "media_path",
+        "target_language_code",
+        "output_path",
+        "source_format",
+    }
+    if not required_request_fields <= request.keys() or not all(
+        isinstance(request[field], str) and request[field]
+        for field in required_request_fields
+    ):
+        return False
+    stream_index = request.get("stream_index")
+    subtitle_path = request.get("subtitle_path")
+    if stream_index is None:
+        return isinstance(subtitle_path, str) and bool(subtitle_path)
+    return (
+        isinstance(stream_index, int)
+        and not isinstance(stream_index, bool)
+        and stream_index >= 0
+        and subtitle_path is None
     )
 
 

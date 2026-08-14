@@ -125,6 +125,12 @@ function Translate() {
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
     useState(true);
   const termMaps = useTermMaps();
+  const selectedTermMapId =
+    termMapId !== null &&
+    (termMaps.data === undefined ||
+      termMaps.data.term_maps.some((termMap) => termMap.id === termMapId))
+      ? termMapId
+      : null;
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
   const clearDiscovery = (previousMedia: string | null) => {
@@ -148,8 +154,10 @@ function Translate() {
   const outputSuffixError = validateOutputSuffix(outputSuffix);
   const canSubmit =
     selectedMedia !== null &&
-    selectedCandidate?.kind === "external" &&
-    selectedCandidate.path !== undefined &&
+    ((selectedCandidate?.kind === "external" && selectedCandidate.path !== undefined) ||
+      (selectedCandidate?.kind === "embedded" &&
+        selectedCandidate.stream_index !== undefined &&
+        selectedCandidate.format !== undefined)) &&
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
     status.data?.translation_provider.ready === true &&
@@ -198,7 +206,7 @@ function Translate() {
         <div className="step-index">02</div>
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
-          <p>Select an External subtitle and enter the target language.</p>
+          <p>Select an External or Embedded subtitle and enter the target language.</p>
           <label htmlFor="target-language-code">
             Target language code
             <Input
@@ -213,7 +221,7 @@ function Translate() {
                 if (!suffixEdited.current) setOutputSuffix(value);
               }}
               placeholder="zh-Hans"
-              disabled={selectedCandidate?.kind !== "external"}
+              disabled={selectedCandidate === undefined}
             />
             <datalist id="target-languages">
               {COMMON_TARGET_LANGUAGES.map((language) => (
@@ -250,7 +258,7 @@ function Translate() {
               <label>
                 Term map
                 <select
-                  value={termMapId ?? ""}
+                  value={selectedTermMapId ?? ""}
                   onChange={(event) => setTermMapId(event.target.value || null)}
                 >
                   <option value="">No Term map</option>
@@ -263,7 +271,7 @@ function Translate() {
               </label>
             </div>
           </details>
-          {selectedMedia && selectedCandidate?.path && outputParts && (
+          {selectedMedia && selectedCandidate && outputParts && (
             <div className="output-name-section">
               <span id="output-name-label" className="field-label">
                 Output filename
@@ -336,14 +344,26 @@ function Translate() {
         <Button
           disabled={!canSubmit}
           onClick={() => {
-            if (selectedMedia && selectedCandidate?.path) {
+            if (
+              selectedMedia &&
+              selectedCandidate &&
+              ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
+                (selectedCandidate.kind === "embedded" &&
+                  selectedCandidate.stream_index !== undefined &&
+                  selectedCandidate.format))
+            ) {
               const request = {
                 media_path: selectedMedia,
-                subtitle_path: selectedCandidate.path,
+                ...(selectedCandidate.kind === "external"
+                  ? { subtitle_path: selectedCandidate.path }
+                  : {
+                      stream_index: selectedCandidate.stream_index,
+                      source_format: selectedCandidate.format,
+                    }),
                 target_language_code: targetLanguage,
                 output_suffix: outputSuffix,
                 output_conflict_policy: outputConflictPolicy,
-                term_map_id: termMapId,
+                term_map_id: selectedTermMapId,
                 dynamic_terminology_enabled: dynamicTerminologyEnabled,
                 subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
               };
@@ -797,8 +817,14 @@ function JobsPage() {
               <small className="job-id">Job {job.id.slice(0, 8)}</small>
               <strong>{job.request.media_path}</strong>
               <p>
-                {job.request.subtitle_path} to {job.request.target_language_code}
+                {job.request.subtitle_path
+                  ? job.request.subtitle_path
+                  : `Embedded stream ${job.request.stream_index}`}{" "}
+                to {job.request.target_language_code}
               </p>
+              {job.request.term_map && (
+                <small>Term map: {job.request.term_map.name}</small>
+              )}
               {job.queue_position !== null && job.queue_position !== undefined && (
                 <small>Queue position {job.queue_position}</small>
               )}
@@ -816,7 +842,15 @@ function JobsPage() {
                     <dd>{job.error.code}</dd>
                   </div>
                   {Object.entries(job.error)
-                    .filter(([key]) => ["field", "path", "stream_index"].includes(key))
+                    .filter(([key]) =>
+                      [
+                        "field",
+                        "media_path",
+                        "output_path",
+                        "path",
+                        "stream_index",
+                      ].includes(key),
+                    )
                     .map(([key, value]) => (
                       <div key={key}>
                         <dt>{key}</dt>

@@ -5,17 +5,6 @@ from pathlib import Path
 from .application.errors import ServiceError
 
 EXTERNAL_FORMATS = {".srt": "srt", ".ass": "ass", ".vtt": "vtt"}
-TEXT_CODEC_FORMATS = {
-    "ass": "ass",
-    "ssa": "ass",
-    "subrip": "srt",
-    "srt": "srt",
-    "webvtt": "vtt",
-    "mov_text": "srt",
-    "text": "srt",
-    "hdmv_text_subtitle": "srt",
-    "substation_alpha": "ass",
-}
 EXTRACT_CODEC_FORMATS = {
     "ass": "ass",
     "ssa": "ass",
