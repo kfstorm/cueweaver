@@ -36,6 +36,7 @@ docker run --detach --name "$CONTAINER" \
   --env CUEWEAVER_MEDIA_ROOT=/media \
   --env CUEWEAVER_WORK_ROOT=/work \
   --env CUEWEAVER_E2E_FAKE_TRANSLATOR=1 \
+  --env CUEWEAVER_E2E_MODE=release \
   --volume "$ROOTS/media:/media" \
   --volume "$ROOTS/work:/work" \
   "$IMAGE" >/dev/null
@@ -44,7 +45,18 @@ for _attempt in {1..30}; do
   if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
     CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
       pnpm --dir web test:e2e
-    exit 0
+    docker restart "$CONTAINER" >/dev/null
+    for _restart_attempt in {1..30}; do
+      if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
+        CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
+          CUEWEAVER_E2E_PHASE=restart \
+          pnpm --dir web exec playwright test --grep "production restart preserves"
+        exit 0
+      fi
+      sleep 1
+    done
+    docker logs "$CONTAINER"
+    exit 1
   fi
   sleep 1
 done

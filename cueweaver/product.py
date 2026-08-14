@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -24,6 +25,7 @@ PROVIDER_MESSAGE = (
     "Configure a provider in PySubtrans service settings, then restart CueWeaver."
 )
 E2E_FAKE_TRANSLATOR_ENV = "CUEWEAVER_E2E_FAKE_TRANSLATOR"
+E2E_MODE_ENV = "CUEWEAVER_E2E_MODE"
 
 
 def create_product_app(
@@ -131,7 +133,10 @@ def _configured_product_inputs(
     work_root = _root_from_env(WORK_ROOT_ENV)
     if translator is not None:
         configured_translator = translator
-    elif os.environ.get(E2E_FAKE_TRANSLATOR_ENV) == "1":
+    elif (
+        os.environ.get(E2E_FAKE_TRANSLATOR_ENV) == "1"
+        and os.environ.get(E2E_MODE_ENV) == "release"
+    ):
         configured_translator = _E2EFakeTranslator()
     else:
         configured_translator = PySubtransTranslator()
@@ -140,6 +145,10 @@ def _configured_product_inputs(
 
 class _E2EFakeTranslator:
     available = True
+
+    def __init__(self) -> None:
+        self._attempts: dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def translate(
         self,
@@ -153,6 +162,15 @@ class _E2EFakeTranslator:
     ) -> bytes:
         del user_overrides, work_directory, dynamic_terminology_enabled
         del subtitle_terminology_filter_enabled
+        if not _source.is_file():
+            raise RuntimeError("deterministic fake source is missing")
+        with self._lock:
+            attempt = self._attempts.get(_target_language, 0)
+            self._attempts[_target_language] = attempt + 1
+        if _target_language.startswith("e2e-fail"):
+            raise RuntimeError("deterministic fake translation failure")
+        if _target_language.startswith("e2e-retry") and attempt == 0:
+            raise RuntimeError("deterministic fake first-attempt failure")
         time.sleep(1)
         return b"1\n00:00:00,000 --> 00:00:01,000\nFake translation\n"
 

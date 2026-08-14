@@ -163,14 +163,44 @@ async function stubMutableJobs(
 async function readJobs(page: Page) {
   const response = await page.request.get("/api/jobs");
   return (await response.json()).jobs as Array<{
+    id: string;
     request: {
       target_language_code: string;
       stream_index?: number;
       source_format?: string;
+      output_path?: string;
+      term_map?: { name: string; content: Record<string, string> } | null;
     };
     status: string;
     queue_position?: number | null;
+    error?: { code: string; message: string } | null;
+    extraction?: {
+      status: string;
+      path: string;
+      format: string;
+      content_digest: string;
+    } | null;
   }>;
+}
+
+async function waitForJob(
+  page: Page,
+  targetLanguage: string,
+  status: string,
+  timeout = 15_000,
+) {
+  await expect
+    .poll(
+      async () =>
+        (await readJobs(page)).find(
+          (job) => job.request.target_language_code === targetLanguage,
+        )?.status,
+      { timeout },
+    )
+    .toBe(status);
+  return (await readJobs(page)).find(
+    (job) => job.request.target_language_code === targetLanguage,
+  )!;
 }
 
 async function startRealTranslation(
@@ -212,6 +242,24 @@ test("mobile primary actions meet the touch target", async ({ page }) => {
   const box = await button.boundingBox();
 
   expect(box?.height).toBeGreaterThanOrEqual(44);
+});
+
+test("Translate source and subtitle selection work with the keyboard", async ({
+  page,
+}) => {
+  await page.goto("/translate");
+
+  const media = page.getByRole("button", { name: "Select Example movie" });
+  await media.focus();
+  await media.press("Enter");
+  await expect(media).toHaveAttribute("aria-pressed", "true");
+
+  const subtitle = page.getByRole("button", {
+    name: /Select external subtitle en \(Example\.en\.srt\)/,
+  });
+  await subtitle.focus();
+  await subtitle.press("Enter");
+  await expect(subtitle).toHaveAttribute("aria-pressed", "true");
 });
 
 test.describe("Job history layouts", () => {
@@ -817,4 +865,142 @@ test.describe("real translation workflow", () => {
       )
       .toEqual(["Completed", "Completed", "Completed"]);
   });
+});
+
+test("production release matrix covers durable Job behavior", async ({ page }) => {
+  test.skip(process.env.CUEWEAVER_E2E_PHASE === "restart");
+
+  const termMapResponse = await page.request.post("/api/term-maps", {
+    data: {
+      name: "Release matrix terms",
+      content: { Captain: "队长", Ship: "舰船" },
+    },
+  });
+  expect(termMapResponse.ok()).toBeTruthy();
+  const termMap = await termMapResponse.json();
+
+  const external = await page.request.post("/api/jobs", {
+    data: {
+      media_path: "Example.mkv",
+      subtitle_path: "Example.en.srt",
+      target_language_code: "e2e-term-map",
+      term_map_id: termMap.id,
+    },
+  });
+  expect(external.ok()).toBeTruthy();
+  const completedExternal = await waitForJob(page, "e2e-term-map", "Completed");
+  expect(completedExternal.request.term_map).toMatchObject({
+    name: "Release matrix terms",
+    content: { Captain: "队长", Ship: "舰船" },
+  });
+
+  const embedded = await page.request.post("/api/jobs", {
+    data: {
+      media_path: "Example.mkv",
+      stream_index: 1,
+      source_format: "srt",
+      target_language_code: "e2e-embedded",
+    },
+  });
+  expect(embedded.ok()).toBeTruthy();
+  const completedEmbedded = await waitForJob(page, "e2e-embedded", "Completed");
+  expect(completedEmbedded.request.stream_index).toBe(1);
+  expect(completedEmbedded.request.source_format).toBe("srt");
+  expect(completedEmbedded.extraction).toMatchObject({
+    status: "Completed",
+    path: "source.srt",
+    format: "srt",
+  });
+  expect(completedEmbedded.extraction?.content_digest).toMatch(/^[0-9a-f]{64}$/);
+
+  for (const targetLanguage of ["e2e-retry-external", "e2e-retry-embedded"]) {
+    const request =
+      targetLanguage === "e2e-retry-external"
+        ? {
+            media_path: "Example.mkv",
+            subtitle_path: "Example.en.srt",
+            target_language_code: targetLanguage,
+          }
+        : {
+            media_path: "Example.mkv",
+            stream_index: 1,
+            source_format: "srt",
+            target_language_code: targetLanguage,
+          };
+    const created = await page.request.post("/api/jobs", { data: request });
+    expect(created.ok()).toBeTruthy();
+    const failed = await waitForJob(page, targetLanguage, "Failed");
+    expect(failed.error?.code).toBe("translation_failed");
+    const retried = await page.request.post(`/api/jobs/${failed.id}/retry`);
+    expect(retried.ok()).toBeTruthy();
+    const retriedJob = await waitForJob(page, targetLanguage, "Completed");
+    expect(retriedJob.id).toBe(failed.id);
+  }
+
+  const numberedRequest = {
+    media_path: "Example.mkv",
+    subtitle_path: "Example.en.srt",
+    target_language_code: "e2e-number-one",
+    output_suffix: "release-number",
+  };
+  const firstNumbered = await page.request.post("/api/jobs", {
+    data: numberedRequest,
+  });
+  expect(firstNumbered.ok()).toBeTruthy();
+  const firstNumberedJob = await waitForJob(page, "e2e-number-one", "Completed");
+  expect(firstNumberedJob.request.output_path).toBe("Example.release-number.srt");
+  const secondNumbered = await page.request.post("/api/jobs", {
+    data: { ...numberedRequest, target_language_code: "e2e-number-two" },
+  });
+  expect(secondNumbered.ok()).toBeTruthy();
+  const secondNumberedJob = await waitForJob(page, "e2e-number-two", "Completed");
+  expect(secondNumberedJob.request.output_path).toBe("Example.release-number.2.srt");
+
+  const overwriteRequest = {
+    media_path: "Example.mkv",
+    subtitle_path: "Example.en.srt",
+    output_suffix: "release-overwrite",
+    output_conflict_policy: "overwrite",
+  };
+  const overwriteFirst = await page.request.post("/api/jobs", {
+    data: { ...overwriteRequest, target_language_code: "e2e-overwrite-one" },
+  });
+  expect(overwriteFirst.ok()).toBeTruthy();
+  await waitForJob(page, "e2e-overwrite-one", "Completed");
+  const overwriteSecond = await page.request.post("/api/jobs", {
+    data: { ...overwriteRequest, target_language_code: "e2e-overwrite-two" },
+  });
+  expect(overwriteSecond.ok()).toBeTruthy();
+  const overwriteSecondJob = await waitForJob(page, "e2e-overwrite-two", "Completed");
+  expect(overwriteSecondJob.request.output_path).toBe("Example.release-overwrite.srt");
+
+  const permanentFailure = await page.request.post("/api/jobs", {
+    data: {
+      media_path: "Example.mkv",
+      subtitle_path: "Example.en.srt",
+      target_language_code: "e2e-fail-permanent",
+    },
+  });
+  expect(permanentFailure.ok()).toBeTruthy();
+  const failedJob = await waitForJob(page, "e2e-fail-permanent", "Failed");
+  const deleted = await page.request.delete(`/api/jobs/${failedJob.id}`);
+  expect(deleted.ok()).toBeTruthy();
+  expect((await readJobs(page)).some((job) => job.id === failedJob.id)).toBe(false);
+
+  const restartMarker = await page.request.post("/api/jobs", {
+    data: {
+      media_path: "Example.mkv",
+      subtitle_path: "Example.en.srt",
+      target_language_code: "e2e-restart-marker",
+    },
+  });
+  expect(restartMarker.ok()).toBeTruthy();
+  await waitForJob(page, "e2e-restart-marker", "Completed");
+});
+
+test("production restart preserves terminal Job history", async ({ page }) => {
+  test.skip(process.env.CUEWEAVER_E2E_PHASE !== "restart");
+
+  const marker = await waitForJob(page, "e2e-restart-marker", "Completed");
+  expect(marker.request.media_path).toBe("Example.mkv");
 });

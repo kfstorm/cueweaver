@@ -262,8 +262,11 @@ function Translate() {
               <label>
                 Term map
                 <select
+                  id="term-map-select"
+                  aria-label="Term map selector"
                   value={selectedTermMapId ?? ""}
                   onChange={(event) => setTermMapId(event.target.value || null)}
+                  disabled={termMaps.isPending || termMaps.isError}
                 >
                   <option value="">No Term map</option>
                   {(termMaps.data?.term_maps ?? []).map((termMap) => (
@@ -272,6 +275,16 @@ function Translate() {
                     </option>
                   ))}
                 </select>
+                {termMaps.isPending && (
+                  <span className="field-help" role="status">
+                    Loading Term maps
+                  </span>
+                )}
+                {termMaps.isError && (
+                  <span className="form-error" role="alert">
+                    {termMaps.error.message}
+                  </span>
+                )}
               </label>
             </div>
           </details>
@@ -942,6 +955,9 @@ function TermMapsPage() {
             {maps.isError && (
               <div className="inline-state error" role="alert">
                 {maps.error.message}
+                <Button variant="outline" onClick={() => void maps.refetch()}>
+                  Try again
+                </Button>
               </div>
             )}
             {maps.data?.term_maps?.length === 0 && (
@@ -1043,6 +1059,9 @@ function TermMapsPage() {
             {selected.isError && (
               <div className="inline-state error" role="alert">
                 {selected.error.message}
+                <Button variant="outline" onClick={() => void selected.refetch()}>
+                  Try again
+                </Button>
               </div>
             )}
             {selected.data && (

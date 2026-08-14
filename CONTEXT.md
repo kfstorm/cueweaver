@@ -1,9 +1,10 @@
 # CueWeaver
 
 CueWeaver is a locally deployed Web subtitle product. Its official
-single-worker ASGI server hosts the product shell and API while the existing
-explicit-path operations remain available during product expansion. Media and
-working directories are mounted into the server container.
+single-worker ASGI server hosts the product shell and constrained product API.
+Media and working directories are mounted into the server container. The Web
+workflow is the supported public interface; dependency-injection and
+application-operation seams remain available for embedding and tests.
 
 ## Language
 

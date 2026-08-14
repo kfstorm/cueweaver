@@ -14,18 +14,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ..application.errors import ServiceError
 from ..application.term_maps import TermMaps
 from .browse import BrowseOperation, register_browse
-from .discover import DiscoveryOperation, register_discover
-from .extract import ExtractionOperation, register_extract
 from .jobs import JobsOperation, register_jobs
-from .media_discover import register_media_discover
+from .media_discover import DiscoveryOperation, register_media_discover
 from .term_maps import register_term_maps
-from .translate import TranslationOperation, register_translate
 
 BUSINESS_ROUTES = frozenset(
     {
-        "/api/discover",
-        "/api/extract",
-        "/api/translate",
         "/api/term-maps",
         "/api/media/browse",
         "/api/media/discover",
@@ -37,12 +31,6 @@ BUSINESS_ROUTES = frozenset(
 class Application(Protocol):
     @property
     def discovery(self) -> DiscoveryOperation: ...
-
-    @property
-    def extraction(self) -> ExtractionOperation: ...
-
-    @property
-    def translation(self) -> TranslationOperation: ...
 
     @property
     def term_maps(self) -> TermMaps: ...
@@ -94,9 +82,6 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
                 )
         return await call_next(request)
 
-    register_discover(app, application)
-    register_extract(app, application)
-    register_translate(app, application)
     register_term_maps(app, application)
     if getattr(application, "browsing", None) is not None:
         register_browse(app, application)
