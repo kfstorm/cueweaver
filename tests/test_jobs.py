@@ -23,14 +23,22 @@ class FakeTranslator:
         delay: threading.Event | None = None,
         error: Exception | None = None,
         available: bool = True,
+        started: threading.Event | None = None,
+        release: threading.Event | None = None,
     ):
         self.available = available
         self.delay = delay
         self.error = error
+        self.started = started
+        self.release = release
         self.sources: list[Path] = []
 
     def translate(self, source: Path, target_language: str, **kwargs: object) -> bytes:
         self.sources.append(source)
+        if self.started is not None:
+            self.started.set()
+        if self.release is not None:
+            self.release.wait(timeout=5)
         if self.delay is not None:
             self.delay.wait(timeout=5)
         if self.error is not None:
@@ -198,13 +206,15 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     extracting = threading.Event()
     release = threading.Event()
+    translating = threading.Event()
+    translation_release = threading.Event()
     media_adapter = MediaExtractorFixture(
         [{"index": 3, "codec_name": codec}],
         started=extracting,
         release=release,
     )
     extraction = Extraction(media_adapter, AtomicOutputPublisher())
-    translator = FakeTranslator()
+    translator = FakeTranslator(started=translating, release=translation_release)
 
     jobs = Jobs(
         translator,
@@ -221,6 +231,7 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
             source_format=source_format,
         )
     )
+    assert queued["status"] == "Queued"
 
     assert extracting.wait(timeout=5)
     extracting_record = jobs.get(str(queued["id"]))
@@ -229,6 +240,9 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     assert extracting_record["request"]["stream_index"] == 3
 
     release.set()
+    assert translating.wait(timeout=5)
+    assert jobs.get(str(queued["id"]))["status"] == "Translating"
+    translation_release.set()
     deadline = time.monotonic() + 5
     while jobs.get(str(queued["id"]))["status"] != "Completed":
         if time.monotonic() >= deadline:
