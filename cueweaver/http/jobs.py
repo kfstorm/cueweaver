@@ -4,6 +4,7 @@ from typing import Literal, Protocol
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
 
 from ..application.jobs import CreateJobRequest
 
@@ -26,6 +27,10 @@ class JobsOperation(Protocol):
     def create(self, request: CreateJobRequest) -> dict[str, object]: ...
 
     def retry(self, job_id: str) -> dict[str, object]: ...
+
+    def delete(self, job_id: str) -> dict[str, object]: ...
+
+    def clear_completed(self) -> dict[str, object]: ...
 
     def list(self) -> list[dict[str, object]]: ...
 
@@ -63,9 +68,24 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     def list_jobs() -> dict[str, object]:
         return {"jobs": application.jobs.list()}
 
+    @app.delete("/api/jobs/completed")
+    def clear_completed_jobs() -> dict[str, object]:
+        return application.jobs.clear_completed()
+
+    @app.get("/api/jobs/completed")
+    def get_completed_jobs_route_not_found() -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"error_code": "not_found", "message": "Resource not found"},
+        )
+
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
         return application.jobs.get(job_id)
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str) -> dict[str, object]:
+        return application.jobs.delete(job_id)
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry_job(job_id: str) -> dict[str, object]:

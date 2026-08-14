@@ -10,6 +10,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "./components/ui/button";
 import {
   APPROVED_ERROR_CONTEXT_KEYS,
+  useClearCompletedJobs,
+  useDeleteJob,
   useJob,
   useJobs,
   useRetryJob,
@@ -71,10 +73,42 @@ function JobToast({
 export function JobsPage() {
   const { jobId } = useParams();
   const navigate = useNavigate();
+  const listTitleRef = useRef<HTMLHeadingElement>(null);
+  const focusListOnReturn = useRef(false);
   const jobs = useJobs({ poll: false });
+  const clearCompleted = useClearCompletedJobs();
   const selected = jobs.data?.find((job) => job.id === jobId) ?? null;
   const detail = useJob(jobId ?? null, selected === null);
   const displayedJob = selected ?? detail.data;
+  const completedCount =
+    jobs.data?.filter((job) => job.status === "Completed").length ?? 0;
+
+  const clearCompletedJobs = () => {
+    if (
+      !window.confirm(
+        `Clear ${completedCount} completed Job${completedCount === 1 ? "" : "s"}? This removes their history and residual Work data.`,
+      )
+    ) {
+      return;
+    }
+    clearCompleted.mutate(undefined, {
+      onSuccess: (result) => {
+        if (jobId && result.deleted.includes(jobId)) returnToJobList();
+      },
+    });
+  };
+
+  const returnToJobList = () => {
+    focusListOnReturn.current = true;
+    navigate("/jobs");
+  };
+
+  useEffect(() => {
+    if (!jobId && focusListOnReturn.current) {
+      focusListOnReturn.current = false;
+      listTitleRef.current?.focus();
+    }
+  }, [jobId]);
 
   return (
     <>
@@ -90,10 +124,43 @@ export function JobsPage() {
           <div className="section-heading job-list-heading">
             <div>
               <p className="eyebrow">History</p>
-              <h2 id="job-list-title">All Jobs</h2>
+              <h2 id="job-list-title" ref={listTitleRef} tabIndex={-1}>
+                All Jobs
+              </h2>
             </div>
-            {jobs.data && <span className="count-badge">{jobs.data.length}</span>}
+            <div className="job-list-actions">
+              {jobs.data && (
+                <span className="count-badge">{jobs.data.length} total</span>
+              )}
+              <Button
+                variant="outline"
+                type="button"
+                disabled={completedCount === 0 || clearCompleted.isPending}
+                onClick={clearCompletedJobs}
+              >
+                {clearCompleted.isPending
+                  ? "Clearing..."
+                  : `Clear Completed (${completedCount})`}
+              </Button>
+            </div>
           </div>
+          {clearCompleted.isError && (
+            <p className="form-error" role="alert">
+              {clearCompleted.error.message}
+            </p>
+          )}
+          {clearCompleted.data && clearCompleted.data.failed.length > 0 && (
+            <div className="form-error" role="alert">
+              <p>Some Completed Jobs could not be cleared.</p>
+              <ul>
+                {clearCompleted.data.failed.map((failure) => (
+                  <li key={failure.id}>
+                    Job {failure.id.slice(0, 8)}: {failure.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="job-list-state">
             {jobs.isPending && (
               <div className="inline-state" role="status">
@@ -149,7 +216,11 @@ export function JobsPage() {
           {jobId &&
             displayedJob &&
             (selected || (!detail.isPending && !detail.isError)) && (
-              <JobDetail job={displayedJob} onBack={() => navigate("/jobs")} />
+              <JobDetail
+                job={displayedJob}
+                onBack={() => navigate("/jobs")}
+                onDeleted={returnToJobList}
+              />
             )}
         </section>
       </div>
@@ -195,10 +266,23 @@ function JobListItem({
   );
 }
 
-function JobDetail({ job, onBack }: { job: Job; onBack: () => void }) {
+function JobDetail({
+  job,
+  onBack,
+  onDeleted,
+}: {
+  job: Job;
+  onBack: () => void;
+  onDeleted: () => void;
+}) {
   const retryJob = useRetryJob();
+  const deleteJob = useDeleteJob();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const retryable = job.status === "Failed" || job.status === "Interrupted";
+  const deletable =
+    job.status === "Completed" ||
+    job.status === "Failed" ||
+    job.status === "Interrupted";
   const termMap = job.request.term_map;
 
   useEffect(() => {
@@ -239,9 +323,32 @@ function JobDetail({ job, onBack }: { job: Job; onBack: () => void }) {
             {retryJob.isPending ? "Retrying..." : "Retry Job"}
           </Button>
         )}
+        {deletable && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={deleteJob.isPending}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete Job ${job.id.slice(0, 8)}? This removes its history and residual Work data but preserves Media and published output.`,
+                )
+              ) {
+                deleteJob.mutate(job.id, { onSuccess: onDeleted });
+              }
+            }}
+          >
+            {deleteJob.isPending ? "Deleting..." : "Delete Job"}
+          </Button>
+        )}
         {retryJob.isError && (
           <p className="form-error" role="alert">
             {retryJob.error.message}
+          </p>
+        )}
+        {deleteJob.isError && (
+          <p className="form-error" role="alert">
+            {deleteJob.error.message}
           </p>
         )}
       </div>

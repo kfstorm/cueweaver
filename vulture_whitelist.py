@@ -29,6 +29,9 @@ create_job
 list_jobs
 get_job
 retry_job
+clear_completed_jobs
+get_completed_jobs_route_not_found
+delete_job
 
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
