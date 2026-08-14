@@ -237,8 +237,7 @@ def test_product_rejects_unknown_api_head_paths(tmp_path: Path, path: str):
 
 
 @pytest.mark.parametrize(
-    ("method", "path"),
-    [("GET", "/api/discover"), ("POST", "/api/status")],
+    ("method", "path"), [("GET", "/api/media/browse"), ("POST", "/api/status")]
 )
 def test_product_preserves_method_mismatch_for_known_api_paths(
     tmp_path: Path, method: str, path: str
@@ -284,34 +283,8 @@ def test_development_factory_returns_structured_api_404(
     }
 
 
-@pytest.mark.parametrize(
-    ("path", "body", "error_code"),
-    [
-        (
-            "/api/discover",
-            {"media_path": "missing.mkv"},
-            "media_not_found",
-        ),
-        (
-            "/api/extract",
-            {"media_path": "missing.mkv", "stream_index": 1, "output_path": "x.srt"},
-            "media_not_found",
-        ),
-        (
-            "/api/translate",
-            {
-                "subtitle_path": "missing.srt",
-                "target_language_code": "zh-Hans",
-                "output_path": "output.srt",
-                "work_directory": "work",
-            },
-            "subtitle_not_found",
-        ),
-    ],
-)
-def test_product_keeps_explicit_path_business_routes(
-    tmp_path: Path, path: str, body: dict[str, object], error_code: str
-):
+@pytest.mark.parametrize("path", ["/api/discover", "/api/extract", "/api/translate"])
+def test_product_removes_explicit_path_business_routes(tmp_path: Path, path: str):
     media_root, work_root = configured_roots(tmp_path)
     response = TestClient(
         create_product_app(
@@ -320,10 +293,31 @@ def test_product_keeps_explicit_path_business_routes(
             TranslatorFixture(),
             static_root=static_fixture(tmp_path),
         )
-    ).post(path, json=body)
+    ).post(path, json={})
 
-    assert response.status_code == 400
-    assert response.json()["error_code"] == error_code
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_code": "not_found",
+        "message": "Resource not found",
+    }
+
+
+@pytest.mark.parametrize("path", ["/api/discover", "/api/extract", "/api/translate"])
+def test_development_app_removes_explicit_path_business_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+):
+    media_root, work_root = configured_roots(tmp_path)
+    monkeypatch.setenv("CUEWEAVER_MEDIA_ROOT", str(media_root))
+    monkeypatch.setenv("CUEWEAVER_WORK_ROOT", str(work_root))
+    response = TestClient(
+        create_development_app_from_env(translator=TranslatorFixture())
+    ).post(path, json={})
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error_code": "not_found",
+        "message": "Resource not found",
+    }
 
 
 def test_environment_factory_preserves_a_falsy_injected_translator(

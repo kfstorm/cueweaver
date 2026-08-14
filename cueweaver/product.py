@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-import time
-from collections.abc import Mapping
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -23,7 +21,6 @@ STATIC_ROOT = Path(__file__).parent / "static"
 PROVIDER_MESSAGE = (
     "Configure a provider in PySubtrans service settings, then restart CueWeaver."
 )
-E2E_FAKE_TRANSLATOR_ENV = "CUEWEAVER_E2E_FAKE_TRANSLATOR"
 
 
 def create_product_app(
@@ -131,30 +128,9 @@ def _configured_product_inputs(
     work_root = _root_from_env(WORK_ROOT_ENV)
     if translator is not None:
         configured_translator = translator
-    elif os.environ.get(E2E_FAKE_TRANSLATOR_ENV) == "1":
-        configured_translator = _E2EFakeTranslator()
     else:
         configured_translator = PySubtransTranslator()
     return media_root, work_root, configured_translator
-
-
-class _E2EFakeTranslator:
-    available = True
-
-    def translate(
-        self,
-        _source: Path,
-        _target_language: str,
-        *,
-        user_overrides: Mapping[str, str] | None = None,
-        work_directory: Path,
-        dynamic_terminology_enabled: bool = True,
-        subtitle_terminology_filter_enabled: bool = True,
-    ) -> bytes:
-        del user_overrides, work_directory, dynamic_terminology_enabled
-        del subtitle_terminology_filter_enabled
-        time.sleep(1)
-        return b"1\n00:00:00,000 --> 00:00:01,000\nFake translation\n"
 
 
 def _root_from_env(name: str) -> Path:

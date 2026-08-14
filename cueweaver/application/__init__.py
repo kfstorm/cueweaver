@@ -11,7 +11,7 @@ from .discovery import Discovery
 from .extraction import Extraction
 from .jobs import Jobs
 from .term_maps import TermMaps
-from .translation import Translation, Translator
+from .translation import Translator
 
 
 class CueWeaverApplication:
@@ -31,7 +31,6 @@ class CueWeaverApplication:
         configured_translator = (
             PySubtransTranslator() if translator is None else translator
         )
-        self.translation = Translation(configured_translator, output)
         self.term_maps = TermMaps(FileTermMapStore(work_root or Path.cwd()))
         if work_root is not None and media_root is not None:
             self.jobs = Jobs(

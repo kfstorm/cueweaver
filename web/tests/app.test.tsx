@@ -18,6 +18,10 @@ function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
 
+function emptyMediaResponse() {
+  return jsonResponse({ path: "", entries: [] });
+}
+
 function statusResponse(providerReady = true) {
   return jsonResponse({
     api: { ready: true },
@@ -347,6 +351,56 @@ describe("product shell", () => {
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   });
 
+  it("shows runtime and provider failures without enabling submission", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status")
+        return jsonResponse({ message: "Runtime unavailable" }, false);
+      if (input === "/api/media/browse") {
+        return emptyMediaResponse();
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/translate", fetchMock);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "CueWeaver status is unavailable.",
+    );
+    expect(screen.getByText("Runtime unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("shows Media loading, empty, and retryable error states", async () => {
+    let browseCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/media/browse") {
+        browseCalls += 1;
+        if (browseCalls === 1)
+          return jsonResponse({ message: "Media is unavailable" }, false);
+        return emptyMediaResponse();
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/translate", fetchMock);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Media is unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("This directory is empty.")).toBeInTheDocument();
+    expect(browseCalls).toBe(2);
+  });
+
+  it("shows the Media loading state while browsing is pending", () => {
+    const pending = new Promise<never>(() => undefined);
+    const fetchMock = vi.fn().mockImplementation((input: string) => {
+      if (input === "/api/media/browse") return pending;
+      if (input === "/api/status") return Promise.resolve(statusResponse());
+      return Promise.resolve(jsonResponse({ term_maps: [] }));
+    });
+    renderWithFetch("/translate", fetchMock);
+
+    expect(screen.getByText("Loading Media...")).toBeInTheDocument();
+  });
+
   it("renders a persisted Job with its status and failure context", async () => {
     const fetchMock = jobsFetch({
       id: "job-123456789",
@@ -462,6 +516,29 @@ describe("product shell", () => {
     expect(globalThis.Notification).toBeUndefined();
   });
 
+  it("announces and dismisses a newly observed failed Job", async () => {
+    let currentJob = {
+      ...embeddedJob("job-notice-failed", "Interrupted"),
+      status: "Translating",
+      error: null as { code: string; message: string } | null,
+    };
+    const fetchMock = jobsPageFetch(() => currentJob);
+    const { queryClient } = renderWithFetch("/jobs", fetchMock);
+
+    await screen.findByText("Embedded stream 3 to zh-Hans");
+    currentJob = {
+      ...currentJob,
+      status: "Failed",
+      error: { code: "translation_failed", message: "Translation failed" },
+    };
+    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+
+    const notification = await screen.findByRole("alert");
+    expect(notification).toHaveTextContent("Movie.mkv translation failed");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("pauses Job polling while hidden and refreshes when visible again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
@@ -514,6 +591,82 @@ describe("product shell", () => {
       "This Job is no longer available.",
     );
     expect(screen.getByRole("button", { name: "Back to Jobs" })).toBeInTheDocument();
+  });
+
+  it("shows Job list loading and retryable error states", async () => {
+    let listCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs") {
+        listCalls += 1;
+        if (listCalls === 1)
+          return jsonResponse({ message: "History is unavailable" }, false);
+        return jsonResponse({ jobs: [] });
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "History is unavailable",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByRole("heading", { name: "No Jobs yet" }),
+    ).toBeInTheDocument();
+    expect(listCalls).toBe(2);
+  });
+
+  it("renders queued and running Job states with queue context", async () => {
+    const statuses = ["Queued", "Extracting", "Translating"] as const;
+    for (const status of statuses) {
+      const job = {
+        ...embeddedJob(`state-${status}`, "Failed"),
+        status,
+        queue_position: status === "Queued" ? 2 : null,
+        error: null,
+      };
+      renderWithFetch("/jobs", jobsFetch(job));
+
+      expect(await screen.findByText(status)).toBeInTheDocument();
+      if (status === "Queued") {
+        expect(screen.getByText("Queue position 2")).toBeInTheDocument();
+      }
+      cleanup();
+    }
+  });
+
+  it("shows a delete error and disables retry while a mutation is pending", async () => {
+    const job = embeddedJob("mutation-state-1", "Failed");
+    let resolveRetry!: (value: unknown) => void;
+    const retryPending = new Promise((resolve) => {
+      resolveRetry = resolve;
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
+        if (input.endsWith("/retry")) return retryPending;
+        if (input.endsWith("mutation-state-1") && init?.method === "DELETE") {
+          return jsonResponse({ message: "Job could not be deleted." }, false);
+        }
+        return jsonResponse({ term_maps: [] });
+      });
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
+    expect(await screen.findByRole("button", { name: "Retrying..." })).toBeDisabled();
+    resolveRetry(jsonResponse({ ...job, status: "Queued", error: null }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Retry Job" })).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be deleted");
+    expect(confirm).toHaveBeenCalled();
   });
 
   it("offers retry for a failed External Job without exposing its configuration", async () => {
@@ -750,6 +903,104 @@ describe("product shell", () => {
     });
     expect(screen.getByText("Ship")).toBeInTheDocument();
     expect(screen.queryByText("Captain")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Search Source or Target"), {
+      target: { value: "missing" },
+    });
+    expect(screen.getByText("No matching terms.")).toBeInTheDocument();
+  });
+
+  it("shows Term map list and detail loading states", async () => {
+    let resolveList!: (value: unknown) => void;
+    let resolveDetail!: (value: unknown) => void;
+    const listPending = new Promise((resolve) => {
+      resolveList = resolve;
+    });
+    const detailPending = new Promise((resolve) => {
+      resolveDetail = resolve;
+    });
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") return listPending;
+      if (input === "/api/term-maps/map-1") return detailPending;
+      return jsonResponse({ term_maps: [] });
+    });
+    renderTermMapsWithFetch(fetchMock);
+
+    expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
+    resolveList(jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] }));
+    fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
+    expect(screen.getByText("Loading details")).toBeInTheDocument();
+    resolveDetail(
+      jsonResponse({ ...CHARACTERS_TERM_MAP, content: { Captain: "队长" } }),
+    );
+    expect(await screen.findByText("Captain")).toBeInTheDocument();
+  });
+
+  it("retries a Term map list error and exposes mutation pending states", async () => {
+    let listCalls = 0;
+    let resolveUpload!: (value: unknown) => void;
+    const uploadPending = new Promise((resolve) => {
+      resolveUpload = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/term-maps" && init?.method === "POST") return uploadPending;
+        if (input === "/api/term-maps") {
+          listCalls += 1;
+          if (listCalls === 1)
+            return jsonResponse({ message: "Term maps unavailable" }, false);
+          return jsonResponse({ term_maps: [] });
+        }
+        return jsonResponse({ term_maps: [] });
+      });
+    renderTermMapsWithFetch(fetchMock);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Term maps unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByRole("heading", { name: "No Term maps yet" }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Pending" } });
+    fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
+    expect(await screen.findByRole("button", { name: "Uploading..." })).toBeDisabled();
+    resolveUpload(
+      jsonResponse({
+        id: "pending",
+        name: "Pending",
+        entry_count: 1,
+        updated_at: "2026-08-13T12:00:00Z",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Upload Term map" })).toBeEnabled(),
+    );
+  });
+
+  it("shows and retries a Term map detail error", async () => {
+    let detailCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps")
+        return jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
+      if (input === "/api/term-maps/map-1") {
+        detailCalls += 1;
+        if (detailCalls === 1)
+          return jsonResponse({ message: "Term map detail unavailable" }, false);
+        return jsonResponse({ ...CHARACTERS_TERM_MAP, content: { Captain: "队长" } });
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderTermMapsWithFetch(fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Term map detail unavailable",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Captain")).toBeInTheDocument();
+    expect(detailCalls).toBe(2);
   });
 
   it("renames, replaces, and confirms deletion of a Term map", async () => {
@@ -1040,6 +1291,28 @@ describe("product shell", () => {
     );
   });
 
+  it("announces queueing while Job creation is pending and after success", async () => {
+    renderRoute("/translate");
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    let resolveCreate!: (value: unknown) => void;
+    const createPending = new Promise((resolve) => {
+      resolveCreate = resolve;
+    });
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: string, request?: RequestInit) => {
+      if (input === "/api/jobs" && request?.method === "POST") return createPending;
+      return jsonResponse({ jobs: [] });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+    expect(await screen.findByRole("button", { name: "Queueing..." })).toBeDisabled();
+    resolveCreate(jsonResponse({ id: "queued-1", status: "Queued" }));
+    expect(await screen.findByText("Translation queued")).toBeInTheDocument();
+  });
+
   it("queues an Embedded subtitle with its stream index and format", async () => {
     renderRoute("/translate");
 
@@ -1054,6 +1327,41 @@ describe("product shell", () => {
       stream_index: 3,
       source_format: "ass",
     });
+  });
+
+  it("keeps the Term map control disabled while its list is loading", async () => {
+    const pending = new Promise<never>(() => undefined);
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") return pending;
+      if (input === "/api/media/browse") {
+        return jsonResponse({
+          path: "",
+          entries: [{ kind: "media", name: "Movie.mkv", path: "Movie.mkv" }],
+        });
+      }
+      if (input === "/api/media/discover") {
+        return jsonResponse({
+          path: "Movie.mkv",
+          candidates: [
+            {
+              kind: "external",
+              path: "Movie.en.srt",
+              format: "srt",
+              tags: { language: "en", title: "" },
+            },
+          ],
+          unsupported_candidates: [],
+        });
+      }
+      return jsonResponse({ jobs: [] });
+    });
+    renderWithFetch("/translate", fetchMock);
+    await selectExternalSubtitle();
+    fireEvent.click(screen.getByText("Advanced settings"));
+
+    expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Term map selector" })).toBeDisabled();
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {

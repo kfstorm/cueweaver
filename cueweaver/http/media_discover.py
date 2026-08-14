@@ -1,5 +1,6 @@
 """Product-facing, Media-root-relative Discovery HTTP adapter."""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -13,7 +14,6 @@ from ..application.discovery import (
     UnsupportedCandidateResult,
 )
 from ..application.errors import ServiceError
-from .discover import add_candidate_location
 
 
 class MediaDiscoverBody(BaseModel):
@@ -21,12 +21,12 @@ class MediaDiscoverBody(BaseModel):
     path: str = Field(min_length=1)
 
 
-class MediaDiscoveryOperation(Protocol):
+class DiscoveryOperation(Protocol):
     def discover(self, request: DiscoverRequest) -> DiscoverResult: ...
 
 
 def register_media_discover(
-    app: FastAPI, operation: MediaDiscoveryOperation, media_root: Path
+    app: FastAPI, operation: DiscoveryOperation, media_root: Path
 ) -> None:
     root = media_root.resolve()
 
@@ -106,3 +106,14 @@ def _relative_path(path: Path, media_root: Path) -> str:
             "Discovered subtitle is outside Media root",
         )
     return str(resolved.relative_to(media_root))
+
+
+def add_candidate_location(
+    body: dict[str, object],
+    candidate: SubtitleCandidateResult | UnsupportedCandidateResult,
+    path_formatter: Callable[[Path], str],
+) -> None:
+    if candidate.path is not None:
+        body["path"] = path_formatter(candidate.path)
+    if candidate.stream_index is not None:
+        body["stream_index"] = candidate.stream_index
