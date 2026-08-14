@@ -56,6 +56,15 @@ function jobsFetch(job: unknown) {
   });
 }
 
+function jobsPageFetch(getJobs: () => unknown, details: Record<string, unknown> = {}) {
+  return vi.fn().mockImplementation(async (input: string) => {
+    if (input === "/api/status") return statusResponse();
+    if (input === "/api/jobs") return jsonResponse({ jobs: [getJobs()] });
+    if (input in details) return jsonResponse(details[input]);
+    return jsonResponse({ term_maps: [] });
+  });
+}
+
 function embeddedJob(id: string, status: "Failed" | "Interrupted", target = "zh-Hans") {
   return {
     id,
@@ -374,6 +383,124 @@ describe("product shell", () => {
     fireEvent.click(screen.getByText("Show error details"));
     expect(screen.getByText("translation_failed")).toBeInTheDocument();
     expect(screen.getByText("subtitle")).toBeInTheDocument();
+  });
+
+  it("opens a durable Job detail with local list time and UTC diagnostics", async () => {
+    const job = {
+      id: "job-detail-1",
+      attempt: 2,
+      status: "Completed" as const,
+      created_at: "2026-08-13T12:00:00Z",
+      started_at: "2026-08-13T12:00:01Z",
+      finished_at: "2026-08-13T12:00:02Z",
+      queue_position: null,
+      request: {
+        media_path: "Shows/Movie.mkv",
+        subtitle_path: "Shows/Movie.en.srt",
+        target_language_code: "zh-Hans",
+        term_map: {
+          id: "map-1",
+          name: "Characters",
+          content: { Captain: "队长" },
+        },
+        dynamic_terminology_enabled: true,
+        subtitle_terminology_filter_enabled: true,
+        output_suffix: "zh-Hans",
+        output_conflict_policy: "append-number" as const,
+        output_path: "Shows/Movie.zh-Hans.2.srt",
+        source_format: "srt",
+      },
+      error: null,
+    };
+    const fetchMock = jobsPageFetch(() => job, {
+      "/api/jobs/job-detail-1": job,
+    });
+
+    renderWithFetch("/jobs", fetchMock);
+    fireEvent.click(await screen.findByRole("button", { name: /Shows\/Movie\.mkv/ }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Request summary" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Shows/Movie.mkv" })).toHaveFocus();
+    expect(screen.getByText("Characters")).toBeInTheDocument();
+    expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
+    expect(screen.getAllByText(/13 Aug 2026.*UTC/).length).toBe(3);
+    expect(screen.queryByText(/work\/jobs/)).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-detail-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Jobs" }));
+    expect(
+      await screen.findByRole("heading", { name: "Select a Job" }),
+    ).toBeInTheDocument();
+  });
+
+  it("announces a newly observed completion without browser notification permission", async () => {
+    let currentJob = {
+      ...embeddedJob("job-notice-1", "Interrupted"),
+      status: "Translating",
+      error: null,
+    };
+    const fetchMock = jobsPageFetch(() => currentJob);
+    const { queryClient } = renderWithFetch("/jobs", fetchMock);
+
+    await screen.findByText("Embedded stream 3 to zh-Hans");
+    currentJob = {
+      ...currentJob,
+      status: "Completed",
+      finished_at: "2026-08-13T12:01:00Z",
+    };
+    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+
+    expect(
+      await screen.findByText("Movie.mkv translation completed."),
+    ).toBeInTheDocument();
+    expect(globalThis.Notification).toBeUndefined();
+  });
+
+  it("pauses Job polling while hidden and refreshes when visible again", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs") return jsonResponse({ jobs: [] });
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs", fetchMock);
+    await screen.findByRole("heading", { name: "No Jobs yet" });
+
+    const jobCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => input === "/api/jobs").length;
+    const initialCalls = jobCalls();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(jobCalls()).toBe(initialCalls);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(jobCalls()).toBeGreaterThan(initialCalls));
+  });
+
+  it("shows a stale-selection state when a requested Job is gone", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs") return jsonResponse({ jobs: [] });
+      if (input === "/api/jobs/missing") {
+        return jsonResponse({ message: "Job does not exist" }, false);
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs/missing", fetchMock);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This Job is no longer available.",
+    );
+    expect(screen.getByRole("button", { name: "Back to Jobs" })).toBeInTheDocument();
   });
 
   it("offers retry for a failed External Job without exposing its configuration", async () => {
