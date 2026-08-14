@@ -40,7 +40,12 @@ class _FakeTranslator:
             raise RuntimeError("deterministic fake translation failure")
         if target_language.startswith("e2e-retry") and attempt == 0:
             raise RuntimeError("deterministic fake first-attempt failure")
-        delay = 5 if target_language.startswith("e2e-interrupted") else 1
+        if target_language.startswith("e2e-snapshot-blocker"):
+            delay = 10
+        elif target_language.startswith("e2e-interrupted"):
+            delay = 5
+        else:
+            delay = 1
         time.sleep(delay)
         return b"1\n00:00:00,000 --> 00:00:01,000\nFake translation\n"
 
