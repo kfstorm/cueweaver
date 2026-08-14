@@ -89,6 +89,29 @@ class ApplicationFixture:
         )
 
 
+class JobsApplicationFixture(ApplicationFixture):
+    def __init__(self) -> None:
+        super().__init__()
+        self.jobs = self
+        self.retried_job_id: str | None = None
+
+    def create(self, _request: object) -> dict[str, object]:
+        return {}
+
+    def list(self) -> list[dict[str, object]]:
+        return []
+
+    def get(self, _job_id: str) -> dict[str, object]:
+        return {}
+
+    def retry(self, job_id: str) -> dict[str, object]:
+        self.retried_job_id = job_id
+        return {"id": job_id, "status": "Queued"}
+
+    def close(self) -> None:
+        pass
+
+
 class PublicTranslator:
     def __init__(self, error: bool = False) -> None:
         self.error = error
@@ -169,6 +192,17 @@ def test_http_routes_requests_to_operations_and_serializes_results():
             }
         ],
     }
+
+
+def test_http_retries_a_job_with_no_editable_request_body():
+    application = JobsApplicationFixture()
+    client = TestClient(create_app(application))
+
+    response = client.post("/api/jobs/job-1/retry")
+
+    assert response.status_code == 200
+    assert response.json() == {"id": "job-1", "status": "Queued"}
+    assert application.retried_job_id == "job-1"
 
 
 def post_public_translation(client: TestClient, subtitle: Path, output: Path):

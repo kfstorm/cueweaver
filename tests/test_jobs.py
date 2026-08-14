@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import threading
 import time
@@ -123,6 +124,39 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
     )
 
 
+def create_term_map_job(client: TestClient):
+    term_map = client.post(
+        "/api/term-maps",
+        json={"name": "Characters", "content": {"Captain": "队长"}},
+    ).json()
+    queued = client.post(
+        "/api/jobs",
+        json={
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh-Hans",
+            "term_map_id": term_map["id"],
+        },
+    ).json()
+    return term_map, queued
+
+
+def create_failed_external_job(tmp_path: Path, translator: FakeTranslator):
+    media_root, work_root, media, subtitle = make_roots(tmp_path)
+    jobs = Jobs(translator, media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    return media_root, work_root, media, subtitle, jobs, queued
+
+
+def assert_failed_record_persisted(jobs: Jobs, work_root: Path, job_id: str) -> None:
+    assert jobs.get(job_id)["status"] == "Failed"
+    persisted = json.loads(
+        (work_root / "jobs" / f"{job_id}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["status"] == "Failed"
+
+
 def persisted_external_job(
     tmp_path: Path,
 ) -> tuple[Path, Path, dict[str, object], Path, dict[str, object]]:
@@ -224,6 +258,195 @@ def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
     assert failed["error"]["message"] == "Translation failed"
     assert (work_root / "jobs" / queued["id"]).is_dir()
     assert not (media_root / "Movie.zh-Hans.srt").exists()
+
+
+def test_failed_external_job_retries_in_place_and_reuses_work_directory(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    release.set()
+    translator = RecordingTranslator(release)
+    translator.error = RuntimeError("boom")
+    jobs = Jobs(translator, media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    work_directory = work_root / "jobs" / str(queued["id"])
+    checkpoint_marker = work_directory / "checkpoint-marker"
+    checkpoint_marker.write_text("keep", encoding="utf-8")
+    original_request = json.loads(json.dumps(failed["request"]))
+
+    translator.error = None
+    retried = jobs.retry(str(queued["id"]))
+
+    assert retried["id"] == queued["id"]
+    assert retried["attempt"] == 2
+    assert retried["status"] == "Queued"
+    assert retried["request"] == original_request
+    assert checkpoint_marker.is_file()
+
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert completed["id"] == queued["id"]
+    assert completed["attempt"] == 2
+    assert translator.sources == [subtitle, subtitle]
+    assert (
+        translator.calls[0]["work_directory"] == translator.calls[1]["work_directory"]
+    )
+    assert not work_directory.exists()
+    jobs.close()
+
+
+def test_retry_source_validation_keeps_failed_job_terminal_and_updates_error(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(error=RuntimeError("boom")), media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    subtitle.unlink()
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.retry(str(queued["id"]))
+
+    assert raised.value.error_code == "invalid_external_subtitle"
+    current = jobs.get(str(queued["id"]))
+    assert current["status"] == "Failed"
+    assert current["attempt"] == failed["attempt"] == 1
+    assert current["error"] == {
+        "code": "invalid_external_subtitle",
+        "message": "External subtitle does not exist",
+        "path": "Movie.en.srt",
+    }
+    assert (work_root / "jobs" / str(queued["id"])).is_dir()
+    jobs.close()
+
+
+def test_retry_revalidates_media_and_external_subtitle_paths(tmp_path: Path):
+    media_root, work_root, media, subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(error=RuntimeError("boom")), media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    media.unlink()
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.retry(str(queued["id"]))
+
+    assert raised.value.error_code == "media_not_found"
+    assert raised.value.context == {"path": "Movie.mkv"}
+    assert jobs.get(str(queued["id"]))["status"] == "Failed"
+    assert (work_root / "jobs" / str(queued["id"])).is_dir()
+    media.write_bytes(b"media")
+    subtitle.unlink()
+    with pytest.raises(ServiceError) as raised:
+        jobs.retry(str(queued["id"]))
+    assert raised.value.error_code == "invalid_external_subtitle"
+    jobs.close()
+
+
+def test_retry_uses_the_retained_term_map_snapshot(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    release.set()
+    translator = RecordingTranslator(release)
+    translator.error = RuntimeError("boom")
+
+    with make_client(media_root, work_root, translator) as client:
+        term_map, queued = create_term_map_job(client)
+        wait_for_status(client, queued["id"], "Failed")
+        client.put(
+            f"/api/term-maps/{term_map['id']}",
+            json={"content": {"Captain": "船长"}},
+        )
+        translator.error = None
+
+        client.post(f"/api/jobs/{queued['id']}/retry")
+        wait_for_status(client, queued["id"], "Completed")
+
+    assert translator.calls[0]["user_overrides"] == {"Captain": "队长"}
+    assert translator.calls[1]["user_overrides"] == {"Captain": "队长"}
+
+
+def test_completed_job_rejects_retry_with_a_structured_conflict(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.retry(str(queued["id"]))
+
+    assert raised.value.error_code == "job_retry_conflict"
+    jobs.close()
+
+
+def test_retry_persistence_failure_keeps_job_terminal_and_unqueued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _media_root, work_root, _media, _subtitle, jobs, queued = (
+        create_failed_external_job(tmp_path, FakeTranslator(error=RuntimeError("boom")))
+    )
+    original_write = Jobs._write_record
+
+    def fail_retry_write(jobs: Jobs, job_id: str, record: dict[str, object]) -> None:
+        if record["status"] == "Queued":
+            raise OSError("record unavailable")
+        original_write(jobs, job_id, record)
+
+    monkeypatch.setattr(Jobs, "_write_record", fail_retry_write)
+
+    with pytest.raises(OSError):
+        jobs.retry(str(queued["id"]))
+
+    assert_failed_record_persisted(jobs, work_root, str(queued["id"]))
+    jobs.close()
+
+
+def test_retry_restores_terminal_record_when_directory_sync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _media_root, work_root, _media, _subtitle, jobs, queued = (
+        create_failed_external_job(tmp_path, FakeTranslator(error=RuntimeError("boom")))
+    )
+    original_fsync = os.fsync
+    fsync_calls = 0
+
+    def fail_directory_sync(file_descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
+            raise OSError("directory sync failed")
+        original_fsync(file_descriptor)
+
+    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", fail_directory_sync)
+
+    with pytest.raises(OSError):
+        jobs.retry(str(queued["id"]))
+
+    assert_failed_record_persisted(jobs, work_root, str(queued["id"]))
+    jobs.close()
+
+
+def test_retry_redacts_paths_from_a_malformed_persisted_record(tmp_path: Path):
+    media_root, work_root, _media, _subtitle, jobs, queued = create_failed_external_job(
+        tmp_path, FakeTranslator(error=RuntimeError("boom"))
+    )
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["request"]["media_path"] = str(tmp_path / "private" / "Movie.mkv")
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    jobs.close()
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root)
+    with pytest.raises(ServiceError) as raised:
+        restarted.retry(str(queued["id"]))
+
+    assert raised.value.context == {"media_path": "Movie.mkv"}
+    restarted.close()
 
 
 @pytest.mark.parametrize(
@@ -587,19 +810,7 @@ def test_failed_term_map_job_retains_immutable_working_copy(tmp_path: Path):
     with make_client(
         media_root, work_root, FakeTranslator(error=RuntimeError("boom"))
     ) as client:
-        term_map = client.post(
-            "/api/term-maps",
-            json={"name": "Characters", "content": {"Captain": "队长"}},
-        ).json()
-        queued = client.post(
-            "/api/jobs",
-            json={
-                "media_path": "Movie.mkv",
-                "subtitle_path": "Movie.en.srt",
-                "target_language_code": "zh-Hans",
-                "term_map_id": term_map["id"],
-            },
-        ).json()
+        _term_map, queued = create_term_map_job(client)
 
         failed = wait_for_status(client, queued["id"], "Failed")
 
@@ -776,6 +987,57 @@ def test_job_appends_a_number_to_an_existing_suggested_output(tmp_path: Path):
     assert (media_root / "Movie.zh.2.srt").read_bytes() == SRT
 
 
+def test_retry_recomputes_append_number_from_original_output_name(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    original_output = media_root / "Movie.zh.srt"
+    original_output.write_bytes(b"keep")
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    jobs = Jobs(translator, media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    assert failed["request"]["output_path"] == "Movie.zh.2.srt"
+    original_output.unlink()
+    translator.error = None
+
+    jobs.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert completed["request"]["output_path"] == "Movie.zh.srt"
+    assert original_output.read_bytes() == SRT
+    assert not (media_root / "Movie.zh.2.srt").exists()
+    jobs.close()
+
+
+def test_retry_preserves_overwrite_output_policy_and_atomic_replacement(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    output = media_root / "Movie.zh.srt"
+    output.write_bytes(b"old")
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    jobs = Jobs(translator, media_root, work_root)
+
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            "Movie.en.srt",
+            "zh",
+            output_conflict_policy="overwrite",
+        )
+    )
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    translator.error = None
+
+    retried = jobs.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    assert retried["request"]["output_conflict_policy"] == "overwrite"
+    assert completed["request"]["output_path"] == "Movie.zh.srt"
+    assert output.read_bytes() == SRT
+    jobs.close()
+
+
 def test_queued_jobs_choose_append_numbers_at_execution_time(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     release = threading.Event()
@@ -948,6 +1210,43 @@ def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
         }
 
     assert not translator.started.is_set()
+
+
+def test_external_job_retries_after_restart_recovery(tmp_path: Path):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = "Translating"
+    record["finished_at"] = None
+    record["error"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    work_directory = work_root / "jobs" / queued["id"]
+    work_directory.mkdir()
+    (work_directory / "checkpoint-marker").write_text("keep", encoding="utf-8")
+    translator = FakeTranslator(error=RuntimeError("must not run before retry"))
+
+    restarted = Jobs(translator, media_root, work_root)
+
+    recovered = restarted.get(queued["id"])
+    assert recovered["status"] == "Interrupted"
+    assert recovered["id"] == queued["id"]
+    assert recovered["attempt"] == 1
+    assert recovered["error"] == {
+        "code": "job_interrupted",
+        "message": "Job was interrupted when CueWeaver stopped",
+    }
+    assert (work_directory / "checkpoint-marker").read_text(encoding="utf-8") == "keep"
+    translator.error = None
+
+    retried = restarted.retry(queued["id"])
+    completed = wait_for_status_from_jobs(restarted, queued["id"], "Completed")
+
+    assert retried["id"] == queued["id"]
+    assert retried["attempt"] == 2
+    assert completed["attempt"] == 2
+    assert (media_root / "Movie.zh-Hans.srt").read_bytes() == SRT
+    assert not work_directory.exists()
+    restarted.close()
 
 
 @pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])

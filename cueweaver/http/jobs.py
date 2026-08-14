@@ -25,6 +25,8 @@ class CreateJobBody(BaseModel):
 class JobsOperation(Protocol):
     def create(self, request: CreateJobRequest) -> dict[str, object]: ...
 
+    def retry(self, job_id: str) -> dict[str, object]: ...
+
     def list(self) -> list[dict[str, object]]: ...
 
     def get(self, job_id: str) -> dict[str, object]: ...
@@ -64,3 +66,7 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
         return application.jobs.get(job_id)
+
+    @app.post("/api/jobs/{job_id}/retry")
+    def retry_job(job_id: str) -> dict[str, object]:
+        return application.jobs.retry(job_id)
