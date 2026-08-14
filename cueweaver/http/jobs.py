@@ -11,11 +11,13 @@ from ..application.jobs import CreateJobRequest
 class CreateJobBody(BaseModel):
     model_config = {"extra": "forbid"}
     media_path: str = Field(min_length=1)
-    subtitle_path: str = Field(min_length=1)
+    subtitle_path: str | None = Field(default=None, min_length=1)
     target_language_code: str = Field(min_length=1)
     term_map_id: str | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
+    stream_index: int | None = Field(default=None, strict=True, ge=0)
+    source_format: str | None = Field(default=None, min_length=1)
 
 
 class JobsOperation(Protocol):
@@ -40,12 +42,14 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     def create_job(body: CreateJobBody) -> dict[str, object]:
         return application.jobs.create(
             CreateJobRequest(
-                body.media_path,
-                body.subtitle_path,
-                body.target_language_code,
-                body.term_map_id,
-                body.dynamic_terminology_enabled,
-                body.subtitle_terminology_filter_enabled,
+                media_path=body.media_path,
+                subtitle_path=body.subtitle_path,
+                target_language_code=body.target_language_code,
+                term_map_id=body.term_map_id,
+                dynamic_terminology_enabled=body.dynamic_terminology_enabled,
+                subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,
+                stream_index=body.stream_index,
+                source_format=body.source_format,
             )
         )
 

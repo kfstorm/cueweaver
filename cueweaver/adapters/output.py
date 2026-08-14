@@ -28,7 +28,9 @@ class AtomicOutputPublisher:
         temporary_path: Path | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(
-                dir=output_path.parent, prefix=f".{output_path.name}."
+                dir=output_path.parent,
+                prefix=f".{output_path.name}.",
+                suffix=output_path.suffix,
             )
             temporary_path = Path(temporary_name)
             os.close(descriptor)

@@ -35,7 +35,11 @@ class CueWeaverApplication:
         self.term_maps = TermMaps(FileTermMapStore(work_root or Path.cwd()))
         if work_root is not None and media_root is not None:
             self.jobs = Jobs(
-                configured_translator, media_root, work_root, self.term_maps
+                configured_translator,
+                media_root,
+                work_root,
+                self.term_maps,
+                self.extraction,
             )
 
 

@@ -65,6 +65,33 @@ async function selectExternalSubtitle() {
   return subtitle;
 }
 
+async function selectEmbeddedSubtitle() {
+  fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+  const subtitle = await screen.findByRole("button", {
+    name: "Select embedded subtitle zhs / Chinese",
+  });
+  fireEvent.click(subtitle);
+  return subtitle;
+}
+
+async function expectQueuedJob(source: Record<string, unknown>) {
+  await waitFor(() =>
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jobs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          ...source,
+          target_language_code: "zh-Hans",
+          term_map_id: null,
+          dynamic_terminology_enabled: true,
+          subtitle_terminology_filter_enabled: true,
+        }),
+      }),
+    ),
+  );
+}
+
 async function expectQueuedJobRequest(
   targetLanguage: string,
   termMapId: string | null,
@@ -595,7 +622,26 @@ describe("product shell", () => {
     expect(screen.getByText("Suggested output: Movie.zh-Hans.srt")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
-    await expectQueuedJobRequest("zh-Hans", null, true, true);
+    await expectQueuedJob({
+      media_path: "Movie.mkv",
+      subtitle_path: "Movie.en.srt",
+    });
+  });
+
+  it("queues an Embedded subtitle with its stream index and format", async () => {
+    renderRoute("/translate");
+
+    await selectEmbeddedSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await expectQueuedJob({
+      media_path: "Movie.mkv",
+      stream_index: 3,
+      source_format: "ass",
+    });
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {

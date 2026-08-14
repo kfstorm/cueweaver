@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cueweaver.adapters.output import AtomicOutputPublisher
 from cueweaver.application.errors import ServiceError
+from cueweaver.application.extraction import Extraction
 from cueweaver.application.jobs import CreateJobRequest, Jobs
 from cueweaver.product import create_product_app
 
@@ -21,17 +23,56 @@ class FakeTranslator:
         delay: threading.Event | None = None,
         error: Exception | None = None,
         available: bool = True,
+        started: threading.Event | None = None,
+        release: threading.Event | None = None,
     ):
         self.available = available
         self.delay = delay
         self.error = error
+        self.started = started
+        self.release = release
+        self.sources: list[Path] = []
 
     def translate(self, source: Path, target_language: str, **kwargs: object) -> bytes:
+        self.sources.append(source)
+        if self.started is not None:
+            self.started.set()
+        if self.release is not None:
+            self.release.wait(timeout=5)
         if self.delay is not None:
             self.delay.wait(timeout=5)
         if self.error is not None:
             raise self.error
         return SRT
+
+
+class MediaExtractorFixture:
+    def __init__(
+        self,
+        streams: list[dict[str, object]],
+        *,
+        started: threading.Event | None = None,
+        release: threading.Event | None = None,
+    ):
+        self.streams = streams
+        self.started = started
+        self.release = release
+        self.probe_calls: list[Path] = []
+        self.extract_calls: list[tuple[Path, int, Path]] = []
+
+    def probe_subtitle_streams(self, media_path: Path) -> list[dict[str, object]]:
+        self.probe_calls.append(media_path)
+        return self.streams
+
+    def extract_subtitle(
+        self, media_path: Path, stream_index: int, output_path: Path
+    ) -> None:
+        self.extract_calls.append((media_path, stream_index, output_path))
+        if self.started is not None:
+            self.started.set()
+        if self.release is not None:
+            self.release.wait(timeout=5)
+        output_path.write_bytes(SRT)
 
 
 class RecordingTranslator(FakeTranslator):
@@ -88,6 +129,18 @@ def wait_for_status(
     while time.monotonic() < deadline:
         response = client.get(f"/api/jobs/{job_id}")
         body = response.json()
+        if body["status"] == expected:
+            return body
+        time.sleep(0.01)
+    pytest.fail(f"Job did not reach {expected}")
+
+
+def wait_for_status_from_jobs(
+    jobs: Jobs, job_id: str, expected: str
+) -> dict[str, object]:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        body = jobs.get(job_id)
         if body["status"] == expected:
             return body
         time.sleep(0.01)
@@ -151,6 +204,182 @@ def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
     assert failed["error"]["message"] == "Translation failed"
     assert (work_root / "jobs" / queued["id"]).is_dir()
     assert not (media_root / "Movie.zh-Hans.srt").exists()
+
+
+@pytest.mark.parametrize(
+    ("codec", "source_format"),
+    [("subrip", "srt"), ("ass", "ass"), ("webvtt", "vtt")],
+)
+def test_embedded_job_extracts_in_work_directory_before_translation(
+    tmp_path: Path, codec: str, source_format: str
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    extracting = threading.Event()
+    release = threading.Event()
+    translating = threading.Event()
+    translation_release = threading.Event()
+    media_adapter = MediaExtractorFixture(
+        [{"index": 3, "codec_name": codec}],
+        started=extracting,
+        release=release,
+    )
+    extraction = Extraction(media_adapter, AtomicOutputPublisher())
+    translator = FakeTranslator(started=translating, release=translation_release)
+
+    jobs = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=extraction,
+    )
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format=source_format,
+        )
+    )
+    assert queued["status"] == "Queued"
+
+    assert extracting.wait(timeout=5)
+    extracting_record = jobs.get(str(queued["id"]))
+    assert extracting_record["status"] == "Extracting"
+    assert "subtitle_path" not in extracting_record["request"]
+    assert extracting_record["request"]["stream_index"] == 3
+
+    release.set()
+    assert translating.wait(timeout=5)
+    assert jobs.get(str(queued["id"]))["status"] == "Translating"
+    translation_release.set()
+    deadline = time.monotonic() + 5
+    while jobs.get(str(queued["id"]))["status"] != "Completed":
+        if time.monotonic() >= deadline:
+            pytest.fail("Embedded Job did not complete")
+        time.sleep(0.01)
+
+    completed = jobs.get(str(queued["id"]))
+    assert completed["request"]["output_path"] == f"Movie.zh-Hans.{source_format}"
+    assert media_adapter.probe_calls == [_media]
+    assert media_adapter.extract_calls[0][:2] == (_media, 3)
+    extracted_path = media_adapter.extract_calls[0][2]
+    assert extracted_path.parent == work_root / "jobs" / str(queued["id"])
+    assert extracted_path.name.startswith(f".source.{source_format}.")
+    assert extracted_path.suffix == f".{source_format}"
+    assert translator.sources == [
+        work_root / "jobs" / str(queued["id"]) / f"source.{source_format}"
+    ]
+    assert (media_root / f"Movie.zh-Hans.{source_format}").read_bytes() == SRT
+    assert not (work_root / "jobs" / str(queued["id"])).exists()
+    jobs.close()
+
+
+@pytest.mark.parametrize(
+    ("streams", "source_format", "error_code"),
+    [
+        ([], "srt", "stream_not_found"),
+        ([{"index": 3, "codec_name": "mov_text"}], "srt", "unsupported_stream"),
+        ([{"index": 3, "codec_name": "ass"}], "srt", "format_mismatch"),
+    ],
+)
+def test_embedded_extraction_failure_does_not_translate_or_publish(
+    tmp_path: Path,
+    streams: list[dict[str, object]],
+    source_format: str,
+    error_code: str,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    translator = FakeTranslator()
+    media_adapter = MediaExtractorFixture(streams)
+    extraction = Extraction(media_adapter, AtomicOutputPublisher())
+    jobs = Jobs(translator, media_root, work_root, extraction=extraction)
+
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format=source_format,
+        )
+    )
+    deadline = time.monotonic() + 5
+    while jobs.get(str(queued["id"]))["status"] != "Failed":
+        if time.monotonic() >= deadline:
+            pytest.fail("Embedded Job did not fail")
+        time.sleep(0.01)
+
+    failed = jobs.get(str(queued["id"]))
+    assert failed["error"]["code"] == error_code
+    assert failed["error"]["media_path"] == "Movie.mkv"
+    assert failed["error"]["stream_index"] == 3
+    assert translator.sources == []
+    assert not (media_root / "Movie.zh-Hans.srt").exists()
+    jobs.close()
+
+
+def test_http_accepts_embedded_stream_without_an_extraction_path(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Movie.mkv",
+                "stream_index": 3,
+                "source_format": "srt",
+                "target_language_code": "zh-Hans",
+            },
+        )
+
+        assert response.status_code == 200
+        request = response.json()["request"]
+        assert request["media_path"] == "Movie.mkv"
+        assert request["stream_index"] == 3
+        assert request["source_format"] == "srt"
+        assert "subtitle_path" not in request
+
+
+def test_embedded_job_redacts_absolute_error_paths(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+
+    class FailingExtraction:
+        def extract(self, request):
+            raise ServiceError(
+                "extraction_failed",
+                "Extraction failed",
+                path=request.media_path,
+                output_path=request.output_path,
+            )
+
+    jobs = Jobs(
+        FakeTranslator(),
+        media_root,
+        work_root,
+        extraction=FailingExtraction(),
+    )
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"] == {
+        "code": "extraction_failed",
+        "message": "Extraction failed",
+        "media_path": "Movie.mkv",
+        "stream_index": 3,
+        "path": "Movie.mkv",
+        "output_path": "Job Work directory",
+    }
+    assert str(media_root) not in json.dumps(failed)
+    jobs.close()
 
 
 def test_job_rejects_missing_term_map_before_queueing(tmp_path: Path):

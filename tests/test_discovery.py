@@ -30,6 +30,7 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
             },
             {"index": 4, "codec_name": "hdmv_pgs_subtitle"},
             {"index": 5, "codec_name": "dvb_subtitle"},
+            {"index": 6, "codec_name": "mov_text"},
         ]
     )
 
@@ -71,7 +72,11 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
     assert [
         (candidate.stream_index, candidate.reason)
         for candidate in result.unsupported_candidates
-    ] == [(4, "bitmap subtitle"), (5, "unsupported subtitle codec: dvb_subtitle")]
+    ] == [
+        (4, "bitmap subtitle"),
+        (5, "unsupported subtitle codec: dvb_subtitle"),
+        (6, "unsupported subtitle codec: mov_text"),
+    ]
 
 
 def test_discovery_rejects_missing_media_before_probing(tmp_path):

@@ -607,6 +607,10 @@ a {
   background: #fff0ef;
   color: #b42318;
 }
+.status-extracting {
+  background: #eef2ff;
+  color: #4338ca;
+}
 
 .empty-icon {
   display: grid;
