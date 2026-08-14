@@ -531,6 +531,34 @@ def test_restart_marks_active_job_interrupted_without_requeueing(tmp_path: Path)
     restarted.close()
 
 
+def test_restart_ignores_job_with_invalid_conflict_policy(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs_root = work_root / "jobs"
+    jobs_root.mkdir(parents=True)
+    (jobs_root / "broken.json").write_text(
+        json.dumps(
+            {
+                "id": "broken",
+                "status": "Completed",
+                "request": {
+                    "media_path": "Movie.mkv",
+                    "subtitle_path": "Movie.en.srt",
+                    "target_language_code": "zh",
+                    "output_path": "Movie.zh.srt",
+                    "source_format": "srt",
+                    "output_conflict_policy": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    assert jobs.list() == []
+    jobs.close()
+
+
 def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     started = threading.Event()

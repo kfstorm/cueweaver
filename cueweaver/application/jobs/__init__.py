@@ -534,7 +534,10 @@ def _valid_record(record: dict[str, object]) -> bool:
         )
         and (
             "output_conflict_policy" not in request
-            or request["output_conflict_policy"] in {"append-number", "overwrite"}
+            or (
+                isinstance(request["output_conflict_policy"], str)
+                and request["output_conflict_policy"] in {"append-number", "overwrite"}
+            )
         )
         and all(
             field not in request or isinstance(request[field], bool)
