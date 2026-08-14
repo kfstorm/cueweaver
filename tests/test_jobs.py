@@ -76,8 +76,9 @@ class MediaExtractorFixture:
 
 
 class RecordingTranslator(FakeTranslator):
-    def __init__(self, delay: threading.Event):
-        super().__init__(delay=delay)
+    def __init__(self, delay: threading.Event, started: threading.Event | None = None):
+        self.started = started or threading.Event()
+        super().__init__(delay=delay, started=self.started)
         self.calls: list[dict[str, object]] = []
 
     def translate(self, source: Path, target_language: str, **kwargs: object) -> bytes:
@@ -163,6 +164,8 @@ def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: 
             "term_map": None,
             "dynamic_terminology_enabled": True,
             "subtitle_terminology_filter_enabled": True,
+            "output_suffix": "zh-Hans",
+            "output_conflict_policy": "append-number",
             "output_path": "Movie.zh-Hans.srt",
             "source_format": "srt",
         }
@@ -419,6 +422,7 @@ def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
                 "subtitle_terminology_filter_enabled": False,
             },
         ).json()
+        assert translator.started.wait(timeout=5)
         second = create_job(client, "ja").json()
         third = create_job(client, "ko").json()
 
@@ -599,6 +603,7 @@ def test_failed_job_retains_structured_error_context(tmp_path: Path, monkeypatch
             "output_write_failed",
             "Output cannot be written",
             path=media_root / "out.srt",
+            provider_secret="must-not-be-exposed",
         )
 
     monkeypatch.setattr(
@@ -610,7 +615,7 @@ def test_failed_job_retains_structured_error_context(tmp_path: Path, monkeypatch
     assert failed["error"] == {
         "code": "output_write_failed",
         "message": "Output cannot be written",
-        "path": str(media_root / "out.srt"),
+        "path": "out.srt",
     }
 
 
@@ -739,17 +744,113 @@ def test_job_validation_rejects_before_queueing(
     assert list((work_root / "jobs").glob("*.json")) == []
 
 
-def test_job_refuses_existing_suggested_output(tmp_path: Path):
+def test_job_appends_a_number_to_an_existing_suggested_output(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     (media_root / "Movie.zh.srt").write_bytes(b"keep")
     client = make_client(media_root, work_root, FakeTranslator())
 
     response = create_job(client, "zh")
 
-    assert response.status_code == 400
-    assert response.json()["error_code"] == "output_exists"
+    assert response.status_code == 200
+    queued = response.json()
+    completed = wait_for_status(client, queued["id"], "Completed")
+    assert completed["request"]["output_path"] == "Movie.zh.2.srt"
     assert (media_root / "Movie.zh.srt").read_bytes() == b"keep"
-    assert list((work_root / "jobs").glob("*.json")) == []
+    assert (media_root / "Movie.zh.2.srt").read_bytes() == SRT
+
+
+def test_queued_jobs_choose_append_numbers_at_execution_time(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    with make_client(media_root, work_root, FakeTranslator(delay=release)) as client:
+        first = create_job(client, "zh").json()
+        second = create_job(client, "zh").json()
+
+        assert first["request"]["output_path"] == "Movie.zh.srt"
+        assert second["request"]["output_path"] == "Movie.zh.srt"
+        release.set()
+        first_completed = wait_for_status(client, first["id"], "Completed")
+        second_completed = wait_for_status(client, second["id"], "Completed")
+
+    assert first_completed["request"]["output_path"] == "Movie.zh.srt"
+    assert second_completed["request"]["output_path"] == "Movie.zh.2.srt"
+    assert (media_root / "Movie.zh.srt").read_bytes() == SRT
+    assert (media_root / "Movie.zh.2.srt").read_bytes() == SRT
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "",
+        "zh..Hans",
+        "zh.",
+        "zh ",
+        "CON",
+        "com1",
+        "bad/name",
+        "bad\\name",
+        "bad\x00name",
+    ],
+)
+def test_job_rejects_unsafe_output_suffix(tmp_path: Path, suffix: str):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    client = make_client(media_root, work_root, FakeTranslator())
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh",
+            "output_suffix": suffix,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "invalid_output_suffix"
+
+
+def test_job_overwrite_replaces_output_after_success(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    output = media_root / "Movie.zh.srt"
+    output.write_bytes(b"old")
+    client = make_client(media_root, work_root, FakeTranslator())
+
+    queued = client.post(
+        "/api/jobs",
+        json={
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh",
+            "output_conflict_policy": "overwrite",
+        },
+    ).json()
+
+    completed = wait_for_status(client, queued["id"], "Completed")
+    assert completed["request"]["output_path"] == "Movie.zh.srt"
+    assert output.read_bytes() == SRT
+
+
+def test_job_overwrite_preserves_existing_output_when_translation_fails(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    output = media_root / "Movie.zh.srt"
+    output.write_bytes(b"old")
+    client = make_client(
+        media_root, work_root, FakeTranslator(error=RuntimeError("boom"))
+    )
+
+    queued = client.post(
+        "/api/jobs",
+        json={
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh",
+            "output_conflict_policy": "overwrite",
+        },
+    ).json()
+
+    wait_for_status(client, queued["id"], "Failed")
+    assert output.read_bytes() == b"old"
 
 
 def test_job_accepts_external_subtitle_without_language_suffix(tmp_path: Path):
@@ -792,6 +893,34 @@ def test_restart_marks_active_job_interrupted_without_requeueing(tmp_path: Path)
         "message": "Job was interrupted when CueWeaver stopped",
     }
     restarted.close()
+
+
+def test_restart_ignores_job_with_invalid_conflict_policy(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs_root = work_root / "jobs"
+    jobs_root.mkdir(parents=True)
+    (jobs_root / "broken.json").write_text(
+        json.dumps(
+            {
+                "id": "broken",
+                "status": "Completed",
+                "request": {
+                    "media_path": "Movie.mkv",
+                    "subtitle_path": "Movie.en.srt",
+                    "target_language_code": "zh",
+                    "output_path": "Movie.zh.srt",
+                    "source_format": "srt",
+                    "output_conflict_policy": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    assert jobs.list() == []
+    jobs.close()
 
 
 def test_close_returns_while_translation_is_blocked(tmp_path: Path):

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from cueweaver.adapters.output import AtomicOutputPublisher
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction, ExtractRequest
 
@@ -71,6 +72,22 @@ def test_extraction_writes_to_a_precreated_temporary_output_path(tmp_path):
     )
 
     assert output_path.read_text() == "subtitle"
+
+
+def test_extraction_never_overwrites_an_existing_output(tmp_path):
+    media_path = tmp_path / "Movie.mkv"
+    media_path.write_bytes(b"container")
+    output_path = tmp_path / "Movie.srt"
+    output_path.write_text("keep")
+    media = MediaFixture([{"index": 3, "codec_name": "subrip"}])
+
+    with pytest.raises(ServiceError) as error:
+        Extraction(media, AtomicOutputPublisher()).extract(
+            ExtractRequest(media_path, 3, output_path)
+        )
+
+    assert error.value.error_code == "output_exists"
+    assert output_path.read_text() == "keep"
 
 
 @pytest.mark.parametrize(

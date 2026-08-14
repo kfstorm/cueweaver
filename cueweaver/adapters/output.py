@@ -12,8 +12,14 @@ from ..application.errors import ServiceError
 
 
 class AtomicOutputPublisher:
-    def publish(self, output_path: Path, write: Callable[[Path], None]) -> None:
-        if output_path.exists():
+    def publish(
+        self,
+        output_path: Path,
+        write: Callable[[Path], None],
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        if not overwrite and output_path.exists():
             raise ServiceError(
                 "output_exists", "Output path already exists", path=output_path
             )
@@ -35,7 +41,10 @@ class AtomicOutputPublisher:
             temporary_path = Path(temporary_name)
             os.close(descriptor)
             write(temporary_path)
-            os.link(temporary_path, output_path)
+            if overwrite:
+                temporary_path.replace(output_path)
+            else:
+                os.link(temporary_path, output_path)
         except FileExistsError as error:
             raise ServiceError(
                 "output_exists", "Output path already exists", path=output_path

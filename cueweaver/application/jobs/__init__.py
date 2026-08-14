@@ -14,7 +14,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
+from unicodedata import category
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
@@ -29,6 +30,9 @@ JOB_STATUSES = frozenset(
 )
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
+APPROVED_ERROR_CONTEXT_KEYS = frozenset(
+    {"field", "media_path", "output_path", "path", "stream_index"}
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,8 @@ class CreateJobRequest:
     term_map_id: str | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
+    output_suffix: str | None = None
+    output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
     stream_index: int | None = None
     source_format: str | None = None
 
@@ -103,6 +109,12 @@ class Jobs:
                 "term_map": term_map,
                 "dynamic_terminology_enabled": request.dynamic_terminology_enabled,
                 "subtitle_terminology_filter_enabled": request.subtitle_terminology_filter_enabled,
+                "output_suffix": (
+                    request.target_language_code
+                    if request.output_suffix is None
+                    else request.output_suffix
+                ),
+                "output_conflict_policy": request.output_conflict_policy,
                 "output_path": str(output.relative_to(self._media_root)),
                 "source_format": source_format,
             }
@@ -239,11 +251,18 @@ class Jobs:
                     "External subtitle must use a supported extension",
                 )
             source_format = external_format
-        output = media.with_name(
-            f"{media.stem}.{request.target_language_code}.{source_format}"
+        output_suffix = (
+            request.target_language_code
+            if request.output_suffix is None
+            else request.output_suffix
         )
-        if output.exists():
-            raise ServiceError("output_exists", "Suggested output already exists")
+        _validate_output_suffix(output_suffix)
+        if request.output_conflict_policy not in {"append-number", "overwrite"}:
+            raise ServiceError(
+                "invalid_output_conflict_policy",
+                "Output conflict policy must be append-number or overwrite",
+            )
+        output = media.with_name(f"{media.stem}.{output_suffix}.{source_format}")
         _require_writable_directory(output.parent)
         return media, subtitle, output, source_format
 
@@ -310,6 +329,8 @@ class Jobs:
                 embedded = "stream_index" in request
                 record["status"] = "Extracting" if embedded else "Translating"
                 record["started_at"] = _timestamp()
+                output_path = self._execution_output_path(request)
+                request["output_path"] = str(output_path.relative_to(self._media_root))
                 self._write_record(job_id, record)
         assert isinstance(request, dict)
         work_directory = self._jobs_root / job_id
@@ -368,10 +389,11 @@ class Jobs:
                     term_map_path,
                     bool(request.get("dynamic_terminology_enabled", True)),
                     bool(request.get("subtitle_terminology_filter_enabled", True)),
+                    request.get("output_conflict_policy") == "overwrite",
                 )
             )
         except ServiceError as error:
-            context = _error_context(error.context)
+            context = self._error_context(error.context)
             if embedded:
                 context = _embedded_error_context(
                     context, request, self._media_root, work_directory
@@ -386,6 +408,7 @@ class Jobs:
                 },
             )
             return
+
         except Exception:
             self._finish_if_active(
                 job_id,
@@ -405,6 +428,37 @@ class Jobs:
                 },
             )
             return
+
+    def _execution_output_path(self, request: dict[str, object]) -> Path:
+        output = self._media_path(str(request["output_path"]), "invalid_output_path")
+        if request.get("output_conflict_policy", "append-number") == "overwrite":
+            return output
+        candidate = output
+        number = 2
+        while candidate.exists():
+            candidate = output.with_name(f"{output.stem}.{number}{output.suffix}")
+            number += 1
+        return candidate
+
+    def _error_context(self, context: dict[str, object]) -> dict[str, object]:
+        roots = (self._media_root, self._jobs_root.parent.resolve())
+        safe: dict[str, object] = {}
+        for key, value in context.items():
+            if key not in APPROVED_ERROR_CONTEXT_KEYS:
+                continue
+            if not hasattr(value, "__fspath__"):
+                safe[key] = value
+                continue
+            path = Path(value)
+            for root in roots:
+                try:
+                    safe[key] = str(path.resolve().relative_to(root))
+                    break
+                except ValueError:
+                    continue
+            else:
+                safe[key] = path.name
+        return safe
 
     def _finish_published(self, job_id: str, work_directory: Path) -> None:
         """Commit the published output while holding the lifecycle lock."""
@@ -473,13 +527,6 @@ class Jobs:
             temporary.unlink(missing_ok=True)
 
 
-def _error_context(context: dict[str, object]) -> dict[str, object]:
-    return {
-        key: str(value) if hasattr(value, "__fspath__") else value
-        for key, value in context.items()
-    }
-
-
 def _source_format(value: str | None) -> str:
     if not isinstance(value, str) or value.casefold() not in EXTERNAL_FORMATS.values():
         raise ServiceError(
@@ -499,6 +546,9 @@ def _embedded_error_context(
     context["media_path"] = request["media_path"]
     context["stream_index"] = request["stream_index"]
     for key, value in context.items():
+        if key == "output_path" and not Path(str(value)).is_absolute():
+            context[key] = "Job Work directory"
+            continue
         if not isinstance(value, str) or not Path(value).is_absolute():
             continue
         resolved_path = Path(value).resolve()
@@ -533,13 +583,19 @@ class _JobOutputPublisher:
         self._closed = closed
         self._on_published = on_published
 
-    def publish(self, output_path: Path, write: Callable[[Path], None]) -> None:
+    def publish(
+        self,
+        output_path: Path,
+        write: Callable[[Path], None],
+        *,
+        overwrite: bool = False,
+    ) -> None:
         with self._lifecycle_lock:
             if self._closed.is_set():
                 raise ServiceError(
                     "job_interrupted", "Job was interrupted when CueWeaver stopped"
                 )
-            self._publisher.publish(output_path, write)
+            self._publisher.publish(output_path, write, overwrite=overwrite)
             self._on_published()
 
 
@@ -583,19 +639,45 @@ def _valid_record(record: dict[str, object]) -> bool:
         if field in request and not isinstance(request[field], bool):
             return False
     term_map = request.get("term_map")
-    return term_map is None or (
-        isinstance(term_map, dict)
-        and isinstance(term_map.get("id"), str)
-        and bool(term_map["id"])
-        and isinstance(term_map.get("name"), str)
-        and bool(term_map["name"])
-        and isinstance(term_map.get("content"), dict)
+    return (
+        (
+            "output_suffix" not in request
+            or (
+                isinstance(request["output_suffix"], str)
+                and bool(request["output_suffix"])
+            )
+        )
+        and (
+            "output_conflict_policy" not in request
+            or (
+                isinstance(request["output_conflict_policy"], str)
+                and request["output_conflict_policy"] in {"append-number", "overwrite"}
+            )
+        )
         and all(
-            isinstance(source, str)
-            and bool(source)
-            and isinstance(target, str)
-            and bool(target)
-            for source, target in term_map["content"].items()
+            field not in request or isinstance(request[field], bool)
+            for field in (
+                "dynamic_terminology_enabled",
+                "subtitle_terminology_filter_enabled",
+            )
+        )
+        and (
+            term_map is None
+            or (
+                isinstance(term_map, dict)
+                and isinstance(term_map.get("id"), str)
+                and bool(term_map["id"])
+                and isinstance(term_map.get("name"), str)
+                and bool(term_map["name"])
+                and isinstance(term_map.get("content"), dict)
+                and all(
+                    isinstance(source, str)
+                    and bool(source)
+                    and isinstance(target, str)
+                    and bool(target)
+                    for source, target in term_map["content"].items()
+                )
+            )
         )
     )
 
@@ -630,6 +712,8 @@ def _normalize_record(record: dict[str, object]) -> None:
     request.setdefault("term_map", None)
     request.setdefault("dynamic_terminology_enabled", True)
     request.setdefault("subtitle_terminology_filter_enabled", True)
+    request.setdefault("output_suffix", str(request["target_language_code"]))
+    request.setdefault("output_conflict_policy", "append-number")
     queue_sequence = record.get("queue_sequence")
     if not isinstance(queue_sequence, int) or queue_sequence < 1:
         record["queue_sequence"] = 0
@@ -655,6 +739,44 @@ def _require_writable_directory(directory: Path) -> None:
             "output_directory_unwritable",
             "Media output directory is not writable",
         ) from error
+
+
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{number}" for number in range(1, 10)}
+    | {f"lpt{number}" for number in range(1, 10)}
+)
+
+
+def _validate_output_suffix(value: str) -> None:
+    if not value:
+        raise ServiceError("invalid_output_suffix", "Output suffix must be non-empty")
+    for segment in value.split("."):
+        if not segment or segment in {".", ".."}:
+            raise ServiceError(
+                "invalid_output_suffix",
+                "Output suffix segments must be non-empty",
+            )
+        if segment[-1].isspace() or segment[-1] == ".":
+            raise ServiceError(
+                "invalid_output_suffix",
+                "Output suffix segments cannot end in a space or dot",
+            )
+        if segment.casefold() in _WINDOWS_DEVICE_NAMES:
+            raise ServiceError(
+                "invalid_output_suffix", "Output suffix contains a reserved name"
+            )
+        if any(
+            category(character).startswith("C")
+            or not (
+                character.isalnum() or character.isspace() or character in {"-", "_"}
+            )
+            for character in segment
+        ):
+            raise ServiceError(
+                "invalid_output_suffix",
+                "Output suffix contains an unsafe character",
+            )
 
 
 __all__ = ["CreateJobRequest", "Jobs"]

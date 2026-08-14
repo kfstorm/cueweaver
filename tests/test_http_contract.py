@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cueweaver.adapters.output import AtomicOutputPublisher
 from cueweaver.application.browsing import BrowseEntry, BrowseRequest, BrowseResult
 from cueweaver.application.discovery import (
     DiscoverRequest,
@@ -12,7 +13,11 @@ from cueweaver.application.discovery import (
 )
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import ExtractRequest, ExtractResult
-from cueweaver.application.translation import TranslateRequest, TranslateResult
+from cueweaver.application.translation import (
+    TranslateRequest,
+    TranslateResult,
+    Translation,
+)
 from cueweaver.http import create_app
 
 
@@ -84,6 +89,22 @@ class ApplicationFixture:
         )
 
 
+class PublicTranslator:
+    def __init__(self, error: bool = False) -> None:
+        self.error = error
+
+    def translate(self, *_args, **_kwargs) -> bytes:
+        if self.error:
+            raise RuntimeError("translation failed")
+        return b"translated"
+
+
+class PublicTranslationApplication(ApplicationFixture):
+    def __init__(self, translator: PublicTranslator) -> None:
+        super().__init__()
+        self.translation = Translation(translator, AtomicOutputPublisher())
+
+
 def test_http_routes_requests_to_operations_and_serializes_results():
     application = ApplicationFixture()
     client = TestClient(create_app(application))
@@ -105,6 +126,7 @@ def test_http_routes_requests_to_operations_and_serializes_results():
             "output_path": "/media/Movie.zh.srt",
             "work_directory": "/work/job-1",
             "dynamic_terminology_enabled": False,
+            "overwrite": True,
         },
     )
     browse = client.post("/api/media/browse", json={"path": "Shows"})
@@ -133,6 +155,7 @@ def test_http_routes_requests_to_operations_and_serializes_results():
         None,
         False,
         True,
+        True,
     )
     assert browse.json() == {
         "path": "Shows",
@@ -146,6 +169,48 @@ def test_http_routes_requests_to_operations_and_serializes_results():
             }
         ],
     }
+
+
+def post_public_translation(client: TestClient, subtitle: Path, output: Path):
+    return client.post(
+        "/api/translate",
+        json={
+            "subtitle_path": str(subtitle),
+            "target_language_code": "zh",
+            "output_path": str(output),
+            "work_directory": str(subtitle.parent / "work"),
+            "overwrite": True,
+        },
+    )
+
+
+def test_http_translate_atomically_overwrites_after_success(tmp_path: Path):
+    subtitle = tmp_path / "Movie.srt"
+    output = tmp_path / "Movie.zh.srt"
+    subtitle.write_text("source", encoding="utf-8")
+    output.write_text("old", encoding="utf-8")
+    client = TestClient(create_app(PublicTranslationApplication(PublicTranslator())))
+
+    response = post_public_translation(client, subtitle, output)
+
+    assert response.status_code == 200
+    assert output.read_bytes() == b"translated"
+
+
+def test_http_translate_overwrite_preserves_old_output_on_failure(tmp_path: Path):
+    subtitle = tmp_path / "Movie.srt"
+    output = tmp_path / "Movie.zh.srt"
+    subtitle.write_text("source", encoding="utf-8")
+    output.write_text("old", encoding="utf-8")
+    client = TestClient(
+        create_app(PublicTranslationApplication(PublicTranslator(error=True)))
+    )
+
+    response = post_public_translation(client, subtitle, output)
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "translation_failed"
+    assert output.read_text(encoding="utf-8") == "old"
 
 
 def test_product_discover_resolves_relative_media_path_and_redacts_absolute_paths(

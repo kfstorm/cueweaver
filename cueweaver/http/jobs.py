@@ -1,6 +1,6 @@
 """HTTP adapter for durable Jobs."""
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
@@ -13,6 +13,8 @@ class CreateJobBody(BaseModel):
     media_path: str = Field(min_length=1)
     subtitle_path: str | None = Field(default=None, min_length=1)
     target_language_code: str = Field(min_length=1)
+    output_suffix: str | None = None
+    output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
     term_map_id: str | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
@@ -48,6 +50,8 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
                 term_map_id=body.term_map_id,
                 dynamic_terminology_enabled=body.dynamic_terminology_enabled,
                 subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,
+                output_suffix=body.output_suffix,
+                output_conflict_policy=body.output_conflict_policy,
                 stream_index=body.stream_index,
                 source_format=body.source_format,
             )
