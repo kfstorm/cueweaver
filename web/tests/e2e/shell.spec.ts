@@ -40,10 +40,35 @@ async function stubProductStatus(page: Page, providerReady = true) {
 async function readJobs(page: Page) {
   const response = await page.request.get("/api/jobs");
   return (await response.json()).jobs as Array<{
-    request: { target_language_code: string };
+    request: {
+      target_language_code: string;
+      stream_index?: number;
+      source_format?: string;
+    };
     status: string;
     queue_position?: number | null;
   }>;
+}
+
+async function startRealTranslation(
+  page: Page,
+  viewport: { name: string; width: number; height: number },
+  subtitleName: RegExp,
+  targetLanguage: string,
+  beforeSubmit?: (page: Page) => Promise<void> | void,
+) {
+  await page.setViewportSize(viewport);
+  await page.goto("/translate");
+  await page.getByRole("button", { name: "Select Example movie" }).click();
+  await page.getByRole("button", { name: subtitleName }).click();
+  await page.getByLabel("Target language code").fill(targetLanguage);
+  await beforeSubmit?.(page);
+
+  const requestPromise = page.waitForRequest(
+    (request) => request.url().endsWith("/api/jobs") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "Start translation" }).click();
+  return requestPromise;
 }
 
 test("desktop shell renders every product route", async ({ page }) => {
@@ -277,84 +302,97 @@ test.describe("explicit subtitle selection", () => {
   }
 });
 
-test.describe("External subtitle submission", () => {
+const submissionSources = [
+  {
+    label: "External subtitle",
+    subtitleName: /Select external subtitle en \(Example\.en\.srt\)/,
+    candidate: {
+      kind: "external",
+      path: "Example.en.srt",
+      format: "srt",
+      tags: { language: "en", title: "" },
+    },
+    request: { media_path: "Example.mkv", subtitle_path: "Example.en.srt" },
+  },
+  {
+    label: "Embedded subtitle",
+    subtitleName: /Select embedded subtitle zhs \/ Chinese/,
+    candidate: {
+      kind: "embedded",
+      stream_index: 3,
+      format: "srt",
+      tags: { language: "zhs", title: "Chinese" },
+    },
+    request: { media_path: "Example.mkv", stream_index: 3, source_format: "srt" },
+  },
+] as const;
+
+test.describe("subtitle submission", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
     { name: "mobile", width: 390, height: 844 },
   ]) {
-    test(`${viewport.name} Translate submits an External subtitle Job`, async ({
-      page,
-    }) => {
-      await page.setViewportSize(viewport);
-      await stubProductStatus(page);
-      await page.route("**/api/media/browse", (route) =>
-        route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({
-            path: "",
-            entries: [{ kind: "media", name: "Example.mkv", path: "Example.mkv" }],
-          }),
-        }),
-      );
-      await page.route("**/api/media/discover", (route) =>
-        route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({
-            path: "Example.mkv",
-            candidates: [
-              {
-                kind: "external",
-                path: "Example.en.srt",
-                format: "srt",
-                tags: { language: "en", title: "" },
-              },
-            ],
-            unsupported_candidates: [],
-          }),
-        }),
-      );
-      const jobRequest = page.waitForRequest(
-        (request) => request.url().endsWith("/api/jobs") && request.method() === "POST",
-      );
-      await page.route("**/api/jobs", async (route) => {
-        if (route.request().method() === "POST") {
-          await route.fulfill({
+    for (const source of submissionSources) {
+      test(`${viewport.name} Translate submits an ${source.label} Job`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(viewport);
+        await stubProductStatus(page);
+        await page.route("**/api/media/browse", (route) =>
+          route.fulfill({
             contentType: "application/json",
             body: JSON.stringify({
-              id: "job-1",
-              status: "Queued",
-              request: {
-                media_path: "Example.mkv",
-                subtitle_path: "Example.en.srt",
-                target_language_code: "zh-Hans",
-              },
+              path: "",
+              entries: [{ kind: "media", name: "Example.mkv", path: "Example.mkv" }],
             }),
-          });
-          return;
-        }
-        await route.fulfill({ contentType: "application/json", body: '{"jobs":[]}' });
-      });
+          }),
+        );
+        await page.route("**/api/media/discover", (route) =>
+          route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              path: "Example.mkv",
+              candidates: [source.candidate],
+              unsupported_candidates: [],
+            }),
+          }),
+        );
+        const jobRequest = page.waitForRequest(
+          (request) =>
+            request.url().endsWith("/api/jobs") && request.method() === "POST",
+        );
+        await page.route("**/api/jobs", async (route) => {
+          if (route.request().method() === "POST") {
+            await route.fulfill({
+              contentType: "application/json",
+              body: JSON.stringify({
+                id: "job-1",
+                status: "Queued",
+                request: { ...source.request, target_language_code: "zh-Hans" },
+              }),
+            });
+            return;
+          }
+          await route.fulfill({ contentType: "application/json", body: '{"jobs":[]}' });
+        });
 
-      await page.goto("/translate");
-      await page.getByRole("button", { name: "Select Example.mkv" }).click();
-      await page.getByRole("button", { name: /Select external subtitle en/ }).click();
-      await expect(page.locator("#target-languages option")).toHaveCount(15);
-      await expect(
-        page.locator('#target-languages option[value="zh-Hans"]'),
-      ).toHaveCount(1);
-      await page.getByLabel("Target language code").fill("zh-Hans");
-      await page.getByRole("button", { name: "Start translation" }).click();
+        await page.goto("/translate");
+        await page.getByRole("button", { name: "Select Example.mkv" }).click();
+        await page.getByRole("button", { name: source.subtitleName }).click();
+        await expect(page.locator("#target-languages option")).toHaveCount(15);
+        await page.getByLabel("Target language code").fill("zh-Hans");
+        await page.getByRole("button", { name: "Start translation" }).click();
 
-      const request = await jobRequest;
-      expect(await request.postDataJSON()).toEqual({
-        media_path: "Example.mkv",
-        subtitle_path: "Example.en.srt",
-        target_language_code: "zh-Hans",
-        term_map_id: null,
-        dynamic_terminology_enabled: true,
-        subtitle_terminology_filter_enabled: true,
+        const request = await jobRequest;
+        expect(await request.postDataJSON()).toEqual({
+          ...source.request,
+          target_language_code: "zh-Hans",
+          term_map_id: null,
+          dynamic_terminology_enabled: true,
+          subtitle_terminology_filter_enabled: true,
+        });
       });
-    });
+    }
   }
 });
 
@@ -366,21 +404,19 @@ test.describe("real translation workflow", () => {
     test(`${viewport.name} remembers configuration and resets the source`, async ({
       page,
     }) => {
-      await page.setViewportSize(viewport);
-      await page.goto("/translate");
-
-      await page.getByRole("button", { name: "Select Example movie" }).click();
-      await page.getByRole("button", { name: /Select external subtitle en/ }).click();
       const targetLanguage = `x-custom-${viewport.name}`;
-      await page.getByLabel("Target language code").fill(targetLanguage);
-      await page.getByText("Advanced settings").click();
-      await page.getByLabel("Dynamic terminology").uncheck();
-      await page.getByLabel("Subtitle terminology filtering").uncheck();
-
-      const requestPromise = page.waitForRequest(
-        (request) => request.url().endsWith("/api/jobs") && request.method() === "POST",
+      const requestPromise = await startRealTranslation(
+        page,
+        viewport,
+        /Select external subtitle en/,
+        targetLanguage,
+        async (currentPage) => {
+          await currentPage.getByText("Advanced settings").click();
+          await currentPage.getByLabel("Dynamic terminology").uncheck();
+          await currentPage.getByLabel("Subtitle terminology filtering").uncheck();
+        },
       );
-      await page.getByRole("button", { name: "Start translation" }).click();
+
       const request = await requestPromise;
       expect(await request.postDataJSON()).toMatchObject({
         target_language_code: targetLanguage,
@@ -406,6 +442,41 @@ test.describe("real translation workflow", () => {
 
       await page.reload();
       await expect(page.getByLabel("Target language code")).toHaveValue(targetLanguage);
+    });
+
+    test(`${viewport.name} translates an Embedded subtitle through Extraction`, async ({
+      page,
+    }) => {
+      const targetLanguage = `x-embedded-${viewport.name}`;
+      const requestPromise = startRealTranslation(
+        page,
+        viewport,
+        /Select embedded subtitle/,
+        targetLanguage,
+      );
+
+      const request = await requestPromise;
+      expect(await request.postDataJSON()).toMatchObject({
+        media_path: "Example.mkv",
+        stream_index: expect.any(Number),
+        source_format: "srt",
+        target_language_code: targetLanguage,
+      });
+      await expect(
+        page.getByRole("button", { name: "Select Example movie" }),
+      ).toBeVisible();
+      await expect
+        .poll(async () => {
+          const jobs = await readJobs(page);
+          return jobs.find((job) => job.request.target_language_code === targetLanguage)
+            ?.status;
+        })
+        .toBe("Completed");
+      const job = (await readJobs(page)).find(
+        (candidate) => candidate.request.target_language_code === targetLanguage,
+      );
+      expect(job?.request.source_format).toBe("srt");
+      expect(job?.request.stream_index).toEqual(expect.any(Number));
     });
   }
 

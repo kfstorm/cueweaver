@@ -2,14 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export interface Job {
   id: string;
-  status: "Queued" | "Translating" | "Completed" | "Failed" | "Interrupted";
+  status:
+    "Queued" | "Extracting" | "Translating" | "Completed" | "Failed" | "Interrupted";
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
   queue_position: number | null;
   request: {
     media_path: string;
-    subtitle_path: string;
+    subtitle_path?: string;
+    stream_index?: number;
     target_language_code: string;
     term_map: {
       id: string;
@@ -42,11 +44,13 @@ export function useCreateJob() {
   return useMutation({
     mutationFn: async (request: {
       media_path: string;
-      subtitle_path: string;
+      subtitle_path?: string;
       target_language_code: string;
       term_map_id: string | null;
       dynamic_terminology_enabled: boolean;
       subtitle_terminology_filter_enabled: boolean;
+      stream_index?: number;
+      source_format?: string;
     }): Promise<Job> => {
       const response = await fetch("/api/jobs", {
         method: "POST",

@@ -138,8 +138,10 @@ function Translate() {
   );
   const canSubmit =
     selectedMedia !== null &&
-    selectedCandidate?.kind === "external" &&
-    selectedCandidate.path !== undefined &&
+    ((selectedCandidate?.kind === "external" && selectedCandidate.path !== undefined) ||
+      (selectedCandidate?.kind === "embedded" &&
+        selectedCandidate.stream_index !== undefined &&
+        selectedCandidate.format !== undefined)) &&
     targetLanguage.trim() !== "" &&
     status.data?.translation_provider.ready === true &&
     !createJob.isPending;
@@ -187,7 +189,7 @@ function Translate() {
         <div className="step-index">02</div>
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
-          <p>Select an External subtitle and enter the target language.</p>
+          <p>Select an External or Embedded subtitle and enter the target language.</p>
           <label htmlFor="target-language-code">
             Target language code
             <Input
@@ -198,7 +200,7 @@ function Translate() {
               value={targetLanguage}
               onChange={(event) => setTargetLanguage(event.target.value)}
               placeholder="zh-Hans"
-              disabled={selectedCandidate?.kind !== "external"}
+              disabled={selectedCandidate === undefined}
             />
             <datalist id="target-languages">
               {COMMON_TARGET_LANGUAGES.map((language) => (
@@ -248,7 +250,7 @@ function Translate() {
               </label>
             </div>
           </details>
-          {selectedMedia && selectedCandidate?.path && (
+          {selectedMedia && selectedCandidate && (
             <p className="field-help">
               Suggested output:{" "}
               {suggestedOutput(
@@ -265,10 +267,22 @@ function Translate() {
         <Button
           disabled={!canSubmit}
           onClick={() => {
-            if (selectedMedia && selectedCandidate?.path) {
+            if (
+              selectedMedia &&
+              selectedCandidate &&
+              ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
+                (selectedCandidate.kind === "embedded" &&
+                  selectedCandidate.stream_index !== undefined &&
+                  selectedCandidate.format))
+            ) {
               const request = {
                 media_path: selectedMedia,
-                subtitle_path: selectedCandidate.path,
+                ...(selectedCandidate.kind === "external"
+                  ? { subtitle_path: selectedCandidate.path }
+                  : {
+                      stream_index: selectedCandidate.stream_index,
+                      source_format: selectedCandidate.format,
+                    }),
                 target_language_code: targetLanguage,
                 term_map_id: termMapId,
                 dynamic_terminology_enabled: dynamicTerminologyEnabled,
@@ -683,7 +697,10 @@ function JobsPage() {
               <small className="job-id">Job {job.id.slice(0, 8)}</small>
               <strong>{job.request.media_path}</strong>
               <p>
-                {job.request.subtitle_path} to {job.request.target_language_code}
+                {job.request.subtitle_path
+                  ? job.request.subtitle_path
+                  : `Embedded stream ${job.request.stream_index}`}{" "}
+                to {job.request.target_language_code}
               </p>
               {job.queue_position !== null && job.queue_position !== undefined && (
                 <small>Queue position {job.queue_position}</small>
