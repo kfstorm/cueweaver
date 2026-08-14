@@ -45,7 +45,7 @@ export interface JobNotification {
   message: string;
 }
 
-export function useJobs() {
+export function useJobs({ poll = true }: { poll?: boolean } = {}) {
   const query = useQuery({
     queryKey: ["jobs"],
     queryFn: async (): Promise<Job[]> => {
@@ -55,27 +55,28 @@ export function useJobs() {
       return body.jobs ?? [];
     },
     staleTime: 0,
-    refetchInterval: 2000,
+    refetchInterval: poll ? 2000 : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
   });
 
   const refetch = query.refetch;
   useEffect(() => {
+    if (!poll) return;
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refetch();
     };
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
-  }, [refetch]);
+  }, [poll, refetch]);
 
   return query;
 }
 
-export function useJob(jobId: string | null) {
+export function useJob(jobId: string | null, enabled = jobId !== null) {
   return useQuery({
     queryKey: ["job", jobId],
-    enabled: jobId !== null,
+    enabled: enabled && jobId !== null,
     retry: false,
     queryFn: async (): Promise<Job> => {
       const response = await fetch(`/api/jobs/${encodeURIComponent(jobId!)}`);

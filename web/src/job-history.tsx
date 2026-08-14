@@ -71,9 +71,9 @@ function JobToast({
 export function JobsPage() {
   const { jobId } = useParams();
   const navigate = useNavigate();
-  const jobs = useJobs();
-  const detail = useJob(jobId ?? null);
+  const jobs = useJobs({ poll: false });
   const selected = jobs.data?.find((job) => job.id === jobId) ?? null;
+  const detail = useJob(jobId ?? null, selected === null);
   const displayedJob = selected ?? detail.data;
 
   return (

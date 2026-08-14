@@ -427,7 +427,7 @@ describe("product shell", () => {
     expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
     expect(screen.getAllByText(/13 Aug 2026.*UTC/).length).toBe(3);
     expect(screen.queryByText(/work\/jobs/)).not.toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-detail-1");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/jobs/job-detail-1");
 
     fireEvent.click(screen.getByRole("button", { name: "Back to Jobs" }));
     expect(
@@ -459,31 +459,40 @@ describe("product shell", () => {
   });
 
   it("pauses Job polling while hidden and refreshes when visible again", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs") return jsonResponse({ jobs: [] });
       return jsonResponse({ term_maps: [] });
     });
-    renderWithFetch("/jobs", fetchMock);
-    await screen.findByRole("heading", { name: "No Jobs yet" });
+    try {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      renderWithFetch("/jobs", fetchMock);
+      await screen.findByRole("heading", { name: "No Jobs yet" });
 
-    const jobCalls = () =>
-      fetchMock.mock.calls.filter(([input]) => input === "/api/jobs").length;
-    const initialCalls = jobCalls();
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "hidden",
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(jobCalls()).toBe(initialCalls);
+      const jobCalls = () =>
+        fetchMock.mock.calls.filter(([input]) => input === "/api/jobs").length;
+      const initialCalls = jobCalls();
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(jobCalls()).toBe(initialCalls);
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "visible",
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-    await waitFor(() => expect(jobCalls()).toBeGreaterThan(initialCalls));
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(jobCalls()).toBe(initialCalls + 1));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a stale-selection state when a requested Job is gone", async () => {
