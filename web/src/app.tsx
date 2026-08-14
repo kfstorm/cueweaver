@@ -120,6 +120,12 @@ function Translate() {
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
     useState(true);
   const termMaps = useTermMaps();
+  const selectedTermMapId =
+    termMapId !== null &&
+    (termMaps.data === undefined ||
+      termMaps.data.term_maps.some((termMap) => termMap.id === termMapId))
+      ? termMapId
+      : null;
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
   const clearDiscovery = (previousMedia: string | null) => {
@@ -237,7 +243,7 @@ function Translate() {
               <label>
                 Term map
                 <select
-                  value={termMapId ?? ""}
+                  value={selectedTermMapId ?? ""}
                   onChange={(event) => setTermMapId(event.target.value || null)}
                 >
                   <option value="">No Term map</option>
@@ -284,7 +290,7 @@ function Translate() {
                       source_format: selectedCandidate.format,
                     }),
                 target_language_code: targetLanguage,
-                term_map_id: termMapId,
+                term_map_id: selectedTermMapId,
                 dynamic_terminology_enabled: dynamicTerminologyEnabled,
                 subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
               };
@@ -702,6 +708,9 @@ function JobsPage() {
                   : `Embedded stream ${job.request.stream_index}`}{" "}
                 to {job.request.target_language_code}
               </p>
+              {job.request.term_map && (
+                <small>Term map: {job.request.term_map.name}</small>
+              )}
               {job.queue_position !== null && job.queue_position !== undefined && (
                 <small>Queue position {job.queue_position}</small>
               )}

@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
+import type { TermMapSummary } from "../src/term-maps";
+
+const CHARACTERS_TERM_MAP: TermMapSummary = {
+  id: "map-1",
+  name: "Characters",
+  entry_count: 1,
+  updated_at: "2026-08-13T12:00:00Z",
+};
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
@@ -30,13 +38,14 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 function jobsFetch(job: unknown) {
@@ -77,6 +86,30 @@ async function expectQueuedJob(source: Record<string, unknown>) {
           term_map_id: null,
           dynamic_terminology_enabled: true,
           subtitle_terminology_filter_enabled: true,
+        }),
+      }),
+    ),
+  );
+}
+
+async function expectQueuedJobRequest(
+  targetLanguage: string,
+  termMapId: string | null,
+  dynamicTerminologyEnabled: boolean,
+  subtitleTerminologyFilterEnabled: boolean,
+) {
+  await waitFor(() =>
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jobs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          media_path: "Movie.mkv",
+          subtitle_path: "Movie.en.srt",
+          target_language_code: targetLanguage,
+          term_map_id: termMapId,
+          dynamic_terminology_enabled: dynamicTerminologyEnabled,
+          subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
         }),
       }),
     ),
@@ -132,6 +165,7 @@ function renderRoute(
   discoveryResponses: Array<
     MediaDiscovery | Error | Promise<MediaDiscovery | Error>
   > = [],
+  termMaps: TermMapSummary[] = [],
 ) {
   let discoveryCall = 0;
   const fetchMock = vi
@@ -161,6 +195,9 @@ function renderRoute(
           json: async () =>
             value instanceof Error ? { message: value.message } : value,
         }));
+      }
+      if (String(input) === "/api/term-maps") {
+        return Promise.resolve(jsonResponse({ term_maps: [...termMaps] }));
       }
       return Promise.resolve(statusResponse(providerReady));
     });
@@ -248,6 +285,11 @@ describe("product shell", () => {
         media_path: "Movie.mkv",
         subtitle_path: "Movie.en.srt",
         target_language_code: "zh-Hans",
+        term_map: {
+          id: "map-1",
+          name: "Characters",
+          content: { Captain: "队长" },
+        },
         output_path: "Movie.zh-Hans.srt",
         source_format: "srt",
       },
@@ -262,6 +304,7 @@ describe("product shell", () => {
     expect(await screen.findByText("Movie.mkv")).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Movie.en.srt to zh-Hans")).toBeInTheDocument();
+    expect(screen.getByText("Term map: Characters")).toBeInTheDocument();
     expect(screen.getByText("Translation failed")).toBeInTheDocument();
     expect(screen.getByText("Job job-1234")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Show error details"));
@@ -599,6 +642,55 @@ describe("product shell", () => {
       stream_index: 3,
       source_format: "ass",
     });
+  });
+
+  it("lists and submits a selected Term map with the default terminology flags", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      undefined,
+      undefined,
+      false,
+      [],
+      [CHARACTERS_TERM_MAP],
+    );
+
+    await selectExternalSubtitle();
+    fireEvent.click(screen.getByText("Advanced settings"));
+    const termMap = screen.getByLabelText("Term map");
+    expect(screen.getByRole("option", { name: "No Term map" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Characters" })).toBeInTheDocument();
+    fireEvent.change(termMap, { target: { value: "map-1" } });
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await expectQueuedJobRequest("zh-Hans", "map-1", true, true);
+  });
+
+  it("clears a Term map selection after the refreshed list removes it", async () => {
+    const termMaps = [CHARACTERS_TERM_MAP];
+    const { queryClient } = renderRoute(
+      "/translate",
+      true,
+      undefined,
+      undefined,
+      false,
+      [],
+      termMaps,
+    );
+
+    fireEvent.click(screen.getByText("Advanced settings"));
+    await screen.findByRole("option", { name: "Characters" });
+    const termMap = screen.getByLabelText("Term map");
+    fireEvent.change(termMap, { target: { value: "map-1" } });
+    expect(termMap).toHaveValue("map-1");
+
+    termMaps.length = 0;
+    await queryClient.invalidateQueries({ queryKey: ["term-maps"] });
+
+    await waitFor(() => expect(termMap).toHaveValue(""));
   });
 
   it("remembers a successful language and resets the source form", async () => {
