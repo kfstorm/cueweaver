@@ -290,16 +290,16 @@ class Jobs:
             assert isinstance(job_id, str)
             assert isinstance(status, str)
             if status in {"Queued", "Extracting", "Translating"}:
-                interrupted = _interrupted_record(record)
-                record.update(interrupted)
-                with suppress(OSError):
-                    self._write_record(job_id, interrupted)
-            _normalize_record(record)
+                _normalize_record(record)
+                record = _interrupted_record(record)
+                # Recovery is the only startup write. The atomic record replace
+                # makes the interrupted state durable before the worker starts.
+                self._write_record(job_id, record)
+            else:
+                _normalize_record(record)
             self._next_queue_sequence = max(
                 self._next_queue_sequence, _queue_sequence(record)
             )
-            with suppress(OSError):
-                self._write_record(job_id, record)
             self._records[job_id] = record
 
     def _run(self) -> None:
@@ -523,6 +523,11 @@ class Jobs:
                 file.flush()
                 os.fsync(file.fileno())
             temporary.replace(self._jobs_root / f"{job_id}.json")
+            directory_descriptor = os.open(self._jobs_root, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
         finally:
             temporary.unlink(missing_ok=True)
 

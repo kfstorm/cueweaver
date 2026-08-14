@@ -123,6 +123,23 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
     )
 
 
+def persisted_external_job(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, object], Path, dict[str, object]]:
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        queued = create_job(client).json()
+        wait_for_status(client, queued["id"], "Completed")
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    return (
+        media_root,
+        work_root,
+        queued,
+        record_path,
+        json.loads(record_path.read_text(encoding="utf-8")),
+    )
+
+
 def wait_for_status(
     client: TestClient, job_id: str, expected: str
 ) -> dict[str, object]:
@@ -871,27 +888,154 @@ def test_job_accepts_external_subtitle_without_language_suffix(tmp_path: Path):
     assert response.json()["request"]["subtitle_path"] == "Movie.srt"
 
 
-def test_restart_marks_active_job_interrupted_without_requeueing(tmp_path: Path):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    with make_client(media_root, work_root, FakeTranslator()) as client:
-        queued = create_job(client).json()
-        wait_for_status(client, queued["id"], "Completed")
-
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    record = json.loads(record_path.read_text(encoding="utf-8"))
-    record["status"] = "Translating"
+@pytest.mark.parametrize("active_status", ["Queued", "Extracting", "Translating"])
+def test_restart_recovers_every_active_job_without_requeueing(
+    tmp_path: Path, active_status: str
+):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = active_status
+    record["request"]["term_map"] = {
+        "id": "map-1",
+        "name": "Characters",
+        "content": {"Captain": "队长"},
+    }
     record["finished_at"] = None
     record_path.write_text(json.dumps(record), encoding="utf-8")
-    (work_root / "jobs" / queued["id"]).mkdir()
+    work_directory = work_root / "jobs" / queued["id"]
+    work_directory.mkdir()
+    source = work_directory / "source.srt"
+    source.write_bytes(SRT)
+    request_snapshot = record["request"].copy()
+    translator = FakeTranslator(started=threading.Event())
 
-    restarted = make_client(media_root, work_root, FakeTranslator(error=RuntimeError()))
+    restarted = Jobs(translator, media_root, work_root)
 
-    recovered = restarted.get(f"/api/jobs/{queued['id']}").json()
+    recovered = restarted.get(queued["id"])
     assert recovered["status"] == "Interrupted"
+    assert recovered["id"] == queued["id"]
+    assert recovered["request"] == request_snapshot
     assert recovered["error"] == {
         "code": "job_interrupted",
         "message": "Job was interrupted when CueWeaver stopped",
     }
+    assert source.read_bytes() == SRT
+    assert not translator.started.is_set()
+    assert json.loads(record_path.read_text(encoding="utf-8"))["status"] == (
+        "Interrupted"
+    )
+    restarted.close()
+
+
+def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = "Translating"
+    record["finished_at"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    translator = FakeTranslator(started=threading.Event())
+
+    with make_client(media_root, work_root, translator) as client:
+        response = client.get(f"/api/jobs/{queued['id']}")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "Interrupted"
+        assert response.json()["error"] == {
+            "code": "job_interrupted",
+            "message": "Job was interrupted when CueWeaver stopped",
+        }
+
+    assert not translator.started.is_set()
+
+
+@pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])
+def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status: str):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = terminal_status
+    record["finished_at"] = "2026-08-14T00:00:00Z"
+    record["error"] = (
+        None
+        if terminal_status == "Completed"
+        else {"code": "translation_failed", "message": "Translation failed"}
+    )
+    persisted = json.dumps(record, separators=(",", ":"))
+    record_path.write_text(persisted, encoding="utf-8")
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root)
+
+    assert restarted.get(queued["id"])["status"] == terminal_status
+    assert restarted.get(queued["id"])["finished_at"] == "2026-08-14T00:00:00Z"
+    assert record_path.read_text(encoding="utf-8") == persisted
+    restarted.close()
+
+
+def test_restart_recovery_is_idempotent(tmp_path: Path):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = "Translating"
+    record["finished_at"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    first = Jobs(FakeTranslator(), media_root, work_root)
+    first_recovery = first.get(queued["id"])
+    first.close()
+    persisted_after_first_recovery = record_path.read_text(encoding="utf-8")
+
+    second = Jobs(
+        FakeTranslator(error=RuntimeError("must not run")), media_root, work_root
+    )
+    assert second.get(queued["id"]) == first_recovery
+    assert record_path.read_text(encoding="utf-8") == persisted_after_first_recovery
+    second.close()
+
+
+@pytest.mark.parametrize("active_status", ["Extracting", "Translating"])
+def test_restart_retains_extracted_source_for_an_interrupted_embedded_job(
+    tmp_path: Path, active_status: str
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    media_adapter = MediaExtractorFixture([{"index": 3, "codec_name": "subrip"}])
+    extraction = Extraction(media_adapter, AtomicOutputPublisher())
+    jobs = Jobs(
+        FakeTranslator(),
+        media_root,
+        work_root,
+        extraction=extraction,
+    )
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    jobs.close()
+
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["status"] = active_status
+    record["finished_at"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    source = work_root / "jobs" / str(queued["id"]) / "source.srt"
+    source.parent.mkdir()
+    source.write_bytes(SRT)
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root, extraction=extraction)
+
+    recovered = restarted.get(str(queued["id"]))
+    assert recovered["status"] == "Interrupted"
+    assert recovered["request"] == completed["request"]
+    assert recovered["request"]["stream_index"] == 3
+    assert "subtitle_path" not in recovered["request"]
+    assert source.read_bytes() == SRT
     restarted.close()
 
 
