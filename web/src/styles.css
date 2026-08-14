@@ -785,60 +785,6 @@ a {
   padding-top: 3px;
 }
 
-.job-list-error,
-.job-list-actions,
-.job-error-details {
-  grid-column: 1 / -1;
-}
-
-.job-list-error {
-  margin: 3px 0 0;
-}
-
-.job-list-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 3px;
-}
-
-.job-list-actions button {
-  min-height: 32px;
-}
-
-.job-error-details {
-  margin-top: 3px;
-  border-top: 1px solid #edf0f4;
-  padding-top: 7px;
-  color: #536176;
-  font-size: 11px;
-}
-
-.job-error-details summary {
-  cursor: pointer;
-  font-weight: 620;
-}
-
-.job-error-details dl {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 0;
-}
-
-.job-error-details dl div {
-  display: flex;
-  gap: 8px;
-}
-
-.job-error-details dt {
-  font-weight: 620;
-}
-
-.job-error-details dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 .job-detail {
   min-height: 420px;
   border-left: 1px solid #edf0f4;

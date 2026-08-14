@@ -378,9 +378,13 @@ describe("product shell", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Movie.en.srt to zh-Hans")).toBeInTheDocument();
     expect(screen.getByText("Term map: Characters")).toBeInTheDocument();
-    expect(screen.getByText("Translation failed")).toBeInTheDocument();
     expect(screen.getByText("Job job-1234")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Show error details"));
+    fireEvent.click(screen.getByRole("button", { name: /Movie\.mkv/ }));
+    expect(
+      await screen.findByRole("heading", { name: "Action needed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Translation failed")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Show approved diagnostic context"));
     expect(screen.getByText("translation_failed")).toBeInTheDocument();
     expect(screen.getByText("subtitle")).toBeInTheDocument();
   });
@@ -537,7 +541,8 @@ describe("product shell", () => {
     const retry = retryFetch(job, "External subtitle does not exist.");
     renderWithFetch("/jobs", retry.fetchMock);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
 
     await waitFor(() =>
       expect(retry.fetchMock).toHaveBeenCalledWith("/api/jobs/job-retry-1/retry", {
@@ -547,7 +552,7 @@ describe("product shell", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "External subtitle does not exist.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
     await waitFor(() => expect(retry.attempts()).toBe(2));
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
@@ -558,12 +563,13 @@ describe("product shell", () => {
     renderWithFetch("/jobs", retry.fetchMock);
 
     expect(await screen.findByText("Embedded stream 3 to zh-Hans")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: /Movie\.mkv/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
     await waitFor(() => expect(retry.attempts()).toBe(1));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Embedded subtitle stream disappeared.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
     await waitFor(() => expect(retry.attempts()).toBe(2));
     expect(retry.response()).toEqual(
       expect.objectContaining({ status: "Queued", attempt: 2 }),
@@ -576,7 +582,8 @@ describe("product shell", () => {
     renderWithFetch("/jobs", retry.fetchMock);
 
     expect(await screen.findByText("Embedded stream 3 to zh")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: /Movie\.mkv/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
     await waitFor(() => expect(retry.attempts()).toBe(1));
     expect(retry.fetchMock).toHaveBeenCalledWith(
       "/api/jobs/interrupted-embedded-1/retry",
@@ -609,7 +616,10 @@ describe("product shell", () => {
     renderWithFetch("/jobs", fetchMock);
 
     expect(await screen.findByText("Interrupted")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Movie\.mkv/ }));
+    expect(
+      await screen.findByRole("button", { name: "Retry Job" }),
+    ).toBeInTheDocument();
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {

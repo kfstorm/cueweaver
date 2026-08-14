@@ -166,13 +166,6 @@ function JobListItem({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const retryJob = useRetryJob();
-  const retryable = job.status === "Failed" || job.status === "Interrupted";
-  const context = job.error
-    ? Object.entries(job.error).filter(([key]) =>
-        (APPROVED_ERROR_CONTEXT_KEYS as readonly string[]).includes(key),
-      )
-    : [];
   return (
     <article className={cn("job-item", selected && "selected")} role="listitem">
       <button
@@ -197,35 +190,6 @@ function JobListItem({
       )}
       {job.request.term_map && (
         <span className="job-queue">Term map: {job.request.term_map.name}</span>
-      )}
-      {job.error && <p className="form-error job-list-error">{job.error.message}</p>}
-      {retryable && (
-        <div className="job-list-actions">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={retryJob.isPending}
-            onClick={() => retryJob.mutate(job.id)}
-          >
-            {retryJob.isPending ? "Retrying..." : "Retry"}
-          </Button>
-          {retryJob.isError && (
-            <p className="form-error" role="alert">
-              {retryJob.error.message}
-            </p>
-          )}
-        </div>
-      )}
-      {job.error && (
-        <details className="job-error-details">
-          <summary>Show error details</summary>
-          <dl>
-            <SummaryItem label="Code" value={job.error.code} />
-            {context.map(([key, value]) => (
-              <SummaryItem key={key} label={key} value={String(value)} />
-            ))}
-          </dl>
-        </details>
       )}
     </article>
   );
