@@ -928,6 +928,28 @@ def test_restart_recovers_every_active_job_without_requeueing(
     restarted.close()
 
 
+def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = "Translating"
+    record["finished_at"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    translator = FakeTranslator(started=threading.Event())
+
+    with make_client(media_root, work_root, translator) as client:
+        response = client.get(f"/api/jobs/{queued['id']}")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "Interrupted"
+        assert response.json()["error"] == {
+            "code": "job_interrupted",
+            "message": "Job was interrupted when CueWeaver stopped",
+        }
+
+    assert not translator.started.is_set()
+
+
 @pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])
 def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status: str):
     media_root, work_root, queued, record_path, record = persisted_external_job(
