@@ -692,6 +692,10 @@ describe("product shell", () => {
             ],
           });
         }
+        if (input === `/api/jobs/${second.id}` && init?.method === "DELETE") {
+          currentJobs = [retained];
+          return jsonResponse({ id: second.id, deleted: true });
+        }
         return jsonResponse({ term_maps: [] });
       });
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -715,6 +719,19 @@ describe("product shell", () => {
     );
     expect(screen.getByText("Clear Completed (1)")).toBeInTheDocument();
     expect(screen.getAllByText("Movie.mkv")).not.toHaveLength(0);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Job clear-jo/ })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`/api/jobs/${second.id}`, {
+        method: "DELETE",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Some Completed Jobs could not be cleared."),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {

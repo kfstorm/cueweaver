@@ -93,14 +93,19 @@ export function JobsPage() {
     }
     clearCompleted.mutate(undefined, {
       onSuccess: (result) => {
-        if (jobId && result.deleted.includes(jobId)) returnToJobList();
+        if (jobId && result.deleted.includes(jobId)) navigateToJobList();
       },
     });
   };
 
-  const returnToJobList = () => {
+  const navigateToJobList = () => {
     focusListOnReturn.current = true;
     navigate("/jobs");
+  };
+
+  const returnToJobList = () => {
+    clearCompleted.reset();
+    navigateToJobList();
   };
 
   useEffect(() => {

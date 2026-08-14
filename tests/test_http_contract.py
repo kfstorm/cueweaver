@@ -221,7 +221,6 @@ def test_http_deletes_one_job_and_clears_completed_jobs_without_a_request_body()
 
     deleted = client.delete("/api/jobs/job-1")
     cleared = client.delete("/api/jobs/completed")
-    invalid_method = client.get("/api/jobs/completed")
 
     assert deleted.status_code == 200
     assert deleted.json() == {"id": "job-1", "deleted": True}
@@ -229,11 +228,6 @@ def test_http_deletes_one_job_and_clears_completed_jobs_without_a_request_body()
     assert cleared.status_code == 200
     assert cleared.json() == {"deleted": [], "failed": []}
     assert application.cleared_completed is True
-    assert invalid_method.status_code == 404
-    assert invalid_method.json() == {
-        "error_code": "not_found",
-        "message": "Resource not found",
-    }
 
 
 def post_public_translation(client: TestClient, subtitle: Path, output: Path):

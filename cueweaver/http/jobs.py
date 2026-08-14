@@ -4,7 +4,6 @@ from typing import Literal, Protocol
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
-from starlette.responses import JSONResponse
 
 from ..application.jobs import CreateJobRequest
 
@@ -71,13 +70,6 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     @app.delete("/api/jobs/completed")
     def clear_completed_jobs() -> dict[str, object]:
         return application.jobs.clear_completed()
-
-    @app.get("/api/jobs/completed")
-    def get_completed_jobs_route_not_found() -> JSONResponse:
-        return JSONResponse(
-            status_code=404,
-            content={"error_code": "not_found", "message": "Resource not found"},
-        )
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
