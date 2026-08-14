@@ -688,6 +688,30 @@ a {
   margin-bottom: 12px;
 }
 
+.job-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-list-actions button {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.job-list-panel > [role="alert"] {
+  margin: 0 0 12px;
+}
+
+.job-list-panel > [role="alert"] p {
+  margin: 0;
+}
+
+.job-list-panel > [role="alert"] ul {
+  margin: 5px 0 0;
+  padding-left: 18px;
+}
+
 .job-list-state {
   min-height: 88px;
 }
@@ -1502,8 +1526,14 @@ a {
   .job-item-select,
   .job-back-action,
   .job-detail-actions button,
-  .job-list-state button {
+  .job-list-state button,
+  .job-list-actions button {
     min-height: 44px;
+  }
+
+  .job-list-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .job-item-select {

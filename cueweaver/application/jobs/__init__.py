@@ -29,6 +29,7 @@ from ..translation import OutputPublisher, TranslateRequest, Translation, Transl
 JOB_STATUSES = frozenset(
     {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
 )
+TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted"})
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
 APPROVED_ERROR_CONTEXT_KEYS = frozenset(
@@ -216,6 +217,57 @@ class Jobs:
                 self._pending.put(job_id)
                 return self._record_with_queue_position(retry_record)
 
+    def delete(self, job_id: str) -> dict[str, object]:
+        """Delete one terminal Job and its residual Work directory."""
+        with self._lifecycle_lock:
+            with self._lock:
+                record = self._records.get(job_id)
+                if record is None:
+                    raise ServiceError("job_not_found", "Job does not exist")
+                status = record.get("status")
+                if status not in TERMINAL_JOB_STATUSES:
+                    raise ServiceError(
+                        "job_delete_conflict",
+                        "Only Completed, Failed, or Interrupted Jobs can be deleted",
+                        status=status,
+                    )
+            self._delete_terminal_job(job_id)
+            return {"id": job_id, "deleted": True}
+
+    def clear_completed(self) -> dict[str, object]:
+        """Delete every Completed Job, retaining records whose cleanup fails."""
+        with self._lock:
+            job_ids = sorted(
+                (
+                    str(record["id"])
+                    for record in self._records.values()
+                    if record.get("status") == "Completed"
+                ),
+                key=lambda value: value,
+            )
+        deleted: list[str] = []
+        failed: list[dict[str, object]] = []
+        for job_id in job_ids:
+            with self._lifecycle_lock:
+                with self._lock:
+                    record = self._records.get(job_id)
+                    if record is None or record.get("status") != "Completed":
+                        continue
+                error = self._attempt_delete_terminal_job(job_id)
+            if error is not None:
+                context = self._error_context(error.context)
+                failed.append(
+                    {
+                        "id": job_id,
+                        "error_code": error.error_code,
+                        "message": error.message,
+                        **context,
+                    }
+                )
+            else:
+                deleted.append(job_id)
+        return {"deleted": deleted, "failed": failed}
+
     def list(self) -> list[dict[str, object]]:
         with self._lock:
             records = [
@@ -232,6 +284,64 @@ class Jobs:
             if record is None:
                 raise ServiceError("job_not_found", "Job does not exist")
             return self._record_with_queue_position(record)
+
+    def _delete_terminal_job(self, job_id: str) -> None:
+        try:
+            work_directory = self._job_work_directory(job_id)
+        except ServiceError as error:
+            context = {"path": f"jobs/{_safe_input_path(job_id)}", **error.context}
+            raise ServiceError(
+                error.error_code,
+                error.message,
+                **context,
+            ) from error
+        try:
+            shutil.rmtree(work_directory)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise ServiceError(
+                "job_work_cleanup_failed",
+                "Job Work data could not be cleaned up",
+                path=f"jobs/{job_id}",
+            ) from error
+
+        try:
+            self._remove_record(job_id)
+        except OSError as error:
+            raise ServiceError(
+                "job_record_delete_failed",
+                "Job history record could not be deleted",
+                path=f"jobs/{job_id}.json",
+            ) from error
+        with self._lock:
+            self._records.pop(job_id, None)
+
+    def _attempt_delete_terminal_job(self, job_id: str) -> ServiceError | None:
+        try:
+            self._delete_terminal_job(job_id)
+        except ServiceError as error:
+            return error
+        return None
+
+    def _remove_record(self, job_id: str) -> None:
+        self._ensure_jobs_root()
+        record_path = self._jobs_root / f"{job_id}.json"
+        previous: bytes | None = None
+        removed = False
+        try:
+            previous = record_path.read_bytes() if record_path.exists() else None
+            record_path.unlink(missing_ok=True)
+            removed = previous is not None
+            _fsync_directory(self._jobs_root)
+        except OSError:
+            if removed and previous is not None:
+                try:
+                    _restore_record(record_path, previous)
+                except OSError:
+                    # Keep the best-effort restoration from hiding the original failure.
+                    record_path.write_bytes(previous)
+            raise
 
     def _snapshot_term_map(self, term_map_id: str | None) -> dict[str, object] | None:
         if term_map_id is None:
@@ -791,6 +901,8 @@ class Jobs:
             )
 
     def _job_work_directory(self, job_id: str) -> Path:
+        if not job_id or Path(job_id).name != job_id or job_id in {".", ".."}:
+            raise ServiceError("invalid_job_id", "Job ID is invalid")
         self._ensure_jobs_root()
         work_directory = self._jobs_root / job_id
         if work_directory.is_symlink():

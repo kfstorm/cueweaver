@@ -45,6 +45,18 @@ export interface JobNotification {
   message: string;
 }
 
+export interface JobCleanupFailure {
+  id: string;
+  error_code: string;
+  message: string;
+  [key: string]: unknown;
+}
+
+export interface ClearCompletedJobsResult {
+  deleted: string[];
+  failed: JobCleanupFailure[];
+}
+
 export function useJobs({ poll = true }: { poll?: boolean } = {}) {
   const query = useQuery({
     queryKey: ["jobs"],
@@ -181,5 +193,45 @@ export function useRetryJob() {
       return body;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useDeleteJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (jobId: string): Promise<{ id: string; deleted: boolean }> => {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
+        method: "DELETE",
+      });
+      const body = (await response.json()) as {
+        id: string;
+        deleted: boolean;
+        message?: string;
+      };
+      if (!response.ok) throw new Error(body.message ?? "Job could not be deleted.");
+      return body;
+    },
+    onSuccess: (_result, jobId) => {
+      queryClient.removeQueries({ queryKey: ["job", jobId] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useClearCompletedJobs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<ClearCompletedJobsResult> => {
+      const response = await fetch("/api/jobs/completed", { method: "DELETE" });
+      const body = (await response.json()) as ClearCompletedJobsResult & {
+        message?: string;
+      };
+      if (!response.ok)
+        throw new Error(body.message ?? "Completed Jobs could not be cleared.");
+      return body;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
   });
 }

@@ -1323,6 +1323,236 @@ def test_cleanup_failure_does_not_claim_job_completed(
     assert (work_root / "jobs" / queued["id"]).is_dir()
 
 
+@pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])
+def test_delete_terminal_job_removes_history_and_work_without_touching_media(
+    tmp_path: Path, terminal_status: str
+):
+    media_root, work_root, media, subtitle = make_roots(tmp_path)
+    translator = FakeTranslator(
+        error=RuntimeError("boom") if terminal_status == "Failed" else None
+    )
+    jobs = Jobs(translator, media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    terminal = wait_for_status_from_jobs(jobs, str(queued["id"]), terminal_status)
+    work_directory = work_root / "jobs" / str(queued["id"])
+    work_directory.mkdir(exist_ok=True)
+    (work_directory / "diagnostic.txt").write_text(
+        "keep until delete", encoding="utf-8"
+    )
+    output = media_root / str(terminal["request"]["output_path"])
+    media_before = media.read_bytes()
+    subtitle_before = subtitle.read_bytes()
+    output_before = output.read_bytes() if output.exists() else None
+
+    assert jobs.delete(str(queued["id"])) == {"id": queued["id"], "deleted": True}
+    assert jobs.list() == []
+    assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    assert not work_directory.exists()
+    assert media.read_bytes() == media_before
+    assert subtitle.read_bytes() == subtitle_before
+    if output_before is None:
+        assert not output.exists()
+    else:
+        assert output.read_bytes() == output_before
+    jobs.close()
+
+
+def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path):
+    media_root, work_root, media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(error=RuntimeError("boom")), media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    jobs.close()
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["status"] = "Interrupted"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    work_directory = work_root / "jobs" / str(queued["id"])
+    (work_directory / "checkpoint").write_text("checkpoint", encoding="utf-8")
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root)
+    assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
+    media_before = media.read_bytes()
+    restarted.delete(str(queued["id"]))
+
+    assert restarted.list() == []
+    assert not work_directory.exists()
+    assert not record_path.exists()
+    assert media.read_bytes() == media_before
+    restarted.close()
+
+
+def test_delete_rejects_queued_and_translating_jobs(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    started = threading.Event()
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
+    running = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+
+    with pytest.raises(ServiceError) as running_error:
+        jobs.delete(str(running["id"]))
+    with pytest.raises(ServiceError) as queued_error:
+        jobs.delete(str(queued["id"]))
+
+    assert running_error.value.error_code == "job_delete_conflict"
+    assert running_error.value.context == {"status": "Translating"}
+    assert queued_error.value.error_code == "job_delete_conflict"
+    assert queued_error.value.context == {"status": "Queued"}
+    release.set()
+    wait_for_status_from_jobs(jobs, str(running["id"]), "Completed")
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    jobs.close()
+
+
+def test_delete_rejects_extracting_jobs(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    extracting = threading.Event()
+    media_adapter = MediaExtractorFixture(
+        [{"index": 3, "codec_name": "subrip"}],
+        started=extracting,
+        release=release,
+    )
+    jobs = Jobs(
+        FakeTranslator(),
+        media_root,
+        work_root,
+        extraction=Extraction(media_adapter, AtomicOutputPublisher()),
+    )
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+    assert extracting.wait(timeout=5)
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.delete(str(queued["id"]))
+
+    assert raised.value.error_code == "job_delete_conflict"
+    assert raised.value.context == {"status": "Extracting"}
+    release.set()
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    jobs.close()
+
+
+def test_delete_cleanup_failure_keeps_record_and_preserves_published_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    work_directory = work_root / "jobs" / str(queued["id"])
+    work_directory.mkdir(exist_ok=True)
+    output = media_root / str(completed["request"]["output_path"])
+    output_before = output.read_bytes()
+    original_rmtree = shutil.rmtree
+
+    def fail_cleanup(path: Path) -> None:
+        if path == work_directory:
+            raise OSError("permission denied")
+        original_rmtree(path)
+
+    monkeypatch.setattr("cueweaver.application.jobs.shutil.rmtree", fail_cleanup)
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.delete(str(queued["id"]))
+
+    assert raised.value.error_code == "job_work_cleanup_failed"
+    assert raised.value.context == {"path": f"jobs/{queued['id']}"}
+    assert jobs.get(str(queued["id"]))["status"] == "Completed"
+    assert (work_root / "jobs" / f"{queued['id']}.json").exists()
+    assert work_directory.exists()
+    assert output.read_bytes() == output_before
+    assert media.exists()
+    jobs.close()
+
+
+def test_delete_record_sync_failure_restores_history_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    work_directory = work_root / "jobs" / str(queued["id"])
+    work_directory.mkdir()
+    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    original_fsync = os.fsync
+
+    def fail_directory_sync(_file_descriptor: int) -> None:
+        raise OSError("directory sync failed")
+
+    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", fail_directory_sync)
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.delete(str(queued["id"]))
+
+    assert raised.value.error_code == "job_record_delete_failed"
+    assert record_path.exists()
+    assert jobs.get(str(queued["id"]))["status"] == "Completed"
+    assert not work_directory.exists()
+    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", original_fsync)
+    jobs.close()
+
+
+def test_clear_completed_is_deterministic_and_retains_partial_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    jobs = Jobs(translator, media_root, work_root)
+    failed = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "failed"))
+    wait_for_status_from_jobs(jobs, str(failed["id"]), "Failed")
+    translator.error = None
+    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "first"))
+    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "second"))
+    wait_for_status_from_jobs(jobs, str(first["id"]), "Completed")
+    wait_for_status_from_jobs(jobs, str(second["id"]), "Completed")
+    for job in (first, second):
+        directory = work_root / "jobs" / str(job["id"])
+        directory.mkdir()
+        (directory / "marker").write_text("retained", encoding="utf-8")
+    failed_cleanup_id = max(str(first["id"]), str(second["id"]))
+    deleted_id = min(str(first["id"]), str(second["id"]))
+    original_rmtree = shutil.rmtree
+
+    def fail_one_cleanup(path: Path) -> None:
+        if path == work_root / "jobs" / failed_cleanup_id:
+            raise OSError("permission denied")
+        original_rmtree(path)
+
+    monkeypatch.setattr("cueweaver.application.jobs.shutil.rmtree", fail_one_cleanup)
+
+    result = jobs.clear_completed()
+
+    assert result == {
+        "deleted": [deleted_id],
+        "failed": [
+            {
+                "id": failed_cleanup_id,
+                "error_code": "job_work_cleanup_failed",
+                "message": "Job Work data could not be cleaned up",
+                "path": f"jobs/{failed_cleanup_id}",
+            }
+        ],
+    }
+    assert jobs.get(str(failed["id"]))["status"] == "Failed"
+    assert jobs.get(failed_cleanup_id)["status"] == "Completed"
+    assert not (work_root / "jobs" / deleted_id).exists()
+    assert (work_root / "jobs" / failed_cleanup_id).exists()
+    assert not (work_root / "jobs" / f"{deleted_id}.json").exists()
+    assert (work_root / "jobs" / f"{failed_cleanup_id}.json").exists()
+    jobs.close()
+
+
 @pytest.mark.parametrize(
     ("translator", "body", "expected_code"),
     [

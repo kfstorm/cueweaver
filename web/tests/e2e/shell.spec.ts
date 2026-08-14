@@ -37,14 +37,16 @@ async function stubProductStatus(page: Page, providerReady = true) {
   );
 }
 
-function jobRecord(id: string, status: "Queued" | "Completed" = "Completed") {
+type E2EJobStatus = "Queued" | "Completed" | "Failed" | "Interrupted";
+
+function jobRecord(id: string, status: E2EJobStatus = "Completed") {
   return {
     id,
     attempt: 1,
     status,
     created_at: "2026-08-13T12:00:00Z",
     started_at: "2026-08-13T12:00:01Z",
-    finished_at: status === "Completed" ? "2026-08-13T12:00:02Z" : null,
+    finished_at: status === "Queued" ? null : "2026-08-13T12:00:02Z",
     queue_position: status === "Queued" ? 1 : null,
     request: {
       media_path: "Example.mkv",
@@ -58,40 +60,103 @@ function jobRecord(id: string, status: "Queued" | "Completed" = "Completed") {
       output_path: "Example.zh-Hans.srt",
       source_format: "srt",
     },
-    error: null,
+    error:
+      status === "Failed"
+        ? { code: "translation_failed", message: "Translation failed" }
+        : status === "Interrupted"
+          ? { code: "job_interrupted", message: "Job was interrupted" }
+          : null,
   };
 }
 
 async function stubJobs(page: Page, jobs: Array<ReturnType<typeof jobRecord>>) {
-  await page.route("**/api/jobs", async (route) => {
-    if (route.request().method() !== "GET") {
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ jobs }),
-    });
-  });
+  await registerJobListRoute(page, () => jobs);
   await page.route("**/api/jobs/*", async (route) => {
     if (route.request().method() !== "GET") {
       await route.continue();
       return;
     }
-    const id = new URL(route.request().url()).pathname.split("/").pop();
-    const job = jobs.find((candidate) => candidate.id === id);
-    if (job === undefined) {
+    await fulfillJobDetail(route, jobs);
+  });
+}
+
+async function registerJobListRoute(
+  page: Page,
+  getJobs: () => Array<ReturnType<typeof jobRecord>>,
+) {
+  await page.route("**/api/jobs", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await fulfillJobList(route, getJobs());
+  });
+}
+
+async function fulfillJobList(
+  route: Parameters<Parameters<Page["route"]>[1]>[0],
+  jobs: Array<ReturnType<typeof jobRecord>>,
+) {
+  await route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ jobs }),
+  });
+}
+
+async function fulfillJobDetail(
+  route: Parameters<Parameters<Page["route"]>[1]>[0],
+  jobs: Array<ReturnType<typeof jobRecord>>,
+) {
+  const id = new URL(route.request().url()).pathname.split("/").pop();
+  const job = jobs.find((candidate) => candidate.id === id);
+  if (job === undefined) {
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ message: "Job does not exist" }),
+    });
+    return;
+  }
+  await route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(job),
+  });
+}
+
+async function stubMutableJobs(
+  page: Page,
+  initialJobs: Array<ReturnType<typeof jobRecord>>,
+) {
+  let jobs = [...initialJobs];
+  await registerJobListRoute(page, () => jobs);
+  await page.route("**/api/jobs/*", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "DELETE" && path === "/api/jobs/completed") {
+      const deleted = jobs
+        .filter((job) => job.status === "Completed")
+        .map((job) => job.id);
+      jobs = jobs.filter((job) => job.status !== "Completed");
       await route.fulfill({
-        status: 404,
         contentType: "application/json",
-        body: JSON.stringify({ message: "Job does not exist" }),
+        body: JSON.stringify({ deleted, failed: [] }),
       });
       return;
     }
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify(job),
-    });
+    if (request.method() === "DELETE") {
+      const id = path.split("/").pop();
+      jobs = jobs.filter((job) => job.id !== id);
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ id, deleted: true }),
+      });
+      return;
+    }
+    if (request.method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await fulfillJobDetail(route, jobs);
   });
 }
 
@@ -185,6 +250,46 @@ test.describe("Job history layouts", () => {
         await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
       } else {
         await expect(page.getByRole("heading", { name: "Select a Job" })).toBeVisible();
+      }
+    });
+  }
+});
+
+test.describe("Job history mutations", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} clears Completed and deletes a terminal Job`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await stubProductStatus(page);
+      await stubMutableJobs(page, [
+        jobRecord("job-completed"),
+        jobRecord("job-failed", "Failed"),
+      ]);
+      page.on("dialog", (dialog) => dialog.accept());
+      await page.goto("/jobs");
+
+      await expect(
+        page.getByRole("button", { name: "Clear Completed (1)" }),
+      ).toBeEnabled();
+      await expect(page.getByText("2 total")).toBeVisible();
+      await page.getByRole("button", { name: "Clear Completed (1)" }).click();
+      await expect(
+        page.getByRole("button", { name: "Clear Completed (0)" }),
+      ).toBeDisabled();
+      await expect(page.getByText("1 total")).toBeVisible();
+      await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
+
+      await page.getByRole("button", { name: /Example\.mkv/ }).click();
+      await page.getByRole("button", { name: "Delete Job" }).click();
+      await expect(page.getByRole("heading", { name: "No Jobs yet" })).toBeVisible();
+      await expect(page).toHaveURL(/\/jobs$/);
+      await expect(page.getByRole("heading", { name: "All Jobs" })).toBeFocused();
+      if (viewport.name === "mobile") {
+        await expect(page.getByRole("heading", { name: "No Jobs yet" })).toBeVisible();
       }
     });
   }

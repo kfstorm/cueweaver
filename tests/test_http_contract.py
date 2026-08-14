@@ -94,6 +94,8 @@ class JobsApplicationFixture(ApplicationFixture):
         super().__init__()
         self.jobs = self
         self.retried_job_id: str | None = None
+        self.deleted_job_id: str | None = None
+        self.cleared_completed = False
 
     def create(self, _request: object) -> dict[str, object]:
         return {}
@@ -107,6 +109,14 @@ class JobsApplicationFixture(ApplicationFixture):
     def retry(self, job_id: str) -> dict[str, object]:
         self.retried_job_id = job_id
         return {"id": job_id, "status": "Queued"}
+
+    def delete(self, job_id: str) -> dict[str, object]:
+        self.deleted_job_id = job_id
+        return {"id": job_id, "deleted": True}
+
+    def clear_completed(self) -> dict[str, object]:
+        self.cleared_completed = True
+        return {"deleted": [], "failed": []}
 
     def close(self) -> None:
         pass
@@ -203,6 +213,21 @@ def test_http_retries_a_job_with_no_editable_request_body():
     assert response.status_code == 200
     assert response.json() == {"id": "job-1", "status": "Queued"}
     assert application.retried_job_id == "job-1"
+
+
+def test_http_deletes_one_job_and_clears_completed_jobs_without_a_request_body():
+    application = JobsApplicationFixture()
+    client = TestClient(create_app(application))
+
+    deleted = client.delete("/api/jobs/job-1")
+    cleared = client.delete("/api/jobs/completed")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "job-1", "deleted": True}
+    assert application.deleted_job_id == "job-1"
+    assert cleared.status_code == 200
+    assert cleared.json() == {"deleted": [], "failed": []}
+    assert application.cleared_completed is True
 
 
 def post_public_translation(client: TestClient, subtitle: Path, output: Path):

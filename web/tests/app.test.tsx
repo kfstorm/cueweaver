@@ -622,6 +622,118 @@ describe("product shell", () => {
     ).toBeInTheDocument();
   });
 
+  it("requires confirmation before deleting a terminal Job and returns to the list", async () => {
+    const job = embeddedJob("delete-job-1", "Failed");
+    let deleted = false;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/jobs") return jsonResponse({ jobs: deleted ? [] : [job] });
+        if (input === "/api/jobs/delete-job-1" && init?.method === "DELETE") {
+          deleted = true;
+          return jsonResponse({ id: job.id, deleted: true });
+        }
+        return jsonResponse({ term_maps: [] });
+      });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/jobs/delete-job-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/jobs/delete-job-1", {
+        method: "DELETE",
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "No Jobs yet" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "All Jobs" })).toHaveFocus();
+  });
+
+  it("clears only Completed Jobs and reports partial cleanup failures", async () => {
+    const first = {
+      ...embeddedJob("clear-job-a", "Failed"),
+      status: "Completed",
+      error: null,
+    };
+    const second = {
+      ...embeddedJob("clear-job-b", "Failed"),
+      status: "Completed",
+      error: null,
+    };
+    const retained = { ...embeddedJob("clear-job-failed", "Failed") };
+    let currentJobs: object[] = [first, second, retained];
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/jobs") return jsonResponse({ jobs: currentJobs });
+        if (input === "/api/jobs/completed" && init?.method === "DELETE") {
+          currentJobs = [second, retained];
+          return jsonResponse({
+            deleted: [first.id],
+            failed: [
+              {
+                id: second.id,
+                error_code: "job_work_cleanup_failed",
+                message: "Job Work data could not be cleaned up",
+                path: `jobs/${second.id}`,
+              },
+            ],
+          });
+        }
+        if (input === `/api/jobs/${second.id}` && init?.method === "DELETE") {
+          currentJobs = [retained];
+          return jsonResponse({ id: second.id, deleted: true });
+        }
+        return jsonResponse({ term_maps: [] });
+      });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(
+      await screen.findByRole("button", { name: "Clear Completed (2)" }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear Completed (2)" })[0]);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/jobs/completed", {
+        method: "DELETE",
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Some Completed Jobs could not be cleared",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Job clear-jo: Job Work data could not be cleaned up",
+    );
+    expect(screen.getByText("Clear Completed (1)")).toBeInTheDocument();
+    expect(screen.getAllByText("Movie.mkv")).not.toHaveLength(0);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Job clear-jo/ })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`/api/jobs/${second.id}`, {
+        method: "DELETE",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Some Completed Jobs could not be cleared."),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   it("lists a Term map and supports keyboard inspection and search", async () => {
     renderTermMaps();
 

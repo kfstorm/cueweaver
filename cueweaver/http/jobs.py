@@ -27,6 +27,10 @@ class JobsOperation(Protocol):
 
     def retry(self, job_id: str) -> dict[str, object]: ...
 
+    def delete(self, job_id: str) -> dict[str, object]: ...
+
+    def clear_completed(self) -> dict[str, object]: ...
+
     def list(self) -> list[dict[str, object]]: ...
 
     def get(self, job_id: str) -> dict[str, object]: ...
@@ -63,9 +67,17 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     def list_jobs() -> dict[str, object]:
         return {"jobs": application.jobs.list()}
 
+    @app.delete("/api/jobs/completed")
+    def clear_completed_jobs() -> dict[str, object]:
+        return application.jobs.clear_completed()
+
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, object]:
         return application.jobs.get(job_id)
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str) -> dict[str, object]:
+        return application.jobs.delete(job_id)
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry_job(job_id: str) -> dict[str, object]:
