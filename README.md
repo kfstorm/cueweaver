@@ -9,8 +9,9 @@ explicit-path operations:
 - `POST /api/extract`
 - `POST /api/translate`
 
-Each request receives one final JSON response. There are no Job, event-stream,
-or cancellation APIs.
+The legacy synchronous operations still return one final JSON response. The Web
+product additionally exposes durable Job APIs; there are no event-stream or
+cancellation APIs.
 
 ## Run
 
@@ -19,7 +20,7 @@ Work volumes:
 
 ```bash
 docker build -t cueweaver .
-docker run --rm -p 8000:8000 \
+docker run --rm -p 127.0.0.1:8000:8000 \
   -e CUEWEAVER_MEDIA_ROOT=/media \
   -e CUEWEAVER_WORK_ROOT=/work \
   -v /path/to/media:/media \
@@ -67,8 +68,9 @@ CueWeaver-specific environment-variable fallbacks.
 
 ## HTTP Contract
 
-All requests use `application/json`. Successful requests return HTTP 200 and
-the JSON shapes below. Failures return JSON with at least `error_code` and
+Requests with JSON bodies use `Content-Type: application/json`. Successful API
+responses return JSON, normally with HTTP 200, and use the shapes below.
+Failures return JSON with at least `error_code` and
 `message`; path and stream context may also be included. Clients must not rely
 on a specific status code or fine-grained error-code string.
 
