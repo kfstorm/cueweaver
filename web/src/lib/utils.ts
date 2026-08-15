@@ -16,7 +16,7 @@ const utcDateTime = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
 export function formatLocalTimestamp(value: string | null): string {
   if (value === null) return "Not recorded";

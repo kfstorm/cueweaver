@@ -162,6 +162,30 @@ function translatingEmbeddedJob(id: string) {
   };
 }
 
+function queuedEmbeddedJob(id: string) {
+  return {
+    ...embeddedJob(id, "Failed"),
+    status: "Queued" as const,
+    started_at: null,
+    finished_at: null,
+    queue_position: 1,
+    error: null,
+  };
+}
+
+function mockQueuedJobCreation(job: JobFixture, termMaps: TermMapSummary[] = []) {
+  const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+  fetchMock.mockImplementation(async (input: string, request?: RequestInit) => {
+    if (input === "/api/status") return statusResponse();
+    if (input === "/api/jobs" && request?.method === "POST") {
+      return jsonResponse(job);
+    }
+    if (input.startsWith("/api/jobs")) return jobListResponse([job]);
+    return jsonResponse({ term_maps: termMaps });
+  });
+  return fetchMock;
+}
+
 function completedJob(job: JobFixture) {
   return {
     ...job,
@@ -891,8 +915,29 @@ describe("product shell", () => {
       expect(await screen.findByText(status)).toBeInTheDocument();
       if (status === "Queued") {
         expect(screen.getByText("Queue position 2")).toBeInTheDocument();
+      } else {
+        expect(
+          screen.getByText("Running Jobs cannot be cancelled."),
+        ).toBeInTheDocument();
       }
       cleanup();
+    }
+  });
+
+  it("renders Job creation time as an English relative label", async () => {
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(new Date("2026-08-15T12:00:00Z").valueOf());
+    try {
+      const job = {
+        ...embeddedJob("relative-time-job", "Failed"),
+        created_at: "2026-08-14T12:00:00Z",
+      };
+      renderWithFetch("/jobs", jobsFetch(job));
+
+      expect(await screen.findByText("Created yesterday")).toBeInTheDocument();
+    } finally {
+      now.mockRestore();
     }
   });
 
@@ -1736,6 +1781,69 @@ describe("product shell", () => {
     expect(await screen.findByRole("button", { name: "Queueing..." })).toBeDisabled();
     resolveCreate(jsonResponse({ id: "queued-1", status: "Queued" }));
     expect(await screen.findByText("Translation queued")).toBeInTheDocument();
+  });
+
+  it("shows queue details and opens the created Job", async () => {
+    const job = queuedEmbeddedJob("queued-detail-1");
+    renderRoute("/translate");
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    mockQueuedJobCreation(job);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Translation queued" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Movie.mkv")).toHaveLength(2);
+    expect(screen.getByText("zh-Hans")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View Job" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Request summary" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Movie.mkv" })).toBeInTheDocument();
+  });
+
+  it("resets the translation workflow from queue success", async () => {
+    const job = queuedEmbeddedJob("queued-reset-1");
+    renderRoute(
+      "/translate",
+      true,
+      undefined,
+      undefined,
+      false,
+      [],
+      [CHARACTERS_TERM_MAP],
+    );
+    await selectExternalSubtitle();
+    fireEvent.click(screen.getByText("Advanced settings"));
+    fireEvent.change(await screen.findByLabelText("Term map"), {
+      target: { value: "map-1" },
+    });
+    fireEvent.click(screen.getByLabelText("Dynamic terminology"));
+    fireEvent.click(screen.getByLabelText("Subtitle terminology filtering"));
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    mockQueuedJobCreation(job, [CHARACTERS_TERM_MAP]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+    expect(await screen.findByText("Translation queued")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Translate another" }));
+
+    expect(screen.queryByText("Translation queued")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Select Movie.mkv" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Choose another Media" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Term map")).toHaveValue("");
+    expect(screen.getByLabelText("Dynamic terminology")).toBeChecked();
+    expect(screen.getByLabelText("Subtitle terminology filtering")).toBeChecked();
   });
 
   it("queues an Embedded subtitle with its stream index and format", async () => {
