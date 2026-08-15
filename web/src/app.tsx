@@ -20,7 +20,14 @@ import {
   type FormEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { NavLink, Navigate, Outlet, Route, Routes } from "react-router-dom";
+import {
+  NavLink,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useNavigate,
+} from "react-router-dom";
 
 import { Button } from "./components/ui/button";
 import { Input, Textarea } from "./components/ui/input";
@@ -130,6 +137,7 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 function Translate() {
   const queryClient = useQueryClient();
   const createJob = useCreateJob();
+  const navigate = useNavigate();
   const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
@@ -194,12 +202,34 @@ function Translate() {
     outputSuffixError === null &&
     status.data?.translation_provider.ready === true &&
     !createJob.isPending;
+
+  const resetTranslationWorkflow = () => {
+    clearMedia(selectedMedia);
+    setTermMapId(null);
+    setDynamicTerminologyEnabled(true);
+    setSubtitleTerminologyFilterEnabled(true);
+    setOutputSuffix(targetLanguage);
+    setOutputConflictPolicy("append-number");
+    suffixEdited.current = false;
+    createJob.reset();
+  };
+
   return (
     <>
       <PageHeader
         title="Translate"
         detail="Prepare a subtitle translation from your mounted media library."
       />
+      {createJob.isSuccess && (
+        <QueueSuccess
+          job={createJob.data}
+          onViewJob={() => {
+            if (createJob.data?.id)
+              navigate(`/jobs/${encodeURIComponent(createJob.data.id)}`);
+          }}
+          onTranslateAnother={resetTranslationWorkflow}
+        />
+      )}
       <section className="workflow-panel" aria-labelledby="source-title">
         <div className="step-index">01</div>
         <div className="step-content">
@@ -447,12 +477,54 @@ function Translate() {
           {createJob.error.message}
         </p>
       )}
-      {createJob.isSuccess && (
-        <p className="upload-status" role="status">
-          Translation queued
-        </p>
-      )}
     </>
+  );
+}
+
+function QueueSuccess({
+  job,
+  onViewJob,
+  onTranslateAnother,
+}: {
+  job: ReturnType<typeof useCreateJob>["data"];
+  onViewJob: () => void;
+  onTranslateAnother: () => void;
+}) {
+  const media = job?.request?.media_path ?? "Media";
+  const targetLanguage =
+    job?.request?.target_language_code ?? "Target language unavailable";
+
+  return (
+    <section className="queue-success" aria-labelledby="queue-success-title">
+      <div className="queue-success-heading" role="status">
+        <CheckCircleIcon size={22} weight="fill" aria-hidden="true" />
+        <div>
+          <p className="eyebrow">Queued Job</p>
+          <h2 id="queue-success-title">Translation queued</h2>
+          <p>The translation is ready to run in the queue.</p>
+        </div>
+      </div>
+      <dl className="queue-success-summary">
+        <div>
+          <dt>Media</dt>
+          <dd title={media}>{media}</dd>
+        </div>
+        <div>
+          <dt>Target language</dt>
+          <dd>{targetLanguage}</dd>
+        </div>
+      </dl>
+      <div className="queue-success-actions">
+        {job?.id && (
+          <Button type="button" onClick={onViewJob}>
+            View Job
+          </Button>
+        )}
+        <Button type="button" variant="outline" onClick={onTranslateAnother}>
+          Translate another
+        </Button>
+      </div>
+    </section>
   );
 }
 
