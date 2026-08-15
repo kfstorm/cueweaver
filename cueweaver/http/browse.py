@@ -50,4 +50,8 @@ def entry_body(entry: BrowseEntry) -> dict[str, object]:
         body["title"] = entry.title
     if entry.year is not None:
         body["year"] = entry.year
+    if entry.season is not None:
+        body["season"] = entry.season
+    if entry.episode is not None:
+        body["episode"] = entry.episode
     return body
