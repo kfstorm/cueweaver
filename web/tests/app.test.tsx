@@ -33,7 +33,13 @@ function emptyMediaResponse() {
   return jsonResponse({ path: "", entries: [] });
 }
 
-function statusResponse(providerReady = true) {
+function statusResponse(
+  providerReady = true,
+  jobRecords?: {
+    corrupt: { count: number; location: string };
+    unsupported: { count: number; location: string };
+  },
+) {
   return jsonResponse({
     api: { ready: true },
     roots: { ready: true },
@@ -45,6 +51,7 @@ function statusResponse(providerReady = true) {
             "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
         },
     worker: { ready: true, mode: "single" },
+    ...(jobRecords ? { job_records: jobRecords } : {}),
   });
 }
 
@@ -420,6 +427,37 @@ describe("product shell", () => {
     );
     expect(screen.getByText("Runtime unavailable")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("warns about quarantined Job records in the sidebar and Jobs page", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") {
+        return statusResponse(true, {
+          corrupt: { count: 2, location: "jobs/corrupt" },
+          unsupported: { count: 1, location: "jobs/unsupported" },
+        });
+      }
+      if (input === "/api/jobs") return jsonResponse({ jobs: [] });
+      return jsonResponse({ term_maps: [] });
+    });
+
+    renderWithFetch("/jobs", fetchMock);
+
+    expect((await screen.findAllByText("Job records need attention")).length).toBe(2);
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "DD" &&
+          element.textContent?.includes("2 records in jobs/corrupt") === true,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "DD" &&
+          element.textContent?.includes("1 record in jobs/unsupported") === true,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows Media loading, empty, and retryable error states", async () => {

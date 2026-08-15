@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from cueweaver.adapters.output import AtomicOutputPublisher
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
-from cueweaver.application.jobs import CreateJobRequest, Jobs
+from cueweaver.application.jobs import CreateJobRequest, FileJobRecordStore, Jobs
 from cueweaver.product import create_product_app
 
 SRT = b"1\n00:00:00,000 --> 00:00:01,000\nTranslated\n"
@@ -120,6 +120,334 @@ def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media.write_bytes(b"media")
     subtitle.write_bytes(SRT)
     return media_root, tmp_path / "work", media, subtitle
+
+
+def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, object]:
+    return {
+        "id": job_id,
+        "status": status,
+        "request": {
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh-Hans",
+            "output_path": "Movie.zh-Hans.srt",
+            "source_format": "srt",
+        },
+    }
+
+
+def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid_and_future_records(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = {
+        "id": "legacy-job",
+        "status": "Failed",
+        "created_at": "2026-08-13T12:00:00Z",
+        "request": {
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh-Hans",
+            "output_path": "Movie.zh-Hans.srt",
+            "source_format": "srt",
+        },
+    }
+    (jobs_root / "legacy-job.json").write_text(json.dumps(legacy), encoding="utf-8")
+    invalid_bytes = b"not-json"
+    (jobs_root / "invalid.json").write_bytes(invalid_bytes)
+    unreadable_bytes = b"\xff\xfe"
+    (jobs_root / "unreadable.json").write_bytes(unreadable_bytes)
+    invalid_schema_bytes = b'{"schema_version": "one"}'
+    (jobs_root / "invalid-schema.json").write_bytes(invalid_schema_bytes)
+    future_bytes = json.dumps({**legacy, "schema_version": 2, "future": True}).encode()
+    (jobs_root / "future.json").write_bytes(future_bytes)
+
+    store = FileJobRecordStore(jobs_root)
+    records = store.load()
+
+    assert records == [
+        {
+            **legacy,
+            "schema_version": 1,
+            "attempt": 1,
+            "request": {
+                **legacy["request"],
+                "term_map": None,
+                "dynamic_terminology_enabled": True,
+                "subtitle_terminology_filter_enabled": True,
+                "output_suffix": "zh-Hans",
+                "output_conflict_policy": "append-number",
+            },
+            "queue_sequence": 0,
+        }
+    ]
+    assert (
+        json.loads((jobs_root / "legacy-job.json").read_text())["schema_version"] == 1
+    )
+    assert not (jobs_root / "invalid.json").exists()
+    assert not (jobs_root / "unreadable.json").exists()
+    assert not (jobs_root / "invalid-schema.json").exists()
+    assert not (jobs_root / "future.json").exists()
+    assert (jobs_root / "corrupt" / "invalid.json").read_bytes() == invalid_bytes
+    assert (jobs_root / "corrupt" / "unreadable.json").read_bytes() == unreadable_bytes
+    assert (
+        jobs_root / "corrupt" / "invalid-schema.json"
+    ).read_bytes() == invalid_schema_bytes
+    assert (jobs_root / "unsupported" / "future.json").read_bytes() == future_bytes
+    assert store.health().corrupt_count == 3
+    assert store.health().unsupported_count == 1
+
+
+def test_record_store_migrates_a_legacy_record_with_a_noncanonical_filename(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = persisted_job_record("actual-id")
+    (jobs_root / "legacy-name.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert [record["id"] for record in records] == ["actual-id"]
+    assert (jobs_root / "actual-id.json").is_file()
+    assert not (jobs_root / "legacy-name.json").exists()
+
+
+def test_record_store_quarantines_a_symlink_as_regular_record_bytes(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside_bytes = b"not-json"
+    outside.write_bytes(outside_bytes)
+    (jobs_root / "linked.json").symlink_to(outside)
+
+    FileJobRecordStore(jobs_root).load()
+
+    quarantine = jobs_root / "corrupt" / "linked.json"
+    assert quarantine.read_bytes() == outside_bytes
+    assert not quarantine.is_symlink()
+    assert not (jobs_root / "linked.json").exists()
+    assert FileJobRecordStore(jobs_root).health().corrupt_count == 1
+
+
+def test_record_store_quarantines_a_legacy_record_with_an_unsafe_id(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    (jobs_root / "unsafe.json").write_text(
+        json.dumps(
+            {
+                "id": "../outside",
+                "status": "Failed",
+                "request": {
+                    "media_path": "Movie.mkv",
+                    "subtitle_path": "Movie.en.srt",
+                    "target_language_code": "zh-Hans",
+                    "output_path": "Movie.zh-Hans.srt",
+                    "source_format": "srt",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    FileJobRecordStore(jobs_root).load()
+
+    assert not (tmp_path / "outside.json").exists()
+    assert (jobs_root / "corrupt" / "unsafe.json").is_file()
+
+
+def test_record_store_keeps_the_canonical_record_when_a_duplicate_legacy_file_exists(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    canonical = {
+        "schema_version": 1,
+        "id": "actual-id",
+        "status": "Completed",
+        "request": {
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh-Hans",
+            "output_path": "Movie.zh-Hans.srt",
+            "source_format": "srt",
+        },
+    }
+    legacy = {key: value for key, value in canonical.items() if key != "schema_version"}
+    (jobs_root / "actual-id.json").write_text(json.dumps(canonical), encoding="utf-8")
+    legacy_path = jobs_root / "legacy-name.json"
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert [record["status"] for record in records] == ["Completed"]
+    assert not legacy_path.exists()
+    assert (jobs_root / "corrupt" / "legacy-name.json").read_text() == json.dumps(
+        legacy
+    )
+
+
+def test_record_store_protects_a_future_canonical_record_from_a_legacy_alias(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = persisted_job_record("future-job")
+    future = {**legacy, "schema_version": 2}
+    (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+    (jobs_root / "future-job.json").write_text(json.dumps(future), encoding="utf-8")
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert records == []
+    assert (jobs_root / "corrupt" / "a-legacy.json").is_file()
+    assert (jobs_root / "unsupported" / "future-job.json").is_file()
+
+
+def test_record_store_quarantines_an_unknown_future_shape_as_unsupported(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    raw_future = b'{"schema_version":2,"id":"future-job","status":"CancelledV2","request":{"new_shape":true}}'
+    (jobs_root / "future-job.json").write_bytes(raw_future)
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert records == []
+    assert (jobs_root / "unsupported" / "future-job.json").read_bytes() == raw_future
+    assert not (jobs_root / "corrupt" / "future-job.json").exists()
+
+
+def test_record_store_protects_a_mismatched_future_path_from_a_legacy_alias(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = persisted_job_record("actual-id")
+    future = {**legacy, "id": "other-id", "schema_version": 2}
+    (jobs_root / "a-alias.json").write_text(json.dumps(legacy), encoding="utf-8")
+    (jobs_root / "actual-id.json").write_text(json.dumps(future), encoding="utf-8")
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert [record["id"] for record in records] == ["actual-id"]
+    assert records[0]["schema_version"] == 1
+    assert (jobs_root / "actual-id.json").is_file()
+    assert not (jobs_root / "corrupt" / "a-alias.json").exists()
+    assert (jobs_root / "unsupported" / "actual-id.json").is_file()
+
+
+@pytest.mark.parametrize("alias_name", ["a-alias.json", "z-alias.json"])
+def test_record_store_preserves_a_different_job_in_a_canonical_path_conflict(
+    tmp_path: Path, alias_name: str
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    alias_record = persisted_job_record("actual-id")
+    other_record = {
+        **alias_record,
+        "id": "other-id",
+        "status": "Completed",
+    }
+    (jobs_root / alias_name).write_text(json.dumps(alias_record), encoding="utf-8")
+    (jobs_root / "actual-id.json").write_text(
+        json.dumps(other_record), encoding="utf-8"
+    )
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert [record["id"] for record in records] == ["other-id"]
+    assert records[0]["status"] == "Completed"
+    assert (jobs_root / "other-id.json").is_file()
+    assert (jobs_root / "corrupt" / alias_name).is_file()
+
+
+def test_record_store_migrates_an_alias_once_when_the_canonical_record_is_corrupt(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = persisted_job_record("z-job")
+    (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+    (jobs_root / "z-job.json").write_bytes(b"broken-canonical")
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert len(records) == 1
+    assert records[0]["id"] == "z-job"
+    assert json.loads((jobs_root / "z-job.json").read_text())["schema_version"] == 1
+    assert (jobs_root / "corrupt" / "z-job.json").read_bytes() == b"broken-canonical"
+
+
+def test_record_store_quarantines_a_broken_canonical_symlink_before_migration(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = persisted_job_record("z-job")
+    (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
+    missing = tmp_path / "missing.json"
+    (jobs_root / "z-job.json").symlink_to(missing)
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert len(records) == 1
+    assert records[0]["id"] == "z-job"
+    assert (jobs_root / "z-job.json").is_file()
+    assert (jobs_root / "corrupt" / "z-job.json").is_symlink()
+    assert FileJobRecordStore(jobs_root).health().corrupt_count == 1
+
+
+def test_record_store_does_not_overwrite_a_dangling_quarantine_collision(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    quarantine = jobs_root / "corrupt"
+    quarantine.mkdir(parents=True)
+    dangling_target = tmp_path / "missing.json"
+    existing = quarantine / "broken.json"
+    existing.symlink_to(dangling_target)
+    source = jobs_root / "broken.json"
+    source.write_bytes(b"broken")
+
+    FileJobRecordStore(jobs_root).load()
+
+    assert existing.is_symlink()
+    assert (quarantine / "broken.2.json").read_bytes() == b"broken"
+    assert FileJobRecordStore(jobs_root).health().corrupt_count == 2
+
+
+def test_record_store_rejects_path_traversal_job_ids(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"keep")
+    store = FileJobRecordStore(jobs_root)
+
+    with pytest.raises(ServiceError, match="Job ID is invalid"):
+        store.write("../outside", {})
+    with pytest.raises(ServiceError, match="Job ID is invalid"):
+        store.remove("../outside")
+
+    assert outside.read_bytes() == b"keep"
+
+
+def test_new_job_records_include_schema_version_one(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+
+    assert queued["schema_version"] == 1
+    assert (
+        json.loads(
+            (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
+        )["schema_version"]
+        == 1
+    )
+    jobs.close()
 
 
 def make_client(

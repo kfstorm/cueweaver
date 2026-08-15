@@ -32,7 +32,7 @@ import {
   type UnsupportedSubtitleCandidate,
 } from "./browse";
 import { cn } from "./lib/utils";
-import { useProductStatus } from "./status";
+import { jobRecordAttention, useProductStatus } from "./status";
 import { useCreateJob, useJobs, useJobNotifications } from "./jobs";
 import { JobNotificationRegion, JobsPage } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
@@ -76,7 +76,11 @@ function Shell() {
   const status = useProductStatus();
   const jobs = useJobs();
   const jobNotifications = useJobNotifications(jobs.data);
-  const ready = status.data?.api.ready && status.data?.roots.ready;
+  const ready =
+    status.data?.api.ready &&
+    status.data?.roots.ready &&
+    status.data.translation_provider.ready;
+  const recordsNeedAttention = jobRecordAttention(status.data);
   return (
     <div className="product-shell">
       <aside className="sidebar">
@@ -91,10 +95,17 @@ function Shell() {
           <span className={cn("status-dot", ready && "ready")} />
           {status.isPending
             ? "Checking runtime"
-            : ready
-              ? "Runtime ready"
-              : "Runtime unavailable"}
+            : status.data && !status.data.translation_provider.ready
+              ? "Provider needs configuration"
+              : ready
+                ? "Runtime ready"
+                : "Runtime unavailable"}
         </div>
+        {recordsNeedAttention && (
+          <div className="runtime-warning" role="status">
+            Job records need attention
+          </div>
+        )}
       </aside>
       <main className="workspace">
         <Outlet />
@@ -112,7 +123,6 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
         <h1>{title}</h1>
         <p>{detail}</p>
       </div>
-      <span className="worker-badge">Single worker</span>
     </header>
   );
 }

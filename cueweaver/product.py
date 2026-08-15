@@ -70,10 +70,10 @@ def _create_api_app(
     _validate_media_root(media_root)
     _prepare_work_root(work_root)
 
-    app = create_app(
-        CueWeaverApplication(translator, work_root=work_root, media_root=media_root),
-        media_root,
+    application = CueWeaverApplication(
+        translator, work_root=work_root, media_root=media_root
     )
+    app = create_app(application, media_root)
     app.add_exception_handler(404, api_not_found_handler)
     provider_ready = _provider_available(translator)
 
@@ -87,6 +87,7 @@ def _create_api_app(
             "roots": {"ready": True},
             "translation_provider": provider,
             "worker": {"ready": True, "mode": "single"},
+            "job_records": application.jobs.record_health(),
         }
 
     return app
