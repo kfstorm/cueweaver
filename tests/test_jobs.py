@@ -91,6 +91,27 @@ class RecordingTranslator(FakeTranslator):
         return super().translate(source, target_language, **kwargs)
 
 
+class FalsyRecordStore:
+    def __init__(self):
+        self.records: dict[str, dict[str, object]] = {}
+        self.calls: list[str] = []
+
+    def __bool__(self) -> bool:
+        return False
+
+    def load(self) -> list[dict[str, object]]:
+        self.calls.append("load")
+        return list(self.records.values())
+
+    def write(self, job_id: str, record: dict[str, object]) -> None:
+        self.calls.append("write")
+        self.records[job_id] = json.loads(json.dumps(record))
+
+    def remove(self, job_id: str) -> None:
+        self.calls.append("remove")
+        del self.records[job_id]
+
+
 def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -245,6 +266,24 @@ def wait_for_status_from_jobs(
             return body
         time.sleep(0.01)
     pytest.fail(f"Job did not reach {expected}")
+
+
+def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    store = FalsyRecordStore()
+    jobs = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    jobs.delete(str(queued["id"]))
+
+    assert store.calls[0] == "load"
+    assert "write" in store.calls
+    assert store.calls[-1] == "remove"
+    assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    jobs.close()
 
 
 def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: Path):

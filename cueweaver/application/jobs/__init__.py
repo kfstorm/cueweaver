@@ -25,11 +25,21 @@ from ..extraction import Extraction, ExtractRequest
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
 from ..translation import OutputPublisher, TranslateRequest, Translation, Translator
-
-JOB_STATUSES = frozenset(
-    {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
+from .model import (
+    JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
+    JobDetail,
+    JobRecord,
+    JobStatus,
+    JobSummary,
+    copy_job_record,
+    normalize_record,
+    project_job_detail,
+    queue_sequence,
+    valid_record,
 )
-TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted"})
+from .store import FileJobRecordStore, JobRecordStore
+
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
 APPROVED_ERROR_CONTEXT_KEYS = frozenset(
@@ -58,13 +68,15 @@ class TermMapResolver(Protocol):
 class Jobs:
     """Validate, persist, execute, and expose one serial stream of Jobs."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         translator: Translator,
         media_root: Path,
         work_root: Path,
         term_maps: TermMapResolver | None = None,
         extraction: Extraction | None = None,
+        *,
+        record_store: JobRecordStore | None = None,
     ) -> None:
         self._translator = translator
         self._term_maps = term_maps
@@ -72,6 +84,11 @@ class Jobs:
         self._media_root = media_root.resolve()
         self._work_root = work_root.resolve()
         self._jobs_root = self._work_root / "jobs"
+        self._record_store = (
+            record_store
+            if record_store is not None
+            else FileJobRecordStore(self._jobs_root)
+        )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
         self._next_queue_sequence = 0
@@ -186,7 +203,7 @@ class Jobs:
                 context = self._error_context(error.context)
                 safe_error = ServiceError(error.error_code, error.message, **context)
                 with self._lock:
-                    failed_record = _copy_record(record)
+                    failed_record = copy_job_record(record)
                     failed_record["error"] = {
                         "code": error.error_code,
                         "message": error.message,
@@ -196,7 +213,7 @@ class Jobs:
                     self._records[job_id] = failed_record
                 raise safe_error from error
             with self._lock:
-                retry_record = _copy_record(record)
+                retry_record = copy_job_record(record)
                 retry_request = retry_record["request"]
                 assert isinstance(retry_request, dict)
                 next_queue_sequence = self._next_queue_sequence + 1
@@ -325,23 +342,7 @@ class Jobs:
         return None
 
     def _remove_record(self, job_id: str) -> None:
-        self._ensure_jobs_root()
-        record_path = self._jobs_root / f"{job_id}.json"
-        previous: bytes | None = None
-        removed = False
-        try:
-            previous = record_path.read_bytes() if record_path.exists() else None
-            record_path.unlink(missing_ok=True)
-            removed = previous is not None
-            _fsync_directory(self._jobs_root)
-        except OSError:
-            if removed and previous is not None:
-                try:
-                    _restore_record(record_path, previous)
-                except OSError:
-                    # Keep the best-effort restoration from hiding the original failure.
-                    record_path.write_bytes(previous)
-            raise
+        self._record_store.remove(job_id)
 
     def _snapshot_term_map(self, term_map_id: str | None) -> dict[str, object] | None:
         if term_map_id is None:
@@ -358,18 +359,16 @@ class Jobs:
     def _record_with_queue_position(
         self, record: dict[str, object]
     ) -> dict[str, object]:
-        copied = _copy_record(record)
-        if copied.get("status") != "Queued":
-            copied["queue_position"] = None
-            return copied
+        if record.get("status") != "Queued":
+            return project_job_detail(record, None)
         queued = sorted(
             (item for item in self._records.values() if item.get("status") == "Queued"),
-            key=_queue_sequence,
+            key=queue_sequence,
         )
-        copied["queue_position"] = next(
+        queue_position = next(
             index + 1 for index, item in enumerate(queued) if item["id"] == record["id"]
         )
-        return copied
+        return project_job_detail(record, queue_position)
 
     def _validate(
         self, request: CreateJobRequest
@@ -517,24 +516,24 @@ class Jobs:
         return resolved
 
     def _load_records(self) -> None:
-        for record_path in self._jobs_root.glob("*.json"):
-            record = _read_record(record_path)
-            if record is None or not _valid_record(record):
+        for loaded_record in self._record_store.load():
+            if not valid_record(loaded_record):
                 continue
-            job_id = record.get("id")
-            status = record.get("status")
+            job_id = loaded_record.get("id")
+            status = loaded_record.get("status")
             assert isinstance(job_id, str)
             assert isinstance(status, str)
             if status in {"Queued", "Extracting", "Translating"}:
-                _normalize_record(record)
-                record = _interrupted_record(record)
+                normalize_record(loaded_record)
+                record = _interrupted_record(loaded_record)
                 # Recovery is the only startup write. The atomic record replace
                 # makes the interrupted state durable before the worker starts.
                 self._write_record(job_id, record)
             else:
-                _normalize_record(record)
+                record = loaded_record
+                normalize_record(record)
             self._next_queue_sequence = max(
-                self._next_queue_sequence, _queue_sequence(record)
+                self._next_queue_sequence, queue_sequence(record)
             )
             self._records[job_id] = record
 
@@ -859,29 +858,7 @@ class Jobs:
                     self._write_record(job_id, record)
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
-        self._ensure_jobs_root()
-        destination = self._jobs_root / f"{job_id}.json"
-        previous = destination.read_bytes() if destination.exists() else None
-        descriptor, raw_path = tempfile.mkstemp(
-            dir=self._jobs_root, prefix=f".{job_id}."
-        )
-        temporary = Path(raw_path)
-        replaced = False
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                json.dump(record, file, ensure_ascii=True, indent=2)
-                file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
-            temporary.replace(destination)
-            replaced = True
-            _fsync_directory(self._jobs_root)
-        except OSError:
-            if replaced:
-                _restore_record(destination, previous)
-            raise
-        finally:
-            temporary.unlink(missing_ok=True)
+        self._record_store.write(job_id, record)
 
     def _ensure_jobs_root(self) -> None:
         self._check_jobs_root()
@@ -958,7 +935,7 @@ def _embedded_error_context(
 
 
 def _interrupted_record(record: dict[str, object]) -> dict[str, object]:
-    interrupted = _copy_record(record)
+    interrupted = copy_job_record(record)
     interrupted["status"] = "Interrupted"
     interrupted["finished_at"] = _timestamp()
     interrupted["error"] = {
@@ -1042,160 +1019,6 @@ def _fsync_directory(directory: Path) -> None:
         os.close(directory_descriptor)
 
 
-def _restore_record(destination: Path, previous: bytes | None) -> None:
-    if previous is None:
-        destination.unlink(missing_ok=True)
-        _fsync_directory(destination.parent)
-        return
-    descriptor, raw_path = tempfile.mkstemp(
-        dir=destination.parent, prefix=f".{destination.name}.restore."
-    )
-    temporary = Path(raw_path)
-    try:
-        with os.fdopen(descriptor, "wb") as file:
-            file.write(previous)
-            file.flush()
-            os.fsync(file.fileno())
-        temporary.replace(destination)
-        _fsync_directory(destination.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _copy_record(record: dict[str, object]) -> dict[str, object]:
-    copied = json.loads(json.dumps(record))
-    if not isinstance(copied, dict):
-        raise TypeError("Job record must be an object")
-    return copied
-
-
-def _read_record(record_path: Path) -> dict[str, object] | None:
-    try:
-        record = json.loads(record_path.read_text(encoding="utf-8"))
-        if not isinstance(record, dict):
-            return None
-        return record
-    except (OSError, KeyError, TypeError, json.JSONDecodeError):
-        return None
-
-
-def _valid_record(record: dict[str, object]) -> bool:
-    job_id = record.get("id")
-    status = record.get("status")
-    request = record.get("request")
-    if not isinstance(job_id, str) or not job_id:
-        return False
-    attempt = record.get("attempt")
-    if (
-        not isinstance(status, str)
-        or status not in JOB_STATUSES
-        or (
-            attempt is not None
-            and (
-                not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1
-            )
-        )
-    ):
-        return False
-    if not isinstance(request, dict):
-        return False
-    if not _valid_request(request):
-        return False
-    for field in (
-        "dynamic_terminology_enabled",
-        "subtitle_terminology_filter_enabled",
-    ):
-        if field in request and not isinstance(request[field], bool):
-            return False
-    term_map = request.get("term_map")
-    return (
-        (
-            "output_suffix" not in request
-            or (
-                isinstance(request["output_suffix"], str)
-                and bool(request["output_suffix"])
-            )
-        )
-        and (
-            "output_conflict_policy" not in request
-            or (
-                isinstance(request["output_conflict_policy"], str)
-                and request["output_conflict_policy"] in {"append-number", "overwrite"}
-            )
-        )
-        and all(
-            field not in request or isinstance(request[field], bool)
-            for field in (
-                "dynamic_terminology_enabled",
-                "subtitle_terminology_filter_enabled",
-            )
-        )
-        and (
-            term_map is None
-            or (
-                isinstance(term_map, dict)
-                and isinstance(term_map.get("id"), str)
-                and bool(term_map["id"])
-                and isinstance(term_map.get("name"), str)
-                and bool(term_map["name"])
-                and isinstance(term_map.get("content"), dict)
-                and all(
-                    isinstance(source, str)
-                    and bool(source)
-                    and isinstance(target, str)
-                    and bool(target)
-                    for source, target in term_map["content"].items()
-                )
-            )
-        )
-    )
-
-
-def _valid_request(request: dict[str, object]) -> bool:
-    required_request_fields = {
-        "media_path",
-        "target_language_code",
-        "output_path",
-        "source_format",
-    }
-    if not required_request_fields <= request.keys() or not all(
-        isinstance(request[field], str) and request[field]
-        for field in required_request_fields
-    ):
-        return False
-    stream_index = request.get("stream_index")
-    subtitle_path = request.get("subtitle_path")
-    if stream_index is None:
-        return isinstance(subtitle_path, str) and bool(subtitle_path)
-    return (
-        isinstance(stream_index, int)
-        and not isinstance(stream_index, bool)
-        and stream_index >= 0
-        and subtitle_path is None
-    )
-
-
-def _normalize_record(record: dict[str, object]) -> None:
-    request = record["request"]
-    assert isinstance(request, dict)
-    request.setdefault("term_map", None)
-    request.setdefault("dynamic_terminology_enabled", True)
-    request.setdefault("subtitle_terminology_filter_enabled", True)
-    request.setdefault("output_suffix", str(request["target_language_code"]))
-    request.setdefault("output_conflict_policy", "append-number")
-    attempt = record.get("attempt")
-    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
-        record["attempt"] = 1
-    queue_sequence = record.get("queue_sequence")
-    if not isinstance(queue_sequence, int) or queue_sequence < 1:
-        record["queue_sequence"] = 0
-
-
-def _queue_sequence(record: dict[str, object]) -> int:
-    sequence = record.get("queue_sequence")
-    return sequence if isinstance(sequence, int) else 0
-
-
 def _require_writable_directory(directory: Path) -> None:
     if not directory.is_dir():
         raise ServiceError(
@@ -1251,4 +1074,15 @@ def _validate_output_suffix(value: str) -> None:
             )
 
 
-__all__ = ["CreateJobRequest", "Jobs"]
+__all__ = [
+    "JOB_STATUSES",
+    "TERMINAL_JOB_STATUSES",
+    "CreateJobRequest",
+    "FileJobRecordStore",
+    "JobDetail",
+    "JobRecord",
+    "JobRecordStore",
+    "JobStatus",
+    "JobSummary",
+    "Jobs",
+]
