@@ -1526,6 +1526,10 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Term maps yet" }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveAttribute(
+      "placeholder",
+      "Name it by media, season, language pair, and version.",
+    );
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New terms" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: '{"Captain":"队长"}' },

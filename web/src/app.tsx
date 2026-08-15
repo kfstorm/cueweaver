@@ -1115,7 +1115,7 @@ function TermMapsPage() {
                 required
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="e.g. Character names"
+                placeholder="Name it by media, season, language pair, and version."
               />
             </label>
             <div
