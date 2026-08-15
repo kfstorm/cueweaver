@@ -1291,6 +1291,37 @@ describe("product shell", () => {
     );
   });
 
+  it("offers friendly common languages while submitting their BCP 47 code", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+    const commonLanguage = screen.getByLabelText("Common target language");
+    expect(screen.getByRole("option", { name: "Choose a language" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Arabic — ar" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Chinese (Simplified) — zh-Hans" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Portuguese (Brazil) — pt-BR" }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(commonLanguage, { target: { value: "zh-Hans" } });
+
+    expect(screen.getByLabelText("Target language code")).toHaveValue("zh-Hans");
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await waitFor(() =>
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/jobs",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"target_language_code":"zh-Hans"'),
+        }),
+      ),
+    );
+  });
+
   it("announces queueing while Job creation is pending and after success", async () => {
     renderRoute("/translate");
     await selectExternalSubtitle();
