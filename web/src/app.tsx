@@ -120,6 +120,11 @@ function Translate() {
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
   );
   const [outputSuffix, setOutputSuffix] = useState(() => targetLanguage);
+  const commonTargetLanguage = COMMON_TARGET_LANGUAGES.some(
+    ({ code }) => code === targetLanguage,
+  )
+    ? targetLanguage
+    : "";
   const [outputConflictPolicy, setOutputConflictPolicy] = useState<
     "append-number" | "overwrite"
   >("append-number");
@@ -156,6 +161,10 @@ function Translate() {
     ? outputNameParts(selectedMedia, outputFormat)
     : null;
   const outputSuffixError = validateOutputSuffix(outputSuffix);
+  const updateTargetLanguage = (value: string) => {
+    setTargetLanguage(value);
+    if (!suffixEdited.current) setOutputSuffix(value);
+  };
   const canSubmit =
     selectedMedia !== null &&
     ((selectedCandidate?.kind === "external" && selectedCandidate.path !== undefined) ||
@@ -211,30 +220,40 @@ function Translate() {
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
           <p>Select an External or Embedded subtitle and enter the target language.</p>
-          <label htmlFor="target-language-code">
+          <label htmlFor="common-target-language">
+            Common target language
+            <select
+              id="common-target-language"
+              value={commonTargetLanguage}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (!value) return;
+                updateTargetLanguage(value);
+              }}
+              disabled={selectedCandidate === undefined}
+            >
+              <option value="">Choose a language</option>
+              {COMMON_TARGET_LANGUAGES.map(({ code, label }) => (
+                <option key={code} value={code}>
+                  {label} — {code}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="target-language-code" className="custom-language-field">
             Target language code
             <Input
               id="target-language-code"
-              list="target-languages"
               required
               aria-describedby="target-language-help"
               value={targetLanguage}
-              onChange={(event) => {
-                const value = event.target.value;
-                setTargetLanguage(value);
-                if (!suffixEdited.current) setOutputSuffix(value);
-              }}
+              onChange={(event) => updateTargetLanguage(event.target.value)}
               placeholder="zh-Hans"
               disabled={selectedCandidate === undefined}
             />
-            <datalist id="target-languages">
-              {COMMON_TARGET_LANGUAGES.map((language) => (
-                <option key={language} value={language} />
-              ))}
-            </datalist>
           </label>
           <span id="target-language-help" className="field-help">
-            Search common BCP 47 codes or enter a custom code.
+            Choose a common language or enter a custom BCP 47 code.
           </span>
           <details className="advanced-settings">
             <summary>Advanced settings</summary>

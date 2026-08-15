@@ -649,7 +649,7 @@ test.describe("subtitle submission", () => {
         await page.goto("/translate");
         await page.getByRole("button", { name: "Select Example.mkv" }).click();
         await page.getByRole("button", { name: source.subtitleName }).click();
-        await expect(page.locator("#target-languages option")).toHaveCount(15);
+        await expect(page.locator("#common-target-language option")).toHaveCount(30);
         await page.getByLabel("Target language code").fill("zh-Hans");
         const outputGroup = page.getByRole("group", { name: "Output filename" });
         await expect(outputGroup).toBeVisible();

@@ -213,6 +213,33 @@ a {
   font-size: 12px;
 }
 
+.step-content > label + .custom-language-field {
+  display: block;
+  margin-top: 12px;
+}
+
+.step-content > label select,
+.advanced-fields select {
+  display: block;
+  min-height: 36px;
+  margin-top: 6px;
+  border: 1px solid #dce1e9;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 9px;
+  color: #20293a;
+  font: inherit;
+}
+
+.step-content > label select {
+  width: min(100%, 360px);
+}
+
+.step-content > label select:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
 .advanced-settings {
   margin-top: 18px;
   color: #20293a;
@@ -237,16 +264,7 @@ a {
 }
 
 .advanced-fields select {
-  display: block;
   width: min(100%, 320px);
-  min-height: 36px;
-  margin-top: 6px;
-  border: 1px solid #dce1e9;
-  border-radius: 6px;
-  background: #fff;
-  padding: 0 9px;
-  color: #20293a;
-  font: inherit;
 }
 
 .output-name-section {
@@ -1469,7 +1487,9 @@ a {
   }
 
   .output-name-control .form-control,
-  .output-conflict-policy label {
+  .output-conflict-policy label,
+  .step-content > label select,
+  .custom-language-field .form-control {
     min-height: 44px;
   }
 
