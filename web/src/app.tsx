@@ -232,7 +232,9 @@ function Translate() {
               }}
               disabled={selectedCandidate === undefined}
             >
-              <option value="">Choose a language</option>
+              <option value="" disabled>
+                Choose a language
+              </option>
               {COMMON_TARGET_LANGUAGES.map(({ code, label }) => (
                 <option key={code} value={code}>
                   {label} — {code}

@@ -1296,6 +1296,7 @@ describe("product shell", () => {
 
     await selectExternalSubtitle();
     const commonLanguage = screen.getByLabelText("Common target language");
+    expect(screen.getByRole("option", { name: "Choose a language" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Arabic — ar" })).toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: "Chinese (Simplified) — zh-Hans" }),
