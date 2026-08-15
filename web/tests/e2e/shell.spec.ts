@@ -586,7 +586,7 @@ const submissionSources = [
   },
   {
     label: "Embedded subtitle",
-    subtitleName: /Select embedded subtitle zhs \/ Chinese/,
+    subtitleName: /Select embedded subtitle stream 3 zhs \/ Chinese/,
     candidate: {
       kind: "embedded",
       stream_index: 3,

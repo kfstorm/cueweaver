@@ -141,7 +141,7 @@ function expectJobSubmissionBlocked() {
 async function selectEmbeddedSubtitle() {
   fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
   const subtitle = await screen.findByRole("button", {
-    name: "Select embedded subtitle zhs / Chinese",
+    name: "Select embedded subtitle stream 3 zhs / Chinese",
   });
   fireEvent.click(subtitle);
   return subtitle;
@@ -1360,6 +1360,54 @@ describe("product shell", () => {
     });
   });
 
+  it("distinguishes Embedded streams and shows their known dispositions", async () => {
+    renderRoute("/translate", true, undefined, {
+      path: "Movie.mkv",
+      candidates: [
+        {
+          kind: "embedded",
+          stream_index: 3,
+          format: "ass",
+          tags: { language: "zhs", title: "Chinese" },
+          dispositions: [
+            "default",
+            "forced",
+            "hearing_impaired",
+            "visual_impaired",
+            "comment",
+            "lyrics",
+            "karaoke",
+            "original",
+            "dub",
+            "clean_effects",
+          ],
+        },
+        {
+          kind: "embedded",
+          stream_index: 4,
+          format: "ass",
+          tags: { language: "zhs", title: "Chinese" },
+          dispositions: [],
+        },
+      ],
+      unsupported_candidates: [],
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+
+    const first = await screen.findByRole("button", {
+      name: /Select embedded subtitle stream 3 zhs \/ Chinese/,
+    });
+    const second = screen.getByRole("button", {
+      name: /Select embedded subtitle stream 4 zhs \/ Chinese/,
+    });
+    expect(first).toHaveTextContent(
+      "ASS · Stream 3 · Default · Forced · Hearing impaired · Visually impaired · Commentary · Lyrics · Karaoke · Original · Dubbed · Clean effects",
+    );
+    expect(second).toHaveTextContent("ASS · Stream 4");
+    expect(first).not.toHaveTextContent("Stream 4");
+  });
+
   it("keeps the Term map control disabled while its list is loading", async () => {
     const pending = new Promise<never>(() => undefined);
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
@@ -1576,7 +1624,9 @@ describe("product shell", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Select embedded subtitle zhs / Chinese" }),
+      screen.getByRole("button", {
+        name: "Select embedded subtitle stream 3 zhs / Chinese",
+      }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByText("bitmap subtitle")).toBeInTheDocument();
     expect(screen.getByText("Not selectable")).toBeInTheDocument();

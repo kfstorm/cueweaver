@@ -563,6 +563,19 @@ function candidateKey(
   return `${candidate.kind}-${candidate.path ?? candidate.stream_index ?? index}`;
 }
 
+const SUBTITLE_DISPOSITION_LABELS: Record<string, string> = {
+  default: "Default",
+  forced: "Forced",
+  hearing_impaired: "Hearing impaired",
+  visual_impaired: "Visually impaired",
+  comment: "Commentary",
+  lyrics: "Lyrics",
+  karaoke: "Karaoke",
+  original: "Original",
+  dub: "Dubbed",
+  clean_effects: "Clean effects",
+};
+
 function subtitleLabel(candidate: SubtitleCandidate) {
   const tags = candidate.tags ?? {};
   return (
@@ -577,9 +590,30 @@ function subtitlePath(candidate: SubtitleCandidate) {
   return candidate.path.split("/").pop() ?? candidate.path;
 }
 
+function subtitleDetails(candidate: SubtitleCandidate) {
+  const details = [candidate.format?.toUpperCase() ?? "Unknown format"];
+  if (candidate.kind === "embedded" && candidate.stream_index !== undefined) {
+    details.push(`Stream ${candidate.stream_index}`);
+    details.push(
+      ...(candidate.dispositions ?? [])
+        .map((disposition) => SUBTITLE_DISPOSITION_LABELS[disposition])
+        .filter((label): label is string => label !== undefined),
+    );
+  } else if (subtitlePath(candidate)) {
+    details.push(subtitlePath(candidate)!);
+  }
+  return details.join(" · ");
+}
+
 function subtitleAccessibleLabel(candidate: SubtitleCandidate) {
   const path = subtitlePath(candidate);
-  return path ? `${subtitleLabel(candidate)} (${path})` : subtitleLabel(candidate);
+  const stream =
+    candidate.kind === "embedded" && candidate.stream_index !== undefined
+      ? `stream ${candidate.stream_index} `
+      : "";
+  return path
+    ? `${stream}${subtitleLabel(candidate)} (${path})`
+    : `${stream}${subtitleLabel(candidate)}`;
 }
 
 function SubtitleEntry({
@@ -597,7 +631,7 @@ function SubtitleEntry({
     <Button
       type="button"
       variant="outline"
-      className="subtitle-entry"
+      className={cn("subtitle-entry", candidate.kind === "embedded" && "embedded")}
       aria-pressed={selected}
       aria-label={`Select ${candidate.kind} subtitle ${subtitleAccessibleLabel(candidate)}`}
       onClick={() => onSelect(candidateId)}
@@ -607,10 +641,7 @@ function SubtitleEntry({
       </span>
       <span className="subtitle-copy">
         <strong>{subtitleLabel(candidate)}</strong>
-        <small>
-          {candidate.format?.toUpperCase() ?? "Unknown format"}
-          {subtitlePath(candidate) && ` · ${subtitlePath(candidate)}`}
-        </small>
+        <small>{subtitleDetails(candidate)}</small>
       </span>
       {selected && <span className="media-entry-selected">Selected</span>}
     </Button>
