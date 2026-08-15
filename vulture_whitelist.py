@@ -29,6 +29,7 @@ create_job
 list_jobs
 get_job
 retry_job
+cancel_job
 clear_completed_jobs
 delete_job
 

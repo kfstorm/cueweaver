@@ -596,6 +596,25 @@ def wait_for_status_from_jobs(
     pytest.fail(f"Job did not reach {expected}")
 
 
+def create_queued_job(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    return media_root, work_root, jobs, queued
+
+
+def create_blocked_jobs(tmp_path: Path):
+    media_root, work_root, _media, subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    started = threading.Event()
+    translator = FakeTranslator(started=started, release=release)
+    jobs = Jobs(translator, media_root, work_root)
+    running = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+    return jobs, translator, running, queued, release, subtitle
+
+
 def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
     tmp_path: Path,
 ):
@@ -1166,6 +1185,104 @@ def test_completed_job_rejects_retry_with_a_structured_conflict(tmp_path: Path):
         jobs.retry(str(queued["id"]))
 
     assert raised.value.error_code == "job_retry_conflict"
+    jobs.close()
+
+
+def test_cancel_queued_job_persists_history_and_allows_terminal_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    jobs, translator, running, queued, release, subtitle = create_blocked_jobs(tmp_path)
+    work_root = tmp_path / "work"
+    worker_errors: list[tuple[str, Exception]] = []
+
+    def record_worker_error(instance: Jobs, job_id: str, error: Exception) -> None:
+        worker_errors.append((job_id, error))
+
+    monkeypatch.setattr(Jobs, "_mark_failed_after_worker_error", record_worker_error)
+
+    cancelled = jobs.cancel(str(queued["id"]))
+
+    assert cancelled["id"] == queued["id"]
+    assert cancelled["status"] == "Cancelled"
+    assert cancelled["queue_position"] is None
+    assert jobs.get(str(queued["id"]))["status"] == "Cancelled"
+    history = jobs.list_page()["history_jobs"]
+    assert len(history) == 1
+    assert history[0]["id"] == queued["id"]
+    assert history[0]["status"] == "Cancelled"
+    persisted = json.loads(
+        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["status"] == "Cancelled"
+
+    with pytest.raises(ServiceError) as retry_error:
+        jobs.retry(str(queued["id"]))
+    assert retry_error.value.error_code == "job_retry_conflict"
+    assert jobs.clear_completed() == {"deleted": [], "failed": []}
+    assert jobs.get(str(queued["id"]))["status"] == "Cancelled"
+
+    jobs.delete(str(queued["id"]))
+    assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    follow_up = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ko"))
+    release.set()
+    wait_for_status_from_jobs(jobs, str(running["id"]), "Completed")
+    wait_for_status_from_jobs(jobs, str(follow_up["id"]), "Completed")
+    assert translator.sources == [subtitle, subtitle]
+    assert worker_errors == []
+    jobs.close()
+
+
+def test_cancel_rejects_non_queued_jobs(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.cancel(str(queued["id"]))
+
+    assert completed["status"] == "Completed"
+    assert raised.value.error_code == "job_cancel_conflict"
+    assert raised.value.context == {"status": "Completed"}
+    jobs.close()
+
+
+def test_cancel_skips_a_stale_queue_item_without_executing_it(tmp_path: Path):
+    jobs, translator, running, queued, release, subtitle = create_blocked_jobs(tmp_path)
+    jobs.cancel(str(queued["id"]))
+
+    release.set()
+    wait_for_status_from_jobs(jobs, str(running["id"]), "Completed")
+
+    assert translator.sources == [subtitle]
+    assert jobs.get(str(queued["id"]))["status"] == "Cancelled"
+    jobs.close()
+
+
+def test_cancel_persistence_failure_keeps_job_queued_and_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _media_root, work_root, jobs, queued = create_queued_job(tmp_path)
+    job_id = str(queued["id"])
+    original_write = Jobs._write_record
+
+    def fail_cancel_write(
+        instance: Jobs, record_id: str, record: dict[str, object]
+    ) -> None:
+        if record_id == job_id and record["status"] == "Cancelled":
+            raise OSError("record unavailable")
+        original_write(instance, record_id, record)
+
+    monkeypatch.setattr(Jobs, "_write_record", fail_cancel_write)
+
+    with pytest.raises(OSError):
+        jobs.cancel(job_id)
+
+    assert jobs.get(job_id)["status"] == "Queued"
+    persisted = json.loads(
+        (work_root / "jobs" / f"{job_id}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["status"] == "Queued"
     jobs.close()
 
 
@@ -1840,13 +1957,9 @@ def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path
 
 
 def test_delete_rejects_queued_and_translating_jobs(tmp_path: Path):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    release = threading.Event()
-    started = threading.Event()
-    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
-    running = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    assert started.wait(timeout=5)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+    jobs, _translator, running, queued, release, _subtitle = create_blocked_jobs(
+        tmp_path
+    )
 
     with pytest.raises(ServiceError) as running_error:
         jobs.delete(str(running["id"]))
@@ -1935,9 +2048,7 @@ def test_delete_cleanup_failure_keeps_record_and_preserves_published_output(
 def test_delete_record_sync_failure_restores_history_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    jobs = Jobs(FakeTranslator(), media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    _media_root, work_root, jobs, queued = create_queued_job(tmp_path)
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
     work_directory = work_root / "jobs" / str(queued["id"])
     work_directory.mkdir()

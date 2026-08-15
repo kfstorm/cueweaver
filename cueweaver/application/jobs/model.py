@@ -11,15 +11,29 @@ from pathlib import Path
 from typing import Literal
 
 JobStatus = Literal[
-    "Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"
+    "Queued",
+    "Extracting",
+    "Translating",
+    "Completed",
+    "Failed",
+    "Interrupted",
+    "Cancelled",
 ]
 JobRecord = dict[str, object]
 CURRENT_JOB_SCHEMA_VERSION = 1
 
 JOB_STATUSES = frozenset(
-    {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
+    {
+        "Queued",
+        "Extracting",
+        "Translating",
+        "Completed",
+        "Failed",
+        "Interrupted",
+        "Cancelled",
+    }
 )
-TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted"})
+TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted", "Cancelled"})
 HISTORY_CURSOR_LENGTH_LIMIT = 512
 
 

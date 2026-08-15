@@ -86,6 +86,35 @@ function jobListFetch(getJobs: () => JobFixture[]) {
   });
 }
 
+function cancelJobFetch(jobId: string, cancelError?: string) {
+  const queuedJob = {
+    ...embeddedJob(jobId, "Failed"),
+    status: "Queued" as const,
+    started_at: null,
+    finished_at: null,
+    queue_position: 1,
+    error: null,
+  };
+  let currentJob: JobFixture = queuedJob;
+  return vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
+    if (input === "/api/status") return statusResponse();
+    if (input.endsWith("/cancel") && init?.method === "POST") {
+      if (cancelError !== undefined) {
+        return jsonResponse({ message: cancelError }, false);
+      }
+      currentJob = {
+        ...currentJob,
+        status: "Cancelled",
+        finished_at: "2026-08-13T12:00:03Z",
+        queue_position: null,
+      };
+      return jsonResponse(currentJob);
+    }
+    if (input.startsWith("/api/jobs")) return jobListResponse([currentJob]);
+    return jsonResponse({ term_maps: [] });
+  });
+}
+
 function jobsPageFetch(
   getJobs: () => JobFixture,
   details: Record<string, unknown> = {},
@@ -865,6 +894,75 @@ describe("product shell", () => {
       }
       cleanup();
     }
+  });
+
+  it("cancels a queued Job directly from the list", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = cancelJobFetch("cancel-list-job");
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel Job" }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/jobs/cancel-list-job/cancel", {
+        method: "POST",
+      }),
+    );
+    expect((await screen.findAllByText("Cancelled")).length).toBeGreaterThan(0);
+  });
+
+  it("confirms cancellation for a queued Job in its detail view", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const fetchMock = cancelJobFetch("cancel-job-1");
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/jobs/cancel-job-1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Job" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/jobs/cancel-job-1/cancel", {
+        method: "POST",
+      }),
+    );
+    expect((await screen.findAllByText("Cancelled")).length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: "Cancel Job" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Job" })).toBeInTheDocument();
+  });
+
+  it("shows a list cancellation error when the Job starts running first", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = cancelJobFetch(
+      "cancel-list-error",
+      "Only Queued Jobs can be cancelled",
+    );
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel Job" }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Only Queued Jobs can be cancelled",
+    );
+  });
+
+  it("does not expose cancellation for a running Job", async () => {
+    const job = translatingEmbeddedJob("running-no-cancel");
+    renderWithFetch("/jobs", jobsFetch(job));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    expect(
+      screen.queryByRole("button", { name: "Cancel Job" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a delete error and disables retry while a mutation is pending", async () => {

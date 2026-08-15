@@ -130,4 +130,5 @@ def error_response(error: ServiceError) -> JSONResponse:
             for key, value in error.context.items()
         }
     )
-    return JSONResponse(status_code=400, content=body)
+    status_code = 409 if error.error_code == "job_cancel_conflict" else 400
+    return JSONResponse(status_code=status_code, content=body)

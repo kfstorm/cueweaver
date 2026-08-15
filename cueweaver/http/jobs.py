@@ -28,6 +28,8 @@ class JobsOperation(Protocol):
 
     def retry(self, job_id: str) -> dict[str, object]: ...
 
+    def cancel(self, job_id: str) -> dict[str, object]: ...
+
     def delete(self, job_id: str) -> dict[str, object]: ...
 
     def clear_completed(self) -> dict[str, object]: ...
@@ -89,6 +91,10 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     @app.post("/api/jobs/{job_id}/retry")
     def retry_job(job_id: str) -> dict[str, object]:
         return _project_detail(application.jobs.retry(job_id))
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str) -> dict[str, object]:
+        return _project_detail(application.jobs.cancel(job_id))
 
 
 def _project_detail(job: dict[str, object]) -> dict[str, object]:

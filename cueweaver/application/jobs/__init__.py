@@ -240,6 +240,27 @@ class Jobs:
                 self._pending.put(job_id)
                 return self._record_with_queue_position(retry_record)
 
+    def cancel(self, job_id: str) -> dict[str, object]:
+        """Cancel a queued Job while retaining its terminal history record."""
+        with self._lifecycle_lock, self._lock:
+            record = self._records.get(job_id)
+            if record is None:
+                raise ServiceError("job_not_found", "Job does not exist")
+            status = record.get("status")
+            if status != "Queued":
+                raise ServiceError(
+                    "job_cancel_conflict",
+                    "Only Queued Jobs can be cancelled",
+                    status=status,
+                )
+            cancelled_record = copy_job_record(record)
+            cancelled_record["status"] = "Cancelled"
+            cancelled_record["finished_at"] = _timestamp()
+            cancelled_record["error"] = None
+            self._write_record(job_id, cancelled_record)
+            self._records[job_id] = cancelled_record
+            return self._record_with_queue_position(cancelled_record)
+
     def delete(self, job_id: str) -> dict[str, object]:
         """Delete one terminal Job and its residual Work directory."""
         with self._lifecycle_lock:
@@ -251,7 +272,7 @@ class Jobs:
                 if status not in TERMINAL_JOB_STATUSES:
                     raise ServiceError(
                         "job_delete_conflict",
-                        "Only Completed, Failed, or Interrupted Jobs can be deleted",
+                        "Only Completed, Failed, Interrupted, or Cancelled Jobs can be deleted",
                         status=status,
                     )
             self._delete_terminal_job(job_id)
@@ -766,7 +787,9 @@ class Jobs:
             if self._closed.is_set():
                 return None
             with self._lock:
-                record = self._records[job_id]
+                record = self._records.get(job_id)
+                if record is None or record.get("status") != "Queued":
+                    return None
                 request = record["request"]
                 assert isinstance(request, dict)
                 embedded = "stream_index" in request
