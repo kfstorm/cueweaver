@@ -19,8 +19,15 @@ import {
   type Job,
   type JobNotification,
 } from "./jobs";
-import { cn, formatLocalTimestamp, formatUtcTimestamp } from "./lib/utils";
+import {
+  cn,
+  formatLocalTimestamp,
+  formatRelativeTimestamp,
+  formatUtcTimestamp,
+} from "./lib/utils";
 import { useProductStatus } from "./status";
+
+const RUNNING_JOB_MESSAGE = "Running Jobs cannot be cancelled.";
 
 export function JobNotificationRegion({
   notifications,
@@ -332,15 +339,14 @@ function JobListItem({
         aria-current={selected ? "true" : undefined}
         onClick={onSelect}
       >
-        <span className="job-id">Job {job.id.slice(0, 8)}</span>
         <strong title={job.request.media_path}>{job.request.media_path}</strong>
         <span className="job-source">
           {sourceSummary(job)} to {job.request.target_language_code}
         </span>
-        <span className="job-output">Output: {job.request.output_path}</span>
-        <time dateTime={job.created_at}>
-          Created {formatLocalTimestamp(job.created_at)}
+        <time dateTime={job.created_at} title={formatLocalTimestamp(job.created_at)}>
+          Created {formatRelativeTimestamp(job.created_at)}
         </time>
+        <span className="job-id">Job {job.id.slice(0, 8)}</span>
       </button>
       <JobStatus status={job.status} />
       {job.queue_position !== null && job.queue_position !== undefined && (
@@ -348,6 +354,9 @@ function JobListItem({
       )}
       {job.request.term_map && (
         <span className="job-queue">Term map: {job.request.term_map.name}</span>
+      )}
+      {isRunningJob(job.status) && (
+        <span className="job-action-note">{RUNNING_JOB_MESSAGE}</span>
       )}
       {job.status === "Queued" && !selected && (
         <>
@@ -480,6 +489,11 @@ function JobDetail({
           </p>
         )}
       </div>
+      {isRunningJob(job.status) && (
+        <p className="job-action-note" role="status">
+          {RUNNING_JOB_MESSAGE}
+        </p>
+      )}
 
       {job.error && <JobError error={job.error} />}
 
@@ -592,4 +606,8 @@ function SelectionPrompt() {
 
 function sourceSummary(job: Job): string {
   return job.request.subtitle_path ?? `Embedded stream ${job.request.stream_index}`;
+}
+
+function isRunningJob(status: Job["status"]): boolean {
+  return status === "Extracting" || status === "Translating";
 }
