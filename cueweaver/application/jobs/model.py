@@ -7,6 +7,7 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -178,7 +179,56 @@ def valid_job_id(value: object) -> bool:
     )
 
 
-def valid_record(record: JobRecord) -> bool:
+def _valid_strict_record_metadata(record: JobRecord) -> bool:
+    required_fields = {
+        "schema_version",
+        "id",
+        "status",
+        "attempt",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "request",
+        "error",
+        "queue_sequence",
+    }
+    if not required_fields <= record.keys():
+        return False
+    schema_version = record["schema_version"]
+    created_at = record["created_at"]
+    started_at = record["started_at"]
+    finished_at = record["finished_at"]
+    error = record["error"]
+    queue_sequence = record["queue_sequence"]
+    return (
+        isinstance(schema_version, int)
+        and not isinstance(schema_version, bool)
+        and schema_version >= CURRENT_JOB_SCHEMA_VERSION
+        and isinstance(created_at, str)
+        and bool(created_at)
+        and all(
+            value is None or (isinstance(value, str) and bool(value))
+            for value in (started_at, finished_at)
+        )
+        and (
+            error is None
+            or (
+                isinstance(error, dict)
+                and isinstance(error.get("code"), str)
+                and bool(error["code"])
+                and isinstance(error.get("message"), str)
+                and bool(error["message"])
+            )
+        )
+        and isinstance(queue_sequence, int)
+        and not isinstance(queue_sequence, bool)
+        and queue_sequence >= 0
+    )
+
+
+def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
+    if strict and not _valid_strict_record_metadata(record):
+        return False
     job_id = record.get("id")
     status = record.get("status")
     request = record.get("request")
@@ -196,9 +246,7 @@ def valid_record(record: JobRecord) -> bool:
         )
     ):
         return False
-    if not isinstance(request, dict):
-        return False
-    if not valid_request(request):
+    if not isinstance(request, dict) or not valid_request(request):
         return False
     for field in (
         "dynamic_terminology_enabled",
@@ -275,6 +323,10 @@ def valid_request(request: dict[str, object]) -> bool:
 
 
 def normalize_record(record: JobRecord) -> None:
+    record.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    record.setdefault("started_at", None)
+    record.setdefault("finished_at", None)
+    record.setdefault("error", None)
     request = record["request"]
     assert isinstance(request, dict)
     request.setdefault("term_map", None)
@@ -303,10 +355,12 @@ def migrate_record(record: JobRecord) -> tuple[JobRecord | None, bool, bool]:
         ):
             return None, False, False
         if schema_version > CURRENT_JOB_SCHEMA_VERSION:
+            if not valid_record(record, strict=True):
+                return None, False, False
             return None, False, True
         legacy = False
 
-    if not valid_record(record):
+    if not valid_record(record, strict=not legacy):
         return None, False, False
     migrated = copy_job_record(record)
     normalize_record(migrated)

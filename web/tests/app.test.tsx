@@ -1310,6 +1310,14 @@ describe("product shell", () => {
     expect(await screen.findByText("Captain")).toBeInTheDocument();
   });
 
+  it("rejects a Term map whose source JSON exceeds 1 MiB", () => {
+    const content = `{"source":"target"${" ".repeat(1024 * 1024)}}`;
+
+    expect(validateTermMapContent(content).error).toBe(
+      "Term map must be at most 1 MiB.",
+    );
+  });
+
   it("retries a Term map list error and exposes mutation pending states", async () => {
     let listCalls = 0;
     let resolveUpload!: (value: unknown) => void;
@@ -1832,6 +1840,11 @@ describe("product shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
     expect(await screen.findByText("Translation queued")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Choose another Media" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Term map")).toHaveValue("map-1");
+    expect(screen.getByLabelText("Dynamic terminology")).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Translate another" }));
 
     expect(screen.queryByText("Translation queued")).not.toBeInTheDocument();
@@ -2044,7 +2057,7 @@ describe("product shell", () => {
     expectJobSubmissionBlocked();
   });
 
-  it("remembers a successful language and resets the source form", async () => {
+  it("remembers a successful language without resetting the source form", async () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
@@ -2064,7 +2077,7 @@ describe("product shell", () => {
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Choose another Media" }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "/api/jobs",
       expect.objectContaining({

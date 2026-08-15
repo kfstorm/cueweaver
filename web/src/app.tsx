@@ -460,10 +460,6 @@ function Translate() {
                     "cueweaver.target-language",
                     targetLanguage,
                   );
-                  suffixEdited.current = false;
-                  setOutputSuffix(targetLanguage);
-                  setOutputConflictPolicy("append-number");
-                  clearMedia(selectedMedia);
                 },
               });
             }

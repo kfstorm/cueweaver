@@ -205,7 +205,10 @@ def test_product_status_reports_quarantined_job_record_counts(tmp_path: Path):
         b'{"schema_version": 2, "id": "future", "status": "Failed", '
         b'"request": {"media_path": "Movie.mkv", '
         b'"subtitle_path": "Movie.en.srt", "target_language_code": "zh-Hans", '
-        b'"output_path": "Movie.zh-Hans.srt", "source_format": "srt"}}'
+        b'"output_path": "Movie.zh-Hans.srt", "source_format": "srt"}, '
+        b'"attempt": 1, "created_at": "2026-08-13T12:00:00Z", '
+        b'"started_at": null, "finished_at": null, "error": null, '
+        b'"queue_sequence": 0}'
     )
     (jobs_root / "future.json").write_bytes(future_bytes)
 

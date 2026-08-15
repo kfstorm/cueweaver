@@ -60,9 +60,9 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     });
   }
 
-  const byteLength = new TextEncoder().encode(JSON.stringify(content)).byteLength;
+  const byteLength = new TextEncoder().encode(text).byteLength;
   if (byteLength > MAX_TERM_MAP_BYTES) {
-    return invalidTermMapContent("Term map must be at most 1 MiB when compacted.");
+    return invalidTermMapContent("Term map must be at most 1 MiB.");
   }
   return { content, entryCount: entries.length, byteLength, error: null };
 }
