@@ -135,13 +135,14 @@ def test_product_startup_rejects_work_root_capability_failures(
 
         monkeypatch.setattr(Path, "mkdir", fail_mkdir)
     else:
+        original_replace = Path.replace
 
-        def fail_replace(source: Path, destination: Path) -> None:
+        def fail_replace(source: Path, destination: Path) -> Path:
             if source.parent.parent == work_root:
                 raise OSError("replace probe failed")
-            source.replace(destination)
+            return original_replace(source, destination)
 
-        monkeypatch.setattr("cueweaver.product.os.replace", fail_replace)
+        monkeypatch.setattr(Path, "replace", fail_replace)
 
     with pytest.raises(ValueError, match="Work root must support"):
         create_product_app(
