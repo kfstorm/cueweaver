@@ -193,15 +193,10 @@ async function expectQueuedJobRequest(
   );
 }
 
-function termMapFetch(
-  postBodyCheck?: (body: BodyInit | null | undefined) => void,
-  postResponse: unknown = {},
-  postOk = true,
-) {
+function termMapFetch(postResponse: unknown = {}, postOk = true) {
   return vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
     if (input === "/api/status") return statusResponse();
     if (init?.method === "POST") {
-      postBodyCheck?.(init.body);
       return jsonResponse(postResponse, postOk);
     }
     return jsonResponse({ term_maps: [] });
@@ -214,6 +209,17 @@ async function expectTermMapPost(fetchMock: ReturnType<typeof vi.fn>, body: stri
       "/api/term-maps",
       expect.objectContaining({ method: "POST", body }),
     ),
+  );
+}
+
+async function expectDuplicateContentRejected(fetchMock: ReturnType<typeof vi.fn>) {
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "unique regardless of case",
+  );
+  expect(screen.getByRole("button", { name: "Upload Term map" })).toBeDisabled();
+  expect(fetchMock).not.toHaveBeenCalledWith(
+    "/api/term-maps",
+    expect.objectContaining({ method: "POST" }),
   );
 }
 
@@ -1142,7 +1148,7 @@ describe("product shell", () => {
   });
 
   it("shows the empty state and uploads valid JSON", async () => {
-    const fetchMock = termMapFetch(undefined, {
+    const fetchMock = termMapFetch({
       id: "new",
       name: "New terms",
       entry_count: 1,
@@ -1185,7 +1191,7 @@ describe("product shell", () => {
   });
 
   it("previews a valid imported JSON file and resets the source form after upload", async () => {
-    const fetchMock = termMapFetch(undefined, {
+    const fetchMock = termMapFetch({
       id: "new",
       name: "Imported",
       entry_count: 2,
@@ -1233,14 +1239,7 @@ describe("product shell", () => {
       },
     });
 
-    expect(
-      await screen.findByText(/Source keys must be unique regardless of case/),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Upload Term map" })).toBeDisabled();
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      "/api/term-maps",
-      expect.objectContaining({ method: "POST" }),
-    );
+    await expectDuplicateContentRejected(fetchMock);
   });
 
   it("matches server content validation for object shape and compact UTF-8 size", () => {
@@ -1268,13 +1267,9 @@ describe("product shell", () => {
     );
   });
 
-  it("preserves duplicate JSON keys for server-side validation", async () => {
+  it("blocks duplicate JSON keys before submission", async () => {
     const duplicateContent = '{"Source":"one","Source":"two"}';
-    const fetchMock = termMapFetch(
-      (body) => expect(body).toBe(`{"name":"Duplicate","content":${duplicateContent}}`),
-      { message: "Source keys must be unique regardless of case" },
-      false,
-    );
+    const fetchMock = termMapFetch();
     renderTermMapsWithFetch(fetchMock);
 
     await screen.findByRole("heading", { name: "No Term maps yet" });
@@ -1284,14 +1279,11 @@ describe("product shell", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "unique regardless of case",
-    );
+    await expectDuplicateContentRejected(fetchMock);
   });
 
   it("exposes a duplicate-name API error", async () => {
     const fetchMock = termMapFetch(
-      undefined,
       { message: "A Term map with this name already exists" },
       false,
     );
