@@ -305,6 +305,21 @@ def test_record_store_protects_a_future_canonical_record_from_a_legacy_alias(
     assert (jobs_root / "unsupported" / "future-job.json").is_file()
 
 
+def test_record_store_quarantines_an_unknown_future_shape_as_unsupported(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    raw_future = b'{"schema_version":2,"id":"future-job","status":"CancelledV2","request":{"new_shape":true}}'
+    (jobs_root / "future-job.json").write_bytes(raw_future)
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert records == []
+    assert (jobs_root / "unsupported" / "future-job.json").read_bytes() == raw_future
+    assert not (jobs_root / "corrupt" / "future-job.json").exists()
+
+
 def test_record_store_protects_a_mismatched_future_path_from_a_legacy_alias(
     tmp_path: Path,
 ):
@@ -383,6 +398,25 @@ def test_record_store_quarantines_a_broken_canonical_symlink_before_migration(
     assert (jobs_root / "z-job.json").is_file()
     assert (jobs_root / "corrupt" / "z-job.json").is_symlink()
     assert FileJobRecordStore(jobs_root).health().corrupt_count == 1
+
+
+def test_record_store_does_not_overwrite_a_dangling_quarantine_collision(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    quarantine = jobs_root / "corrupt"
+    quarantine.mkdir(parents=True)
+    dangling_target = tmp_path / "missing.json"
+    existing = quarantine / "broken.json"
+    existing.symlink_to(dangling_target)
+    source = jobs_root / "broken.json"
+    source.write_bytes(b"broken")
+
+    FileJobRecordStore(jobs_root).load()
+
+    assert existing.is_symlink()
+    assert (quarantine / "broken.2.json").read_bytes() == b"broken"
+    assert FileJobRecordStore(jobs_root).health().corrupt_count == 2
 
 
 def test_record_store_rejects_path_traversal_job_ids(tmp_path: Path):
