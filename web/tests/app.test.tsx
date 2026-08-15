@@ -1371,7 +1371,7 @@ describe("product shell", () => {
       name: /Select embedded subtitle stream 4 zhs \/ Chinese/,
     });
     expect(first).toHaveTextContent(
-      "ASS · Stream 3 · Default · Forced · Hearing impaired · Visual impaired · Commentary · Lyrics · Karaoke · Original · Dubbed · Clean effects",
+      "ASS · Stream 3 · Default · Forced · Hearing impaired · Visually impaired · Commentary · Lyrics · Karaoke · Original · Dubbed · Clean effects",
     );
     expect(second).toHaveTextContent("ASS · Stream 4");
     expect(first).not.toHaveTextContent("Stream 4");

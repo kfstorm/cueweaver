@@ -546,7 +546,7 @@ const SUBTITLE_DISPOSITION_LABELS: Record<string, string> = {
   default: "Default",
   forced: "Forced",
   hearing_impaired: "Hearing impaired",
-  visual_impaired: "Visual impaired",
+  visual_impaired: "Visually impaired",
   comment: "Commentary",
   lyrics: "Lyrics",
   karaoke: "Karaoke",
