@@ -1526,6 +1526,10 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Term maps yet" }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveAttribute(
+      "placeholder",
+      "Name it by media, season, language pair, and version.",
+    );
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New terms" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: '{"Captain":"队长"}' },
@@ -1754,7 +1758,7 @@ describe("product shell", () => {
 
     fireEvent.change(commonLanguage, { target: { value: "zh-Hans" } });
 
-    expect(screen.getByLabelText("Target language code")).toHaveValue("zh-Hans");
+    expect(screen.queryByLabelText("Target language code")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
@@ -1845,6 +1849,9 @@ describe("product shell", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Term map")).toHaveValue("map-1");
     expect(screen.getByLabelText("Dynamic terminology")).not.toBeChecked();
+    expect(
+      screen.queryByRole("button", { name: "Start translation" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Translate another" }));
 
     expect(screen.queryByText("Translation queued")).not.toBeInTheDocument();
@@ -1854,7 +1861,7 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: "Choose another Media" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Term map")).toHaveValue("");
+    expect(screen.getByLabelText("Term map")).toHaveValue("map-1");
     expect(screen.getByLabelText("Dynamic terminology")).toBeChecked();
     expect(screen.getByLabelText("Subtitle terminology filtering")).toBeChecked();
   });
@@ -1952,10 +1959,8 @@ describe("product shell", () => {
     });
     renderWithFetch("/translate", fetchMock);
     await selectExternalSubtitle();
-    fireEvent.click(screen.getByText("Advanced settings"));
-
     expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Term map selector" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Term map" })).toBeDisabled();
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {
@@ -2014,9 +2019,9 @@ describe("product shell", () => {
     fireEvent.change(screen.getByLabelText("Target language code"), {
       target: { value: "zh-Hans" },
     });
-    expect(screen.getByLabelText("Media stem")).toHaveValue("Movie.");
-    expect(screen.getByLabelText("Media stem")).toHaveAttribute("readonly");
-    expect(screen.getByLabelText("Source format extension")).toHaveValue(".srt");
+    expect(screen.getByLabelText("Media stem")).toHaveTextContent("Movie.");
+    expect(screen.getByLabelText("Media stem")).not.toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Source format extension")).toHaveTextContent(".srt");
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
 
     fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
@@ -2123,6 +2128,28 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("button", {
         name: "Select Displayed title (2024) (Actual filename.mkv)",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an episode NFO label without replacing the real filename", async () => {
+    renderRoute("/translate", true, {
+      path: "Shows/Season 1",
+      entries: [
+        {
+          kind: "media",
+          name: "Show - S01E02.mkv",
+          path: "Shows/Season 1/Show - S01E02.mkv",
+          title: "The second episode",
+          season: 1,
+          episode: 2,
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Select S01E02 · The second episode (Show - S01E02.mkv)",
       }),
     ).toBeInTheDocument();
   });

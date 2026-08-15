@@ -685,14 +685,14 @@ test.describe("subtitle submission", () => {
         await page.goto("/translate");
         await page.getByRole("button", { name: "Select Example.mkv" }).click();
         await page.getByRole("button", { name: source.subtitleName }).click();
-        await expect(page.locator("#common-target-language option")).toHaveCount(30);
+        await expect(page.locator("#common-target-language option")).toHaveCount(31);
         await page.getByLabel("Target language code").fill("zh-Hans");
         const outputGroup = page.getByRole("group", { name: "Output filename" });
         await expect(outputGroup).toBeVisible();
-        await expect(page.getByLabel("Media stem")).toHaveValue("Example.");
-        await expect(page.getByLabel("Media stem")).toHaveAttribute("readonly");
+        await expect(page.getByLabel("Media stem")).toHaveText("Example.");
+        await expect(page.getByLabel("Media stem")).not.toHaveAttribute("readonly");
         await expect(page.getByLabel("Subtitle suffix")).toHaveValue("zh-Hans");
-        await expect(page.getByLabel("Source format extension")).toHaveValue(".srt");
+        await expect(page.getByLabel("Source format extension")).toHaveText(".srt");
         await expect(page.getByText("Example.zh-Hans.srt")).toBeVisible();
         await expect(page.getByLabel("Append a number (recommended)")).toBeChecked();
         await expect(page.getByLabel("Overwrite existing output")).not.toBeChecked();
