@@ -123,6 +123,43 @@ def test_http_retries_a_job_with_no_editable_request_body():
     assert application.retried_job_id == "job-1"
 
 
+def test_http_browse_serializes_episode_metadata():
+    class EpisodeApplication(ApplicationFixture):
+        def browse(self, request: BrowseRequest) -> BrowseResult:
+            return BrowseResult(
+                request.path,
+                [
+                    BrowseEntry(
+                        "Episode.mkv",
+                        Path("Episode.mkv"),
+                        "media",
+                        "Episode title",
+                        season=2,
+                        episode=7,
+                    )
+                ],
+            )
+
+    response = TestClient(create_app(EpisodeApplication())).post(
+        "/api/media/browse", json={"path": "Series"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "path": "Series",
+        "entries": [
+            {
+                "name": "Episode.mkv",
+                "path": "Episode.mkv",
+                "kind": "media",
+                "title": "Episode title",
+                "season": 2,
+                "episode": 7,
+            }
+        ],
+    }
+
+
 def test_http_cancels_a_job_with_no_editable_request_body():
     application = JobsApplicationFixture()
     client = TestClient(create_app(application))

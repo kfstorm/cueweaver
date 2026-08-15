@@ -14,7 +14,7 @@ def test_browse_lists_directories_then_natural_sorted_media_with_nfo_labels(
     (root / "Show 10").mkdir()
     (root / "Show 2").mkdir()
     (root / "Show 2" / "tvshow.nfo").write_text(
-        "<tvshow><title>Example show</title><year>2024</year></tvshow>",
+        "<tvshow><title>Example show</title><premiered>2024-05-01</premiered></tvshow>",
         encoding="utf-8",
     )
     (root / ".hidden").mkdir()
@@ -23,7 +23,7 @@ def test_browse_lists_directories_then_natural_sorted_media_with_nfo_labels(
     (root / "notes.txt").write_bytes(b"not media")
     (root / ".hidden.mkv").write_bytes(b"hidden")
     (root / "Movie 2.nfo").write_text(
-        "<movie><title>Displayed movie</title><year>2020</year></movie>",
+        "<movie><title>Displayed movie</title><premiered>2020-01-01</premiered></movie>",
         encoding="utf-8",
     )
 
@@ -52,16 +52,16 @@ def test_browse_uses_movie_nfo_after_invalid_media_nfo_and_never_tvshow_nfo(
         "<movie><title>incomplete</title></movie>", encoding="utf-8"
     )
     (root / "movie.nfo").write_text(
-        "<movie><title>Fallback title</title><year>1999</year></movie>",
+        "<movie><title>Fallback title</title><premiered>1999-01-01</premiered></movie>",
         encoding="utf-8",
     )
     (root / "tvshow.nfo").write_text(
-        "<tvshow><title>Wrong title</title><year>2000</year></tvshow>",
+        "<tvshow><title>Wrong title</title><premiered>2000-01-01</premiered></tvshow>",
         encoding="utf-8",
     )
     (root / "Series").mkdir()
     (root / "Series" / "tvshow.nfo").write_text(
-        "<tvshow><title>Series title</title><year>2010</year></tvshow>",
+        "<tvshow><title>Series title</title><premiered>2010-01-01</premiered></tvshow>",
         encoding="utf-8",
     )
 
@@ -73,13 +73,79 @@ def test_browse_uses_movie_nfo_after_invalid_media_nfo_and_never_tvshow_nfo(
     assert (series.title, series.year) == ("Series title", 2010)
 
 
+def test_browse_prefers_year_then_uses_latest_premiered_or_aired(tmp_path: Path):
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "Premiered.mkv").write_bytes(b"media")
+    (root / "Premiered.nfo").write_text(
+        "<movie><title>Explicit year</title><premiered>2021-06-01</premiered>"
+        "<aired>2022-06-01</aired><year>1999</year></movie>",
+        encoding="utf-8",
+    )
+    (root / "Aired.mkv").write_bytes(b"media")
+    (root / "Aired.nfo").write_text(
+        "<movie><title>Latest date</title><premiered>2018-06-01</premiered>"
+        "<aired>2020-06-01</aired></movie>",
+        encoding="utf-8",
+    )
+    (root / "Series").mkdir()
+    (root / "Series" / "tvshow.nfo").write_text(
+        "<tvshow><title>Series</title><aired>2017-06-01</aired></tvshow>",
+        encoding="utf-8",
+    )
+
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
+
+    premiered = next(entry for entry in result.entries if entry.name == "Premiered.mkv")
+    aired = next(entry for entry in result.entries if entry.name == "Aired.mkv")
+    series = next(entry for entry in result.entries if entry.name == "Series")
+    assert premiered.year == 1999
+    assert aired.year == 2020
+    assert series.year == 2017
+
+
+def test_browse_reads_episode_nfo_without_year_and_does_not_propagate_tvshow_nfo(
+    tmp_path: Path,
+):
+    root = tmp_path / "media"
+    root.mkdir()
+    series = root / "Series"
+    series.mkdir()
+    (series / "tvshow.nfo").write_text(
+        "<tvshow><title>Series title</title><premiered>2010-01-01</premiered></tvshow>",
+        encoding="utf-8",
+    )
+    (series / "movie.nfo").write_text(
+        "<movie><title>Fallback movie</title><premiered>1999-01-01</premiered></movie>",
+        encoding="utf-8",
+    )
+    (series / "Episode.mkv").write_bytes(b"media")
+    (series / "Episode.nfo").write_text(
+        "<episodedetails><title>Episode title</title><season>2</season>"
+        "<episode>7</episode><year>2024</year></episodedetails>",
+        encoding="utf-8",
+    )
+
+    result = MediaBrowser(root).browse(BrowseRequest(Path()))
+    directory = result.entries[0]
+    episode = MediaBrowser(root).browse(BrowseRequest(Path("Series"))).entries[0]
+
+    assert (directory.title, directory.year) == ("Series title", 2010)
+    assert (episode.title, episode.year, episode.season, episode.episode) == (
+        "Episode title",
+        None,
+        2,
+        7,
+    )
+
+
 def test_browse_skips_malformed_media_nfo_before_movie_fallback(tmp_path: Path):
     root = tmp_path / "media"
     root.mkdir()
     (root / "Movie.mkv").write_bytes(b"media")
     (root / "Movie.nfo").write_text("<movie><title>Broken</movie>", encoding="utf-8")
     (root / "movie.nfo").write_text(
-        "<movie><title>Fallback title</title><year>1999</year></movie>",
+        "<movie><title>Fallback title</title><premiered>1999-01-01</premiered></movie>",
         encoding="utf-8",
     )
 
@@ -95,7 +161,7 @@ def test_browse_skips_nfo_with_unknown_encoding(tmp_path: Path):
     (root / "Movie.mkv").write_bytes(b"media")
     (root / "Movie.nfo").write_bytes(
         b'<?xml version="1.0" encoding="does-not-exist"?>'
-        b"<movie><title>Broken</title><year>2024</year></movie>"
+        b"<movie><title>Broken</title><premiered>2024-01-01</premiered></movie>"
     )
 
     result = MediaBrowser(root).browse(BrowseRequest(Path()))
@@ -109,7 +175,7 @@ def test_tvshow_nfo_never_labels_a_media_named_tvshow(tmp_path: Path):
     root.mkdir()
     (root / "tvshow.mkv").write_bytes(b"media")
     (root / "tvshow.nfo").write_text(
-        "<tvshow><title>Directory only</title><year>2024</year></tvshow>",
+        "<tvshow><title>Directory only</title><premiered>2024-01-01</premiered></tvshow>",
         encoding="utf-8",
     )
 
@@ -167,7 +233,7 @@ def test_browse_ignores_unsafe_and_oversized_nfo(tmp_path: Path):
     (root / "Movie.mkv").write_bytes(b"media")
     (root / "Movie.nfo").write_text(
         "<!DOCTYPE movie [<!ENTITY xxe SYSTEM 'file:///secret'>]>"
-        "<movie><title>&xxe;</title><year>2024</year></movie>",
+        "<movie><title>&xxe;</title><premiered>2024-01-01</premiered></movie>",
         encoding="utf-8",
     )
     (root / "movie.nfo").write_bytes(b"<movie>" + b"x" * (1024 * 1024) + b"</movie>")
@@ -184,7 +250,7 @@ def test_browse_ignores_utf16_unsafe_nfo(tmp_path: Path):
     (root / "Movie.mkv").write_bytes(b"media")
     (root / "Movie.nfo").write_text(
         "<!DOCTYPE movie [<!ENTITY xxe SYSTEM 'file:///secret'>]>"
-        "<movie><title>&xxe;</title><year>2024</year></movie>",
+        "<movie><title>&xxe;</title><premiered>2024-01-01</premiered></movie>",
         encoding="utf-16",
     )
 

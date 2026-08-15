@@ -29,12 +29,22 @@ class BrowseEntry:
     kind: Literal["directory", "media"]
     title: str | None = None
     year: int | None = None
+    season: int | None = None
+    episode: int | None = None
 
 
 @dataclass(frozen=True)
 class BrowseResult:
     path: Path
     entries: list[BrowseEntry] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _NfoMetadata:
+    title: str
+    year: int | None = None
+    season: int | None = None
+    episode: int | None = None
 
 
 class MediaBrowser:
@@ -93,12 +103,26 @@ class MediaBrowser:
             return None
         relative = _relative_path(child, self._media_root)
         if resolved.is_dir():
-            title, year = _read_nfo(child / "tvshow.nfo", self._media_root)
-            return BrowseEntry(child.name, relative, "directory", title, year)
+            metadata = _read_nfo(child / "tvshow.nfo", self._media_root, "tvshow")
+            return BrowseEntry(
+                child.name,
+                relative,
+                "directory",
+                metadata.title if metadata is not None else None,
+                metadata.year if metadata is not None else None,
+            )
         if not resolved.is_file() or child.suffix.casefold() not in MEDIA_EXTENSIONS:
             return None
-        title, year = _media_nfo(child, self._media_root)
-        return BrowseEntry(child.name, relative, "media", title, year)
+        metadata = _media_nfo(child, self._media_root)
+        return BrowseEntry(
+            child.name,
+            relative,
+            "media",
+            metadata.title if metadata is not None else None,
+            metadata.year if metadata is not None else None,
+            metadata.season if metadata is not None else None,
+            metadata.episode if metadata is not None else None,
+        )
 
     def _require_inside_root(self, path: Path, requested: str) -> None:
         if not path.is_relative_to(self._media_root):
@@ -125,40 +149,66 @@ def _natural_key(name: str) -> tuple[tuple[int, str | int], ...]:
     )
 
 
-def _media_nfo(media: Path, root: Path) -> tuple[str | None, int | None]:
+def _media_nfo(media: Path, root: Path) -> _NfoMetadata | None:
     candidates = (
         () if media.stem.casefold() == "tvshow" else (media.with_suffix(".nfo"),)
     )
     for candidate in (*candidates, media.parent / "movie.nfo"):
-        metadata = _read_nfo(candidate, root)
-        if metadata != (None, None):
+        metadata = _read_nfo(candidate, root, "media")
+        if metadata is not None:
             return metadata
-    return None, None
+    return None
 
 
-def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:  # noqa: PLR0911
+def _read_nfo(  # noqa: PLR0911
+    path: Path,
+    root: Path,
+    expected_kind: Literal["media", "tvshow"],
+) -> _NfoMetadata | None:
     try:
         if not path.resolve().is_relative_to(root):
-            return None, None
+            return None
         if not path.is_file() or path.stat().st_size > MAX_NFO_BYTES:
-            return None, None
+            return None
         content = path.read_bytes()
         if len(content) > MAX_NFO_BYTES:
-            return None, None
+            return None
         _reject_unsafe_xml(content)
         document = ET.fromstring(content)
         values = {
             element.tag.rsplit("}", 1)[-1].casefold(): (element.text or "").strip()
             for element in document.iter()
         }
+        kind = document.tag.rsplit("}", 1)[-1].casefold()
+        if expected_kind == "tvshow" and kind != "tvshow":
+            return None
+        if expected_kind == "media" and kind not in {"movie", "episodedetails"}:
+            return None
+
         title = values.get("title", "")
-        year_text = values.get("year", "")
-        if not title or not year_text:
-            return None, None
-        year = int(year_text)
-        if year <= 0:
-            return None, None
-        return title, year
+        if not title:
+            return None
+        if kind == "episodedetails":
+            season = int(values.get("season", ""))
+            episode = int(values.get("episode", ""))
+            if season < 0 or episode < 0:
+                return None
+            return _NfoMetadata(title, season=season, episode=episode)
+
+        year = _nfo_year(values.get("year"))
+        if year is None:
+            dates = [
+                (value, parsed_year)
+                for key in ("premiered", "aired")
+                if (value := values.get(key))
+                and (parsed_year := _nfo_year(value)) is not None
+            ]
+            if not dates:
+                return None
+            year = max(dates)[1]
+        if year < 1:
+            return None
+        return _NfoMetadata(title, year=year)
     except (
         ET.ParseError,
         expat.ExpatError,
@@ -168,7 +218,14 @@ def _read_nfo(path: Path, root: Path) -> tuple[str | None, int | None]:  # noqa:
         UnicodeError,
         ValueError,
     ):
-        return None, None
+        return None
+
+
+def _nfo_year(value: str | None) -> int | None:
+    if value is None:
+        return None
+    match = re.match(r"^(\d{4})", value.strip())
+    return int(match.group(1)) if match is not None else None
 
 
 def _reject_unsafe_xml(content: bytes) -> None:
