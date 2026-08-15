@@ -84,7 +84,11 @@ class Jobs:
         self._media_root = media_root.resolve()
         self._work_root = work_root.resolve()
         self._jobs_root = self._work_root / "jobs"
-        self._record_store = record_store or FileJobRecordStore(self._jobs_root)
+        self._record_store = (
+            record_store
+            if record_store is not None
+            else FileJobRecordStore(self._jobs_root)
+        )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
         self._next_queue_sequence = 0
