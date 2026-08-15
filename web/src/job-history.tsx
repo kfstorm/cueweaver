@@ -313,16 +313,23 @@ function JobListItem({
         <span className="job-queue">Term map: {job.request.term_map.name}</span>
       )}
       {job.status === "Queued" && !selected && (
-        <Button
-          type="button"
-          variant="outline"
-          disabled={cancelJob.isPending}
-          onClick={() => {
-            if (confirmCancelJob(job.id)) cancelJob.mutate(job.id);
-          }}
-        >
-          {cancelJob.isPending ? "Cancelling..." : "Cancel Job"}
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={cancelJob.isPending}
+            onClick={() => {
+              if (confirmCancelJob(job.id)) cancelJob.mutate(job.id);
+            }}
+          >
+            {cancelJob.isPending ? "Cancelling..." : "Cancel Job"}
+          </Button>
+          {cancelJob.isError && (
+            <p className="form-error" role="alert">
+              {cancelJob.error.message}
+            </p>
+          )}
+        </>
       )}
     </article>
   );

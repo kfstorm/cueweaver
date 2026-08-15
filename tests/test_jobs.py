@@ -860,11 +860,17 @@ def test_completed_job_rejects_retry_with_a_structured_conflict(tmp_path: Path):
     jobs.close()
 
 
-def test_cancel_queued_job_persists_history_and_allows_terminal_delete(tmp_path: Path):
-    jobs, _translator, running, queued, release, _subtitle = create_blocked_jobs(
-        tmp_path
-    )
+def test_cancel_queued_job_persists_history_and_allows_terminal_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    jobs, translator, running, queued, release, subtitle = create_blocked_jobs(tmp_path)
     work_root = tmp_path / "work"
+    worker_errors: list[tuple[str, Exception]] = []
+
+    def record_worker_error(instance: Jobs, job_id: str, error: Exception) -> None:
+        worker_errors.append((job_id, error))
+
+    monkeypatch.setattr(Jobs, "_mark_failed_after_worker_error", record_worker_error)
 
     cancelled = jobs.cancel(str(queued["id"]))
 
@@ -889,8 +895,12 @@ def test_cancel_queued_job_persists_history_and_allows_terminal_delete(tmp_path:
 
     jobs.delete(str(queued["id"]))
     assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    follow_up = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ko"))
     release.set()
     wait_for_status_from_jobs(jobs, str(running["id"]), "Completed")
+    wait_for_status_from_jobs(jobs, str(follow_up["id"]), "Completed")
+    assert translator.sources == [subtitle, subtitle]
+    assert worker_errors == []
     jobs.close()
 
 

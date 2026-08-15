@@ -766,8 +766,8 @@ class Jobs:
             if self._closed.is_set():
                 return None
             with self._lock:
-                record = self._records[job_id]
-                if record.get("status") != "Queued":
+                record = self._records.get(job_id)
+                if record is None or record.get("status") != "Queued":
                     return None
                 request = record["request"]
                 assert isinstance(request, dict)

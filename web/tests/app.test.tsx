@@ -79,7 +79,7 @@ function jobListFetch(getJobs: () => JobFixture[]) {
   });
 }
 
-function cancelJobFetch(jobId: string) {
+function cancelJobFetch(jobId: string, cancelError?: string) {
   const queuedJob = {
     ...embeddedJob(jobId, "Failed"),
     status: "Queued" as const,
@@ -92,6 +92,9 @@ function cancelJobFetch(jobId: string) {
   return vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
     if (input === "/api/status") return statusResponse();
     if (input.endsWith("/cancel") && init?.method === "POST") {
+      if (cancelError !== undefined) {
+        return jsonResponse({ message: cancelError }, false);
+      }
       currentJob = {
         ...currentJob,
         status: "Cancelled",
@@ -896,6 +899,22 @@ describe("product shell", () => {
       screen.queryByRole("button", { name: "Cancel Job" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete Job" })).toBeInTheDocument();
+  });
+
+  it("shows a list cancellation error when the Job starts running first", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetchMock = cancelJobFetch(
+      "cancel-list-error",
+      "Only Queued Jobs can be cancelled",
+    );
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel Job" }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Only Queued Jobs can be cancelled",
+    );
   });
 
   it("does not expose cancellation for a running Job", async () => {
