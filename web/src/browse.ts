@@ -38,6 +38,7 @@ export interface SubtitleCandidate {
   stream_index?: number;
   format?: string;
   tags?: { language?: string; title?: string };
+  dispositions?: string[];
 }
 
 export interface UnsupportedSubtitleCandidate {

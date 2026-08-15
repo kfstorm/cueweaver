@@ -28,6 +28,7 @@ def expected_discovery_payload(external_path: str) -> dict[str, object]:
                 "stream_index": 3,
                 "format": "ass",
                 "tags": {"language": "zhs", "title": "Chinese"},
+                "dispositions": ["default", "forced"],
             },
         ],
         "unsupported_candidates": [
@@ -58,6 +59,7 @@ class ApplicationFixture:
                     "ass",
                     {"language": "zhs", "title": "Chinese"},
                     stream_index=3,
+                    dispositions=["default", "forced"],
                 ),
             ],
             [UnsupportedCandidateResult("embedded", "bitmap subtitle", stream_index=4)],

@@ -73,6 +73,8 @@ def candidate_body(
         "format": candidate.format,
         "tags": candidate.tags,
     }
+    if candidate.kind == "embedded":
+        body["dispositions"] = candidate.dispositions
     add_candidate_location(
         body, candidate, lambda path: _relative_path(path, media_root)
     )

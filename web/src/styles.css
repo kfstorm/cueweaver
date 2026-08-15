@@ -548,6 +548,13 @@ a {
   font-size: 11px;
 }
 
+.subtitle-entry.embedded .subtitle-copy small {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.4;
+}
+
 .discovery-skeleton {
   display: grid;
   gap: 8px;

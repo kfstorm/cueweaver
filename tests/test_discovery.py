@@ -27,6 +27,19 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
                 "index": "3",
                 "codec_name": "ass",
                 "tags": {"language": "zhs", "title": "Chinese Simplified"},
+                "disposition": {
+                    "default": 1,
+                    "forced": 1,
+                    "hearing_impaired": 1,
+                    "visual_impaired": 1,
+                    "comment": 1,
+                    "lyrics": 1,
+                    "karaoke": 1,
+                    "original": 1,
+                    "dub": 1,
+                    "clean_effects": 1,
+                    "attached_pic": 1,
+                },
             },
             {"index": 4, "codec_name": "hdmv_pgs_subtitle"},
             {"index": 5, "codec_name": "dvb_subtitle"},
@@ -44,6 +57,7 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
             candidate.path,
             candidate.stream_index,
             candidate.tags,
+            candidate.dispositions,
         )
         for candidate in result.candidates
     ] == [
@@ -53,6 +67,7 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
             tmp_path / "Movie.en.forced.srt",
             None,
             {"language": "en", "title": ""},
+            [],
         ),
         (
             "external",
@@ -60,6 +75,7 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
             tmp_path / "Movie.zh-Hans.default.ass",
             None,
             {"language": "zh-Hans", "title": ""},
+            [],
         ),
         (
             "embedded",
@@ -67,6 +83,18 @@ def test_discovery_lists_local_and_embedded_subtitles(tmp_path):
             None,
             3,
             {"language": "zhs", "title": "Chinese Simplified"},
+            [
+                "default",
+                "forced",
+                "hearing_impaired",
+                "visual_impaired",
+                "comment",
+                "lyrics",
+                "karaoke",
+                "original",
+                "dub",
+                "clean_effects",
+            ],
         ),
     ]
     assert [

@@ -10,6 +10,19 @@ from ...subtitle_formats import BITMAP_CODECS, EXTERNAL_FORMATS, EXTRACT_CODEC_F
 from ..errors import ServiceError
 from ..media import require_readable_media, stream_index
 
+SUBTITLE_DISPOSITIONS = (
+    "default",
+    "forced",
+    "hearing_impaired",
+    "visual_impaired",
+    "comment",
+    "lyrics",
+    "karaoke",
+    "original",
+    "dub",
+    "clean_effects",
+)
+
 
 @dataclass(frozen=True)
 class DiscoverRequest:
@@ -23,6 +36,7 @@ class SubtitleCandidateResult:
     tags: dict[str, str]
     path: Path | None = None
     stream_index: int | None = None
+    dispositions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -65,6 +79,7 @@ class Discovery:
                         EXTRACT_CODEC_FORMATS[codec],
                         _stream_tags(stream),
                         stream_index=index,
+                        dispositions=_stream_dispositions(stream),
                     )
                 )
             else:
@@ -124,3 +139,14 @@ def _stream_tags(stream: dict[str, object]) -> dict[str, str]:
         "language": str(tags.get("language", "")),
         "title": str(tags.get("title", "")),
     }
+
+
+def _stream_dispositions(stream: dict[str, object]) -> list[str]:
+    disposition = stream.get("disposition")
+    if not isinstance(disposition, dict):
+        return []
+    return [
+        name
+        for name in SUBTITLE_DISPOSITIONS
+        if disposition.get(name) in (True, 1, "1")
+    ]
