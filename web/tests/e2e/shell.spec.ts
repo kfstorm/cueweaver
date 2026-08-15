@@ -84,7 +84,11 @@ async function registerJobListRoute(
   page: Page,
   getJobs: () => Array<ReturnType<typeof jobRecord>>,
 ) {
-  await page.route("**/api/jobs", async (route) => {
+  await page.route("**/api/jobs**", async (route) => {
+    if (!isJobsCollectionRequest(route.request())) {
+      await route.continue();
+      return;
+    }
     if (route.request().method() !== "GET") {
       await route.continue();
       return;
@@ -93,13 +97,22 @@ async function registerJobListRoute(
   });
 }
 
+function isJobsCollectionRequest(request: { url(): string }): boolean {
+  return new URL(request.url()).pathname === "/api/jobs";
+}
+
 async function fulfillJobList(
   route: Parameters<Parameters<Page["route"]>[1]>[0],
   jobs: Array<ReturnType<typeof jobRecord>>,
 ) {
+  const activeStatuses = new Set(["Queued", "Extracting", "Translating"]);
   await route.fulfill({
     contentType: "application/json",
-    body: JSON.stringify({ jobs }),
+    body: JSON.stringify({
+      active_jobs: jobs.filter((job) => activeStatuses.has(job.status)),
+      history_jobs: jobs.filter((job) => !activeStatuses.has(job.status)),
+      next_cursor: null,
+    }),
   });
 }
 
@@ -162,7 +175,8 @@ async function stubMutableJobs(
 
 async function readJobs(page: Page) {
   const response = await page.request.get("/api/jobs");
-  return (await response.json()).jobs as Array<{
+  const body = await response.json();
+  return [...body.active_jobs, ...body.history_jobs] as Array<{
     id: string;
     attempt: number;
     request: {
@@ -324,12 +338,12 @@ test.describe("Job history mutations", () => {
       await expect(
         page.getByRole("button", { name: "Clear Completed (1)" }),
       ).toBeEnabled();
-      await expect(page.getByText("2 total")).toBeVisible();
+      await expect(page.getByText("2 loaded")).toBeVisible();
       await page.getByRole("button", { name: "Clear Completed (1)" }).click();
       await expect(
         page.getByRole("button", { name: "Clear Completed (0)" }),
       ).toBeDisabled();
-      await expect(page.getByText("1 total")).toBeVisible();
+      await expect(page.getByText("1 loaded")).toBeVisible();
       await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
 
       await page.getByRole("button", { name: /Example\.mkv/ }).click();
@@ -631,7 +645,11 @@ test.describe("subtitle submission", () => {
           (request) =>
             request.url().endsWith("/api/jobs") && request.method() === "POST",
         );
-        await page.route("**/api/jobs", async (route) => {
+        await page.route("**/api/jobs**", async (route) => {
+          if (!isJobsCollectionRequest(route.request())) {
+            await route.continue();
+            return;
+          }
           if (route.request().method() === "POST") {
             await route.fulfill({
               contentType: "application/json",
@@ -643,7 +661,14 @@ test.describe("subtitle submission", () => {
             });
             return;
           }
-          await route.fulfill({ contentType: "application/json", body: '{"jobs":[]}' });
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              active_jobs: [],
+              history_jobs: [],
+              next_cursor: null,
+            }),
+          });
         });
 
         await page.goto("/translate");

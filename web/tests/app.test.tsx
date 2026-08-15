@@ -18,6 +18,17 @@ function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
 
+type JobFixture = { status: string; [key: string]: unknown };
+
+function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) {
+  const activeStatuses = ["Queued", "Extracting", "Translating"];
+  return jsonResponse({
+    active_jobs: jobs.filter((job) => activeStatuses.includes(job.status)),
+    history_jobs: jobs.filter((job) => !activeStatuses.includes(job.status)),
+    next_cursor,
+  });
+}
+
 function emptyMediaResponse() {
   return jsonResponse({ path: "", entries: [] });
 }
@@ -52,19 +63,22 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   return { ...view, queryClient };
 }
 
-function jobsFetch(job: unknown) {
+function jobsFetch(job: JobFixture) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/status") return statusResponse();
-    if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
+    if (input.startsWith("/api/jobs")) return jobListResponse([job]);
     return jsonResponse({ term_maps: [] });
   });
 }
 
-function jobsPageFetch(getJobs: () => unknown, details: Record<string, unknown> = {}) {
+function jobsPageFetch(
+  getJobs: () => JobFixture,
+  details: Record<string, unknown> = {},
+) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/status") return statusResponse();
-    if (input === "/api/jobs") return jsonResponse({ jobs: [getJobs()] });
     if (input in details) return jsonResponse(details[input]);
+    if (input.startsWith("/api/jobs")) return jobListResponse([getJobs()]);
     return jsonResponse({ term_maps: [] });
   });
 }
@@ -96,7 +110,7 @@ function embeddedJob(id: string, status: "Failed" | "Interrupted", target = "zh-
   };
 }
 
-function retryFetch(job: object, firstFailure?: string) {
+function retryFetch(job: JobFixture, firstFailure?: string) {
   let attempts = 0;
   let response: { status: string; attempt: number } | null = null;
   const fetchMock = vi
@@ -111,7 +125,7 @@ function retryFetch(job: object, firstFailure?: string) {
         response = { status: "Queued", attempt: 2 };
         return jsonResponse({ ...job, ...response, error: null });
       }
-      if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
+      if (input.startsWith("/api/jobs")) return jobListResponse([job]);
       return jsonResponse({ term_maps: [] });
     });
   return {
@@ -539,11 +553,45 @@ describe("product shell", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("moves a completed active Job into history during polling", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const active = {
+      ...embeddedJob("polling-job-1", "Interrupted"),
+      status: "Translating",
+      error: null,
+    };
+    const completed = {
+      ...active,
+      status: "Completed",
+      finished_at: "2026-08-13T12:01:00Z",
+    };
+    let currentJobs: JobFixture[] = [active];
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input.startsWith("/api/jobs")) return jobListResponse(currentJobs);
+      return jsonResponse({ term_maps: [] });
+    });
+    try {
+      renderWithFetch("/jobs", fetchMock);
+      expect(await screen.findByText("Translating")).toBeInTheDocument();
+      currentJobs = [completed];
+
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(await screen.findByText("Completed")).toBeInTheDocument();
+      expect(
+        await screen.findByText("Movie.mkv translation completed."),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("pauses Job polling while hidden and refreshes when visible again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") return statusResponse();
-      if (input === "/api/jobs") return jsonResponse({ jobs: [] });
+      if (input.startsWith("/api/jobs")) return jobListResponse([]);
       return jsonResponse({ term_maps: [] });
     });
     try {
@@ -555,7 +603,8 @@ describe("product shell", () => {
       await screen.findByRole("heading", { name: "No Jobs yet" });
 
       const jobCalls = () =>
-        fetchMock.mock.calls.filter(([input]) => input === "/api/jobs").length;
+        fetchMock.mock.calls.filter(([input]) => String(input).startsWith("/api/jobs"))
+          .length;
       const initialCalls = jobCalls();
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
@@ -579,10 +628,10 @@ describe("product shell", () => {
   it("shows a stale-selection state when a requested Job is gone", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") return statusResponse();
-      if (input === "/api/jobs") return jsonResponse({ jobs: [] });
       if (input === "/api/jobs/missing") {
         return jsonResponse({ message: "Job does not exist" }, false);
       }
+      if (input.startsWith("/api/jobs")) return jobListResponse([]);
       return jsonResponse({ term_maps: [] });
     });
     renderWithFetch("/jobs/missing", fetchMock);
@@ -597,11 +646,11 @@ describe("product shell", () => {
     let listCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") return statusResponse();
-      if (input === "/api/jobs") {
+      if (input.startsWith("/api/jobs")) {
         listCalls += 1;
         if (listCalls === 1)
           return jsonResponse({ message: "History is unavailable" }, false);
-        return jsonResponse({ jobs: [] });
+        return jobListResponse([]);
       }
       return jsonResponse({ term_maps: [] });
     });
@@ -614,7 +663,59 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Jobs yet" }),
     ).toBeInTheDocument();
-    expect(listCalls).toBe(2);
+    expect(listCalls).toBe(4);
+  });
+
+  it("loads another history page from the returned cursor", async () => {
+    const active = {
+      ...embeddedJob("active-page-job", "Interrupted"),
+      status: "Translating",
+      error: null,
+    };
+    const firstHistory = {
+      ...embeddedJob("history-page-one", "Failed"),
+      status: "Completed",
+      error: null,
+    };
+    const secondHistory = {
+      ...embeddedJob("history-page-two", "Failed"),
+      status: "Failed",
+    };
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs?limit=1") {
+        return jsonResponse({
+          active_jobs: [active],
+          history_jobs: [],
+          next_cursor: null,
+        });
+      }
+      if (input === "/api/jobs") {
+        return jsonResponse({
+          active_jobs: [],
+          history_jobs: [firstHistory],
+          next_cursor: "cursor-1",
+        });
+      }
+      if (input === "/api/jobs?limit=50&cursor=cursor-1") {
+        return jsonResponse({
+          active_jobs: [],
+          history_jobs: [secondHistory],
+          next_cursor: null,
+        });
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(await screen.findByText("Translating")).toBeInTheDocument();
+    expect(screen.getByText("Load more history")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more history" }));
+    await waitFor(() => expect(screen.getAllByText("Movie.mkv")).toHaveLength(3));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs?limit=50&cursor=cursor-1",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("renders queued and running Job states with queue context", async () => {
@@ -647,11 +748,11 @@ describe("product shell", () => {
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
         if (input === "/api/status") return statusResponse();
-        if (input === "/api/jobs") return jsonResponse({ jobs: [job] });
         if (input.endsWith("/retry")) return retryPending;
         if (input.endsWith("mutation-state-1") && init?.method === "DELETE") {
           return jsonResponse({ message: "Job could not be deleted." }, false);
         }
+        if (input.startsWith("/api/jobs")) return jobListResponse([job]);
         return jsonResponse({ term_maps: [] });
       });
     renderWithFetch("/jobs", fetchMock);
@@ -782,11 +883,11 @@ describe("product shell", () => {
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
         if (input === "/api/status") return statusResponse();
-        if (input === "/api/jobs") return jsonResponse({ jobs: deleted ? [] : [job] });
         if (input === "/api/jobs/delete-job-1" && init?.method === "DELETE") {
           deleted = true;
           return jsonResponse({ id: job.id, deleted: true });
         }
+        if (input.startsWith("/api/jobs")) return jobListResponse(deleted ? [] : [job]);
         return jsonResponse({ term_maps: [] });
       });
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -825,12 +926,11 @@ describe("product shell", () => {
       error: null,
     };
     const retained = { ...embeddedJob("clear-job-failed", "Failed") };
-    let currentJobs: object[] = [first, second, retained];
+    let currentJobs: JobFixture[] = [first, second, retained];
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
         if (input === "/api/status") return statusResponse();
-        if (input === "/api/jobs") return jsonResponse({ jobs: currentJobs });
         if (input === "/api/jobs/completed" && init?.method === "DELETE") {
           currentJobs = [second, retained];
           return jsonResponse({
@@ -849,6 +949,7 @@ describe("product shell", () => {
           currentJobs = [retained];
           return jsonResponse({ id: second.id, deleted: true });
         }
+        if (input.startsWith("/api/jobs")) return jobListResponse(currentJobs);
         return jsonResponse({ term_maps: [] });
       });
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -1335,7 +1436,7 @@ describe("product shell", () => {
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     fetchMock.mockImplementation(async (input: string, request?: RequestInit) => {
       if (input === "/api/jobs" && request?.method === "POST") return createPending;
-      return jsonResponse({ jobs: [] });
+      return jobListResponse([]);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -1385,7 +1486,7 @@ describe("product shell", () => {
           unsupported_candidates: [],
         });
       }
-      return jsonResponse({ jobs: [] });
+      return jobListResponse([]);
     });
     renderWithFetch("/translate", fetchMock);
     await selectExternalSubtitle();

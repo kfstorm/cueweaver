@@ -81,8 +81,10 @@ class JobsApplicationFixture(ApplicationFixture):
     def create(self, _request: object) -> dict[str, object]:
         return {}
 
-    def list(self) -> list[dict[str, object]]:
-        return []
+    def list_page(
+        self, _limit: int = 50, _cursor: str | None = None
+    ) -> dict[str, object]:
+        return {"active_jobs": [], "history_jobs": [], "next_cursor": None}
 
     def get(self, _job_id: str) -> dict[str, object]:
         return {}

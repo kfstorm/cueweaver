@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from binascii import Error as Base64Error
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
@@ -16,33 +18,129 @@ JOB_STATUSES = frozenset(
     {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
 )
 TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted"})
+HISTORY_CURSOR_LENGTH_LIMIT = 512
 
 
 @dataclass(frozen=True)
 class JobSummary:
-    """The current record shape exposed by the application.
-
-    The projection is deliberately independent from the durable record. It
-    currently contains the same fields for compatibility; later HTTP slices
-    can reduce the summary without changing the persisted execution record.
-    """
+    """The bounded record shape used by Job history and active-job polling."""
 
     record: Mapping[str, object]
     queue_position: int | None
 
     def to_dict(self) -> JobRecord:
-        projected = copy_job_record(self.record)
+        projected = _project_common(self.record, summary=True)
         projected["queue_position"] = self.queue_position
         return projected
 
 
 @dataclass(frozen=True)
 class JobDetail(JobSummary):
-    """A detail projection kept separate from the durable record."""
+    """The detail shape exposed by HTTP without immutable Term map content."""
+
+    def to_dict(self) -> JobRecord:
+        projected = _project_common(self.record, summary=False)
+        projected["queue_position"] = self.queue_position
+        return projected
 
 
 def project_job_detail(record: JobRecord, queue_position: int | None) -> JobRecord:
     return JobDetail(record, queue_position).to_dict()
+
+
+def project_job_summary(record: JobRecord, queue_position: int | None) -> JobRecord:
+    return JobSummary(record, queue_position).to_dict()
+
+
+def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord:
+    fields: tuple[str, ...] = (
+        "id",
+        "status",
+        "attempt",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "error",
+    )
+    if not summary:
+        fields += ("extraction",)
+    copied_record = copy_job_record(record)
+    projected = {
+        field: copied_record[field] for field in fields if field in copied_record
+    }
+    request = record.get("request")
+    if isinstance(request, dict):
+        request_fields: tuple[str, ...] = (
+            "media_path",
+            "subtitle_path",
+            "stream_index",
+            "target_language_code",
+            "output_path",
+            "source_format",
+        )
+        if not summary:
+            request_fields += (
+                "dynamic_terminology_enabled",
+                "subtitle_terminology_filter_enabled",
+                "output_suffix",
+                "output_conflict_policy",
+            )
+        copied_request = copy_job_record(request)
+        projected_request = {
+            field: copied_request[field]
+            for field in request_fields
+            if field in copied_request
+        }
+        term_map = request.get("term_map")
+        if isinstance(term_map, dict):
+            projected_request["term_map"] = {
+                field: term_map[field] for field in ("id", "name") if field in term_map
+            }
+        else:
+            projected_request["term_map"] = None
+        projected["request"] = projected_request
+    return projected
+
+
+def encode_history_cursor(created_at: str, job_id: str) -> str:
+    payload = json.dumps(
+        {"created_at": created_at, "id": job_id},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_history_cursor(cursor: str) -> tuple[str, str]:
+    if (
+        not cursor
+        or len(cursor) > HISTORY_CURSOR_LENGTH_LIMIT
+        or any(character.isspace() for character in cursor)
+        or any(
+            character
+            not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            for character in cursor
+        )
+    ):
+        raise ValueError("Invalid history cursor")
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        decoded = urlsafe_b64decode(cursor + padding)
+        if urlsafe_b64encode(decoded).decode("ascii").rstrip("=") != cursor:
+            raise ValueError("Invalid history cursor")
+        payload = json.loads(decoded.decode("utf-8"))
+    except (Base64Error, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Invalid history cursor") from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"created_at", "id"}
+        or not isinstance(payload["created_at"], str)
+        or not payload["created_at"]
+        or not isinstance(payload["id"], str)
+        or not payload["id"]
+    ):
+        raise ValueError("Invalid history cursor")
+    return payload["created_at"], payload["id"]
 
 
 def copy_job_record(record: Mapping[str, object]) -> JobRecord:
@@ -177,8 +275,11 @@ __all__ = [
     "JobStatus",
     "JobSummary",
     "copy_job_record",
+    "decode_history_cursor",
+    "encode_history_cursor",
     "normalize_record",
     "project_job_detail",
+    "project_job_summary",
     "queue_sequence",
     "valid_record",
     "valid_request",
