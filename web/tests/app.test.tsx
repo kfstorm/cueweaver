@@ -87,6 +87,16 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   return { ...view, queryClient };
 }
 
+async function openVisibleJobDetail(fetchImplementation: typeof fetch) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: "visible",
+  });
+  renderWithFetch("/jobs", fetchImplementation);
+  fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+  await screen.findByRole("heading", { name: "Request summary" });
+}
+
 function jobsFetch(job: JobFixture) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/status") return statusResponse();
@@ -730,13 +740,7 @@ describe("product shell", () => {
     const fetchMock = jobsPageFetch(() => currentJob);
 
     try {
-      Object.defineProperty(document, "visibilityState", {
-        configurable: true,
-        value: "visible",
-      });
-      renderWithFetch("/jobs", fetchMock);
-      fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
-      await screen.findByRole("heading", { name: "Request summary" });
+      await openVisibleJobDetail(fetchMock);
 
       currentJob = translating;
       await vi.advanceTimersByTimeAsync(2000);
@@ -764,15 +768,75 @@ describe("product shell", () => {
           "Completed",
         ),
       ).toHaveLength(2);
-      const detailCalls = fetchMock.mock.calls.filter(
-        ([input]) => input === "/api/jobs/job-detail-polling",
-      ).length;
-      await vi.advanceTimersByTimeAsync(5000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes a Job detail after an out-of-band retry", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const failed = {
+      ...embeddedJob("job-detail-retry", "Failed"),
+      status_history: [
+        {
+          status: "Queued" as const,
+          attempt: 1,
+          started_at: "2026-08-13T12:00:00Z",
+          finished_at: "2026-08-13T12:00:01Z",
+        },
+        {
+          status: "Translating" as const,
+          attempt: 1,
+          started_at: "2026-08-13T12:00:01Z",
+          finished_at: "2026-08-13T12:00:02Z",
+        },
+        {
+          status: "Failed" as const,
+          attempt: 1,
+          started_at: "2026-08-13T12:00:02Z",
+          finished_at: "2026-08-13T12:00:03Z",
+        },
+      ],
+    };
+    const queued = {
+      ...failed,
+      status: "Queued" as const,
+      attempt: 2,
+      started_at: null,
+      finished_at: null,
+      queue_position: 1,
+      error: null,
+      status_history: [
+        ...failed.status_history,
+        {
+          status: "Queued" as const,
+          attempt: 2,
+          started_at: "2026-08-13T12:00:04Z",
+          finished_at: null,
+        },
+      ],
+    };
+    let currentJob: JobFixture = failed;
+    const fetchMock = jobsPageFetch(() => currentJob);
+
+    try {
+      await openVisibleJobDetail(fetchMock);
       expect(
-        fetchMock.mock.calls.filter(
-          ([input]) => input === "/api/jobs/job-detail-polling",
+        within(screen.getByRole("region", { name: "Job details" })).getAllByText(
+          "Failed",
         ),
-      ).toHaveLength(detailCalls);
+      ).toHaveLength(2);
+
+      currentJob = queued;
+      await vi.advanceTimersByTimeAsync(2000);
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole("list", { name: "Job status history" })).getAllByText(
+            "Queued",
+          ),
+        ).toHaveLength(2),
+      );
+      expect(screen.getByText("Attempt 2")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

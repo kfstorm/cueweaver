@@ -11,12 +11,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const HISTORY_QUERY_KEY = ["jobs", "history"] as const;
 const HISTORY_REFRESH_QUERY_KEY = ["jobs", "history-refresh"] as const;
-const TERMINAL_JOB_STATUSES = new Set([
-  "Completed",
-  "Failed",
-  "Interrupted",
-  "Cancelled",
-]);
 
 function updateJobAfterMutation(queryClient: QueryClient, job: Job, jobId: string) {
   queryClient.setQueryData(["job", jobId], job);
@@ -246,11 +240,7 @@ export function useJob(jobId: string | null, enabled = jobId !== null) {
       return body;
     },
     staleTime: 0,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (query.state.status === "error") return false;
-      return status !== undefined && TERMINAL_JOB_STATUSES.has(status) ? false : 2000;
-    },
+    refetchInterval: 2000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
   });
