@@ -13,6 +13,7 @@ import type { Icon } from "@phosphor-icons/react";
 import {
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent,
@@ -843,7 +844,7 @@ function TermMapsPage() {
     resetRemove();
   }, [resetRemove, resetRename, resetReplace, selectedId]);
 
-  const contentValidation = validateTermMapContent(content);
+  const contentValidation = useMemo(() => validateTermMapContent(content), [content]);
   const contentError = fileError ?? contentValidation.error;
 
   async function loadTermMapFile(file: File) {

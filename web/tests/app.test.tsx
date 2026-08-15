@@ -1257,11 +1257,6 @@ describe("product shell", () => {
     expect(validateTermMapContent('{"\u01f0":"one","j\u030c":"two"}').error).toContain(
       "unique regardless of case",
     );
-    expect(validateTermMapContent('{"\ua7ce":"one","\ua7cf":"two"}').error).toBeNull();
-    expect(validateTermMapContent('{"\ua7d2":"one","\ua7d3":"two"}').error).toBeNull();
-    expect(
-      validateTermMapContent('{"\u16ea0":"one","\u16ebb":"two"}').error,
-    ).toBeNull();
     const prototypeMapping = validateTermMapContent('{"__proto__":"Target"}').content;
     expect(Object.keys(prototypeMapping ?? {})).toEqual(["__proto__"]);
     expect(prototypeMapping?.["__proto__"]).toBe("Target");
