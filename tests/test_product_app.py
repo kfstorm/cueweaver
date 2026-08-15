@@ -390,7 +390,7 @@ def test_product_browse_api_returns_relative_entries_and_rejects_traversal(
         encoding="utf-8",
     )
     (media_root / "movie.nfo").write_text(
-        "<movie><title>Fallback label</title><year>2023</year></movie>",
+        "<movie><title>Fallback label</title><premiered>2023-01-01</premiered></movie>",
         encoding="utf-8",
     )
     (media_root / "inside").mkdir()
