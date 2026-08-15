@@ -643,7 +643,7 @@ class Jobs:
 
     def _load_records(self) -> None:
         for loaded_record in self._record_store.load():
-            if not valid_record(loaded_record):
+            if not valid_record(loaded_record, strict=True):
                 continue
             job_id = loaded_record.get("id")
             status = loaded_record.get("status")

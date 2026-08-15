@@ -160,7 +160,18 @@ def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid
     (jobs_root / "unreadable.json").write_bytes(unreadable_bytes)
     invalid_schema_bytes = b'{"schema_version": "one"}'
     (jobs_root / "invalid-schema.json").write_bytes(invalid_schema_bytes)
-    future_bytes = json.dumps({**legacy, "schema_version": 2, "future": True}).encode()
+    future_bytes = json.dumps(
+        {
+            **legacy,
+            "schema_version": 2,
+            "attempt": 1,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "queue_sequence": 0,
+            "future": True,
+        }
+    ).encode()
     (jobs_root / "future.json").write_bytes(future_bytes)
 
     store = FileJobRecordStore(jobs_root)
@@ -171,6 +182,9 @@ def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid
             **legacy,
             "schema_version": 1,
             "attempt": 1,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
             "request": {
                 **legacy["request"],
                 "term_map": None,
@@ -266,6 +280,10 @@ def test_record_store_keeps_the_canonical_record_when_a_duplicate_legacy_file_ex
         "schema_version": 1,
         "id": "actual-id",
         "status": "Completed",
+        "attempt": 1,
+        "created_at": "2026-08-13T12:00:00Z",
+        "started_at": "2026-08-13T12:00:01Z",
+        "finished_at": "2026-08-13T12:00:02Z",
         "request": {
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
@@ -273,6 +291,8 @@ def test_record_store_keeps_the_canonical_record_when_a_duplicate_legacy_file_ex
             "output_path": "Movie.zh-Hans.srt",
             "source_format": "srt",
         },
+        "error": None,
+        "queue_sequence": 0,
     }
     legacy = {key: value for key, value in canonical.items() if key != "schema_version"}
     (jobs_root / "actual-id.json").write_text(json.dumps(canonical), encoding="utf-8")
@@ -294,7 +314,16 @@ def test_record_store_protects_a_future_canonical_record_from_a_legacy_alias(
     jobs_root = tmp_path / "jobs"
     jobs_root.mkdir()
     legacy = persisted_job_record("future-job")
-    future = {**legacy, "schema_version": 2}
+    future = {
+        **legacy,
+        "schema_version": 2,
+        "attempt": 1,
+        "created_at": "2026-08-13T12:00:00Z",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "queue_sequence": 0,
+    }
     (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
     (jobs_root / "future-job.json").write_text(json.dumps(future), encoding="utf-8")
 
@@ -305,7 +334,7 @@ def test_record_store_protects_a_future_canonical_record_from_a_legacy_alias(
     assert (jobs_root / "unsupported" / "future-job.json").is_file()
 
 
-def test_record_store_quarantines_an_unknown_future_shape_as_unsupported(
+def test_record_store_quarantines_an_invalid_future_shape_as_corrupt(
     tmp_path: Path,
 ):
     jobs_root = tmp_path / "jobs"
@@ -316,8 +345,35 @@ def test_record_store_quarantines_an_unknown_future_shape_as_unsupported(
     records = FileJobRecordStore(jobs_root).load()
 
     assert records == []
-    assert (jobs_root / "unsupported" / "future-job.json").read_bytes() == raw_future
-    assert not (jobs_root / "corrupt" / "future-job.json").exists()
+    assert (jobs_root / "corrupt" / "future-job.json").read_bytes() == raw_future
+    assert not (jobs_root / "unsupported" / "future-job.json").exists()
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["created_at", "started_at", "finished_at", "error", "queue_sequence"],
+)
+def test_record_store_quarantines_v1_records_missing_required_fields(
+    tmp_path: Path, missing_field: str
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = {
+        **persisted_job_record("missing-field"),
+        "schema_version": 1,
+        "attempt": 1,
+        "created_at": "2026-08-13T12:00:00Z",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "queue_sequence": 1,
+    }
+    del record[missing_field]
+    raw_record = json.dumps(record).encode()
+    (jobs_root / "missing-field.json").write_bytes(raw_record)
+
+    assert FileJobRecordStore(jobs_root).load() == []
+    assert (jobs_root / "corrupt" / "missing-field.json").read_bytes() == raw_record
 
 
 def test_record_store_protects_a_mismatched_future_path_from_a_legacy_alias(
@@ -326,7 +382,17 @@ def test_record_store_protects_a_mismatched_future_path_from_a_legacy_alias(
     jobs_root = tmp_path / "jobs"
     jobs_root.mkdir()
     legacy = persisted_job_record("actual-id")
-    future = {**legacy, "id": "other-id", "schema_version": 2}
+    future = {
+        **legacy,
+        "id": "other-id",
+        "schema_version": 2,
+        "attempt": 1,
+        "created_at": "2026-08-13T12:00:00Z",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "queue_sequence": 0,
+    }
     (jobs_root / "a-alias.json").write_text(json.dumps(legacy), encoding="utf-8")
     (jobs_root / "actual-id.json").write_text(json.dumps(future), encoding="utf-8")
 
