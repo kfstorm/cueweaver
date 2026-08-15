@@ -5,11 +5,17 @@ import {
   useQuery,
   useQueryClient,
   type InfiniteData,
+  type QueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const HISTORY_QUERY_KEY = ["jobs", "history"] as const;
 const HISTORY_REFRESH_QUERY_KEY = ["jobs", "history-refresh"] as const;
+
+function updateJobAfterMutation(queryClient: QueryClient, job: Job, jobId: string) {
+  queryClient.setQueryData(["job", jobId], job);
+  void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+}
 
 export interface Job {
   id: string;
@@ -25,6 +31,7 @@ export interface Job {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  status_history?: JobStatusHistoryEntry[];
   queue_position: number | null;
   request: {
     media_path: string;
@@ -43,6 +50,13 @@ export interface Job {
     output_conflict_policy?: "append-number" | "overwrite";
   };
   error: { code: string; message: string; [key: string]: unknown } | null;
+}
+
+export interface JobStatusHistoryEntry {
+  status: Job["status"];
+  attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface JobListPage {
@@ -226,6 +240,9 @@ export function useJob(jobId: string | null, enabled = jobId !== null) {
       return body;
     },
     staleTime: 0,
+    refetchInterval: 2000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -318,7 +335,7 @@ export function useRetryJob() {
       if (!response.ok) throw new Error(body.message ?? "Job could not be retried.");
       return body;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+    onSuccess: (job, jobId) => updateJobAfterMutation(queryClient, job, jobId),
   });
 }
 
@@ -333,7 +350,7 @@ export function useCancelJob() {
       if (!response.ok) throw new Error(body.message ?? "Job could not be cancelled.");
       return body;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+    onSuccess: (job, jobId) => updateJobAfterMutation(queryClient, job, jobId),
   });
 }
 

@@ -22,6 +22,7 @@ JobStatus = Literal[
 ]
 JobRecord = dict[str, object]
 CURRENT_JOB_SCHEMA_VERSION = 1
+STATUS_HISTORY_FIELDS = frozenset({"status", "attempt", "started_at", "finished_at"})
 
 JOB_STATUSES = frozenset(
     {
@@ -80,7 +81,7 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
         "error",
     )
     if not summary:
-        fields += ("extraction",)
+        fields += ("extraction", "status_history")
     copied_record = copy_job_record(record)
     projected = {
         field: copied_record[field] for field in fields if field in copied_record
@@ -257,6 +258,12 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
     term_map = request.get("term_map")
     return (
         (
+            "status_history" not in record
+            or valid_status_history(
+                record["status_history"], status=status, attempt=attempt
+            )
+        )
+        and (
             "output_suffix" not in request
             or (
                 isinstance(request["output_suffix"], str)
@@ -320,6 +327,86 @@ def valid_request(request: dict[str, object]) -> bool:
         and stream_index >= 0
         and subtitle_path is None
     )
+
+
+def valid_status_history(value: object, *, status: object, attempt: object) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    if (
+        not isinstance(status, str)
+        or status not in JOB_STATUSES
+        or not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or attempt < 1
+    ):
+        return False
+
+    previous_attempt = 0
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict) or not entry.keys() >= STATUS_HISTORY_FIELDS:
+            return False
+        entry_status = entry["status"]
+        entry_attempt = entry["attempt"]
+        started_at = entry["started_at"]
+        finished_at = entry["finished_at"]
+        if (
+            not isinstance(entry_status, str)
+            or entry_status not in JOB_STATUSES
+            or not isinstance(entry_attempt, int)
+            or isinstance(entry_attempt, bool)
+            or entry_attempt < 1
+            or entry_attempt < previous_attempt
+            or entry_attempt > attempt
+            or not isinstance(started_at, str)
+            or not started_at
+            or (
+                finished_at is not None
+                and (not isinstance(finished_at, str) or not finished_at)
+            )
+            or (index < len(value) - 1 and finished_at is None)
+        ):
+            return False
+        previous_attempt = entry_attempt
+
+    last = value[-1]
+    last_finished_at = last["finished_at"]
+    return not (
+        last["status"] != status
+        or last["attempt"] != attempt
+        or (status in TERMINAL_JOB_STATUSES) != (last_finished_at is not None)
+    )
+
+
+def transition_status(
+    record: JobRecord,
+    status: str,
+    *,
+    attempt: int | None = None,
+    at: str,
+    terminal: bool = False,
+) -> None:
+    """Record a new status only for records that already support history."""
+    history = record.get("status_history")
+    if not isinstance(history, list):
+        record["status"] = status
+        return
+    if (
+        history
+        and isinstance(history[-1], dict)
+        and history[-1].get("finished_at") is None
+    ):
+        history[-1]["finished_at"] = at
+    current_attempt = record.get("attempt", 1) if attempt is None else attempt
+    assert isinstance(current_attempt, int) and not isinstance(current_attempt, bool)
+    history.append(
+        {
+            "status": status,
+            "attempt": current_attempt,
+            "started_at": at,
+            "finished_at": at if terminal else None,
+        }
+    )
+    record["status"] = status
 
 
 def normalize_record(record: JobRecord) -> None:
@@ -389,7 +476,9 @@ __all__ = [
     "project_job_detail",
     "project_job_summary",
     "queue_sequence",
+    "transition_status",
     "valid_job_id",
     "valid_record",
     "valid_request",
+    "valid_status_history",
 ]

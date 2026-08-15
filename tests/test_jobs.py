@@ -136,6 +136,67 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
     }
 
 
+def status_history_entry(
+    status: str,
+    *,
+    attempt: int = 1,
+    started_at: str | None = "2026-08-13T12:00:00Z",
+    finished_at: str | None = "2026-08-13T12:00:01Z",
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "attempt": attempt,
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }
+
+
+def set_record_status(
+    record: dict[str, object], status: str, *, finished_at: str | None
+) -> None:
+    history = record["status_history"]
+    attempt = record["attempt"]
+    created_at = record["created_at"]
+    assert isinstance(history, list)
+    assert isinstance(attempt, int)
+    assert isinstance(created_at, str)
+
+    if status in {"Queued", "Extracting", "Translating"}:
+        matching_index = next(
+            (
+                index
+                for index, entry in enumerate(history)
+                if isinstance(entry, dict) and entry.get("status") == status
+            ),
+            None,
+        )
+        if status == "Queued":
+            history[:] = history[:1]
+        elif matching_index is None:
+            history[:] = [
+                *history[:1],
+                status_history_entry(
+                    status,
+                    attempt=attempt,
+                    started_at=created_at,
+                    finished_at=None,
+                ),
+            ]
+        else:
+            history[:] = history[: matching_index + 1]
+        history[-1].update(
+            status=status,
+            attempt=attempt,
+            started_at=history[-1].get("started_at") or created_at,
+            finished_at=finished_at,
+        )
+        record["started_at"] = None if status == "Queued" else history[-1]["started_at"]
+    else:
+        history[-1].update(status=status, attempt=attempt, finished_at=finished_at)
+    record["status"] = status
+    record["finished_at"] = finished_at
+
+
 def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid_and_future_records(
     tmp_path: Path,
 ):
@@ -196,6 +257,7 @@ def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid
             "queue_sequence": 0,
         }
     ]
+    assert "status_history" not in records[0]
     assert (
         json.loads((jobs_root / "legacy-job.json").read_text())["schema_version"] == 1
     )
@@ -745,6 +807,230 @@ def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: 
     restarted.close()
 
 
+def test_job_persists_status_history_and_exposes_it_on_detail(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    started = threading.Event()
+    translator = FakeTranslator(started=started, release=release)
+    with make_client(media_root, work_root, translator) as client:
+        queued = create_job(client).json()
+        assert queued["status_history"]
+        assert queued["status_history"][-1] == {
+            "status": "Queued",
+            "attempt": 1,
+            "started_at": queued["created_at"],
+            "finished_at": None,
+        }
+
+        assert started.wait(timeout=5)
+        translating = client.get(f"/api/jobs/{queued['id']}").json()
+        assert [entry["status"] for entry in translating["status_history"]] == [
+            "Queued",
+            "Translating",
+        ]
+        assert translating["status_history"][0]["finished_at"]
+        assert translating["status_history"][1]["finished_at"] is None
+
+        release.set()
+        completed = wait_for_status(client, queued["id"], "Completed")
+
+    assert [entry["status"] for entry in completed["status_history"]] == [
+        "Queued",
+        "Translating",
+        "Completed",
+    ]
+    assert all(
+        set(entry) == {"status", "attempt", "started_at", "finished_at"}
+        for entry in completed["status_history"]
+    )
+    assert completed["status_history"][-1]["started_at"]
+    assert completed["status_history"][-1]["finished_at"]
+    persisted = json.loads(
+        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["status_history"] == completed["status_history"]
+
+
+def test_retry_adds_a_new_attempt_to_status_history(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    release.set()
+    translator = FakeTranslator(error=RuntimeError("boom"))
+    jobs = Jobs(translator, media_root, work_root)
+
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    failed = jobs.get(str(queued["id"]))
+    failed_finished_at = failed["status_history"][2]["finished_at"]
+    translator.error = None
+    retried = jobs.retry(str(queued["id"]))
+    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+    retried_history = retried["status_history"]
+    assert retried_history[-1]["status"] == "Queued"
+    assert retried_history[-1]["attempt"] == 2
+    assert isinstance(retried_history[-1]["started_at"], str)
+    assert retried_history[-1]["finished_at"] is None
+    assert [
+        (entry["status"], entry["attempt"]) for entry in completed["status_history"]
+    ] == [
+        ("Queued", 1),
+        ("Translating", 1),
+        ("Failed", 1),
+        ("Queued", 2),
+        ("Translating", 2),
+        ("Completed", 2),
+    ]
+    assert completed["status_history"][2]["finished_at"] == failed_finished_at
+    assert all(entry["finished_at"] for entry in completed["status_history"])
+    jobs.close()
+
+
+def test_cancel_adds_a_finished_cancelled_status_history_entry(tmp_path: Path):
+    jobs, _translator, _running, queued, _release, _subtitle = create_blocked_jobs(
+        tmp_path
+    )
+
+    cancelled = jobs.cancel(str(queued["id"]))
+
+    assert [
+        (entry["status"], entry["attempt"]) for entry in cancelled["status_history"]
+    ] == [
+        ("Queued", 1),
+        ("Cancelled", 1),
+    ]
+    assert all(entry["finished_at"] for entry in cancelled["status_history"])
+    jobs.close()
+
+
+def test_restart_appends_interrupted_without_fabricating_earlier_history(
+    tmp_path: Path,
+):
+    media_root, work_root, queued, record_path, record = persisted_external_job(
+        tmp_path
+    )
+    record["status"] = "Translating"
+    record["finished_at"] = None
+    record["error"] = None
+    record["status_history"] = record["status_history"][:-1]
+    record["status_history"][-1]["finished_at"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root)
+
+    recovered = restarted.get(queued["id"])
+    assert [entry["status"] for entry in recovered["status_history"]] == [
+        "Queued",
+        "Translating",
+        "Interrupted",
+    ]
+    assert recovered["status_history"][-1]["attempt"] == 1
+    assert recovered["status_history"][-1]["started_at"]
+    assert recovered["status_history"][-1]["finished_at"]
+    restarted.close()
+
+
+@pytest.mark.parametrize(
+    "status_history",
+    [
+        None,
+        {},
+        [{"status": "Queued"}],
+        [
+            {
+                "status": "Queued",
+                "attempt": True,
+                "started_at": None,
+                "finished_at": None,
+            }
+        ],
+    ],
+)
+def test_record_store_quarantines_an_invalid_optional_status_history(
+    tmp_path: Path, status_history: object
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = {
+        **persisted_job_record("invalid-history"),
+        "schema_version": 1,
+        "attempt": 1,
+        "created_at": "2026-08-13T12:00:00Z",
+        "started_at": None,
+        "finished_at": None,
+        "error": None,
+        "queue_sequence": 1,
+        "status_history": status_history,
+    }
+    raw_record = json.dumps(record).encode()
+    (jobs_root / "invalid-history.json").write_bytes(raw_record)
+
+    assert FileJobRecordStore(jobs_root).load() == []
+    assert (jobs_root / "corrupt" / "invalid-history.json").read_bytes() == raw_record
+
+
+@pytest.mark.parametrize(
+    "status, attempt, status_history",
+    [
+        ("Failed", 1, [status_history_entry("Completed")]),
+        ("Failed", 2, [status_history_entry("Failed")]),
+        (
+            "Failed",
+            1,
+            [status_history_entry("Failed", started_at=None)],
+        ),
+        (
+            "Failed",
+            1,
+            [status_history_entry("Failed", finished_at=None)],
+        ),
+        (
+            "Translating",
+            1,
+            [status_history_entry("Translating")],
+        ),
+        (
+            "Completed",
+            1,
+            [
+                status_history_entry("Queued", finished_at=None),
+                status_history_entry("Completed"),
+            ],
+        ),
+    ],
+)
+def test_record_store_quarantines_inconsistent_status_history(
+    tmp_path: Path,
+    status: str,
+    attempt: int,
+    status_history: list[dict[str, object]],
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = {
+        **persisted_job_record("inconsistent-history", status),
+        "schema_version": 1,
+        "attempt": attempt,
+        "created_at": "2026-08-13T12:00:00Z",
+        "started_at": None if status == "Queued" else "2026-08-13T12:00:00Z",
+        "finished_at": (
+            None
+            if status in {"Queued", "Extracting", "Translating"}
+            else "2026-08-13T12:00:01Z"
+        ),
+        "error": None,
+        "queue_sequence": 1,
+        "status_history": status_history,
+    }
+    raw_record = json.dumps(record).encode()
+    (jobs_root / "inconsistent-history.json").write_bytes(raw_record)
+
+    assert FileJobRecordStore(jobs_root).load() == []
+    assert (
+        jobs_root / "corrupt" / "inconsistent-history.json"
+    ).read_bytes() == raw_record
+
+
 def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     client = make_client(
@@ -1021,7 +1307,7 @@ def test_interrupted_embedded_job_retries_using_its_verified_extraction(
     media_root, work_root, media, media_adapter, queued, record_path, record = (
         persisted_failed_embedded_job(tmp_path, translator)
     )
-    record["status"] = "Interrupted"
+    set_record_status(record, "Interrupted", finished_at=record["finished_at"])
     record_path.write_text(json.dumps(record), encoding="utf-8")
     translator.error = None
 
@@ -1457,6 +1743,10 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     assert extracting.wait(timeout=5)
     extracting_record = jobs.get(str(queued["id"]))
     assert extracting_record["status"] == "Extracting"
+    assert [entry["status"] for entry in extracting_record["status_history"]] == [
+        "Queued",
+        "Extracting",
+    ]
     assert "subtitle_path" not in extracting_record["request"]
     assert extracting_record["request"]["stream_index"] == 3
     assert extracting_record["extraction"] is None
@@ -1465,6 +1755,11 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     assert translating.wait(timeout=5)
     translating_record = jobs.get(str(queued["id"]))
     assert translating_record["status"] == "Translating"
+    assert [entry["status"] for entry in translating_record["status_history"]] == [
+        "Queued",
+        "Extracting",
+        "Translating",
+    ]
     extraction_record = translating_record["extraction"]
     assert isinstance(extraction_record, dict)
     assert extraction_record["status"] == "Completed"
@@ -1479,6 +1774,12 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
         time.sleep(0.01)
 
     completed = jobs.get(str(queued["id"]))
+    assert [entry["status"] for entry in completed["status_history"]] == [
+        "Queued",
+        "Extracting",
+        "Translating",
+        "Completed",
+    ]
     assert completed["request"]["output_path"] == f"Movie.zh-Hans.{source_format}"
     assert media_adapter.probe_calls == [_media]
     assert media_adapter.extract_calls[0][:2] == (_media, 3)
@@ -2005,7 +2306,7 @@ def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path
     jobs.close()
     record_path = work_root / "jobs" / f"{queued['id']}.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
-    record["status"] = "Interrupted"
+    set_record_status(record, "Interrupted", finished_at=record["finished_at"])
     record_path.write_text(json.dumps(record), encoding="utf-8")
     work_directory = work_root / "jobs" / str(queued["id"])
     (work_directory / "checkpoint").write_text("checkpoint", encoding="utf-8")
@@ -2447,7 +2748,7 @@ def test_restart_recovers_every_active_job_without_requeueing(
     media_root, work_root, queued, record_path, record = persisted_external_job(
         tmp_path
     )
-    record["status"] = active_status
+    set_record_status(record, active_status, finished_at=None)
     record["request"]["term_map"] = {
         "id": "map-1",
         "name": "Characters",
@@ -2484,8 +2785,7 @@ def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
     media_root, work_root, queued, record_path, record = persisted_external_job(
         tmp_path
     )
-    record["status"] = "Translating"
-    record["finished_at"] = None
+    set_record_status(record, "Translating", finished_at=None)
     record_path.write_text(json.dumps(record), encoding="utf-8")
     translator = FakeTranslator(started=threading.Event())
 
@@ -2506,8 +2806,7 @@ def test_external_job_retries_after_restart_recovery(tmp_path: Path):
     media_root, work_root, queued, record_path, record = persisted_external_job(
         tmp_path
     )
-    record["status"] = "Translating"
-    record["finished_at"] = None
+    set_record_status(record, "Translating", finished_at=None)
     record["error"] = None
     record_path.write_text(json.dumps(record), encoding="utf-8")
     work_directory = work_root / "jobs" / queued["id"]
@@ -2544,8 +2843,7 @@ def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status:
     media_root, work_root, queued, record_path, record = persisted_external_job(
         tmp_path
     )
-    record["status"] = terminal_status
-    record["finished_at"] = "2026-08-14T00:00:00Z"
+    set_record_status(record, terminal_status, finished_at="2026-08-14T00:00:00Z")
     record["error"] = (
         None
         if terminal_status == "Completed"
@@ -2566,8 +2864,7 @@ def test_restart_recovery_is_idempotent(tmp_path: Path):
     media_root, work_root, queued, record_path, record = persisted_external_job(
         tmp_path
     )
-    record["status"] = "Translating"
-    record["finished_at"] = None
+    set_record_status(record, "Translating", finished_at=None)
     record_path.write_text(json.dumps(record), encoding="utf-8")
 
     first = Jobs(FakeTranslator(), media_root, work_root)
@@ -2610,8 +2907,7 @@ def test_restart_retains_extracted_source_for_an_interrupted_embedded_job(
 
     record_path = work_root / "jobs" / f"{queued['id']}.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
-    record["status"] = active_status
-    record["finished_at"] = None
+    set_record_status(record, active_status, finished_at=None)
     record_path.write_text(json.dumps(record), encoding="utf-8")
     source = work_root / "jobs" / str(queued["id"]) / "source.srt"
     source.parent.mkdir()
