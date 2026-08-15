@@ -308,6 +308,19 @@ a {
   margin-top: 14px;
 }
 
+.term-map-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  color: #4b5568;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.term-map-field select {
+  width: min(100%, 320px);
+}
+
 .checkbox-field {
   display: flex;
   align-items: center;
@@ -340,6 +353,14 @@ a {
 
 .output-name-control .form-control {
   min-width: 0;
+}
+
+.output-name-control output {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .output-name-stem,
@@ -649,6 +670,16 @@ a {
   background: white;
   padding: 12px 14px;
   box-shadow: 0 8px 22px rgb(42 52 75 / 5%);
+}
+
+.submission-bar.queued {
+  display: block;
+  padding: 0 14px;
+}
+
+.submission-bar.queued .queue-success {
+  border-top: 0;
+  padding: 16px 0;
 }
 
 .queue-success {

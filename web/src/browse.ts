@@ -6,6 +6,8 @@ export interface MediaDirectoryEntry {
   kind: "directory" | "media";
   title?: string;
   year?: number;
+  season?: number;
+  episode?: number;
 }
 
 export interface MediaDirectory {

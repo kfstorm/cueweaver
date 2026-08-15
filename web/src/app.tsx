@@ -151,7 +151,8 @@ function Translate() {
     ({ code }) => code === targetLanguage,
   )
     ? targetLanguage
-    : "";
+    : "custom";
+  const customTargetLanguage = commonTargetLanguage === "custom";
   const [outputConflictPolicy, setOutputConflictPolicy] = useState<
     "append-number" | "overwrite"
   >("append-number");
@@ -201,11 +202,11 @@ function Translate() {
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
     status.data?.translation_provider.ready === true &&
+    !createJob.isSuccess &&
     !createJob.isPending;
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
-    setTermMapId(null);
     setDynamicTerminologyEnabled(true);
     setSubtitleTerminologyFilterEnabled(true);
     setOutputSuffix(targetLanguage);
@@ -220,16 +221,6 @@ function Translate() {
         title="Translate"
         detail="Prepare a subtitle translation from your mounted media library."
       />
-      {createJob.isSuccess && (
-        <QueueSuccess
-          job={createJob.data}
-          onViewJob={() => {
-            if (createJob.data?.id)
-              navigate(`/jobs/${encodeURIComponent(createJob.data.id)}`);
-          }}
-          onTranslateAnother={resetTranslationWorkflow}
-        />
-      )}
       <section className="workflow-panel" aria-labelledby="source-title">
         <div className="step-index">01</div>
         <div className="step-content">
@@ -276,14 +267,18 @@ function Translate() {
               value={commonTargetLanguage}
               onChange={(event) => {
                 const value = event.target.value;
-                if (!value) return;
-                updateTargetLanguage(value);
+                if (value === "custom") {
+                  updateTargetLanguage("");
+                } else {
+                  updateTargetLanguage(value);
+                }
               }}
               disabled={selectedCandidate === undefined}
             >
               <option value="" disabled>
                 Choose a language
               </option>
+              <option value="custom">Custom language code</option>
               {COMMON_TARGET_LANGUAGES.map(({ code, label }) => (
                 <option key={code} value={code}>
                   {label} — {code}
@@ -291,21 +286,50 @@ function Translate() {
               ))}
             </select>
           </label>
-          <label htmlFor="target-language-code" className="custom-language-field">
-            Target language code
-            <Input
-              id="target-language-code"
-              required
-              aria-describedby="target-language-help"
-              value={targetLanguage}
-              onChange={(event) => updateTargetLanguage(event.target.value)}
-              placeholder="zh-Hans"
-              disabled={selectedCandidate === undefined}
-            />
-          </label>
+          {customTargetLanguage && (
+            <label htmlFor="target-language-code" className="custom-language-field">
+              Target language code
+              <Input
+                id="target-language-code"
+                required
+                aria-describedby="target-language-help"
+                value={targetLanguage}
+                onChange={(event) => updateTargetLanguage(event.target.value)}
+                placeholder="zh-Hans"
+                disabled={selectedCandidate === undefined}
+              />
+            </label>
+          )}
           <span id="target-language-help" className="field-help">
-            Choose a common language or enter a custom BCP 47 code.
+            Choose a common language or select Custom language code.
           </span>
+          <label className="term-map-field">
+            Term map
+            <select
+              id="term-map-select"
+              aria-label="Term map"
+              value={selectedTermMapId ?? ""}
+              onChange={(event) => setTermMapId(event.target.value || null)}
+              disabled={termMaps.isPending || termMaps.isError}
+            >
+              <option value="">No Term map</option>
+              {(termMaps.data?.term_maps ?? []).map((termMap) => (
+                <option key={termMap.id} value={termMap.id}>
+                  {termMap.name}
+                </option>
+              ))}
+            </select>
+            {termMaps.isPending && (
+              <span className="field-help" role="status">
+                Loading Term maps
+              </span>
+            )}
+            {termMaps.isError && (
+              <span className="form-error" role="alert">
+                {termMaps.error.message}
+              </span>
+            )}
+          </label>
           <details className="advanced-settings">
             <summary>Advanced settings</summary>
             <div className="advanced-fields">
@@ -329,33 +353,6 @@ function Translate() {
                 />
                 Subtitle terminology filtering
               </label>
-              <label>
-                Term map
-                <select
-                  id="term-map-select"
-                  aria-label="Term map selector"
-                  value={selectedTermMapId ?? ""}
-                  onChange={(event) => setTermMapId(event.target.value || null)}
-                  disabled={termMaps.isPending || termMaps.isError}
-                >
-                  <option value="">No Term map</option>
-                  {(termMaps.data?.term_maps ?? []).map((termMap) => (
-                    <option key={termMap.id} value={termMap.id}>
-                      {termMap.name}
-                    </option>
-                  ))}
-                </select>
-                {termMaps.isPending && (
-                  <span className="field-help" role="status">
-                    Loading Term maps
-                  </span>
-                )}
-                {termMaps.isError && (
-                  <span className="form-error" role="alert">
-                    {termMaps.error.message}
-                  </span>
-                )}
-              </label>
             </div>
           </details>
           {selectedMedia && selectedCandidate && outputParts && (
@@ -368,12 +365,12 @@ function Translate() {
                 role="group"
                 aria-labelledby="output-name-label"
               >
-                <Input
+                <output
                   aria-label="Media stem"
-                  className="output-name-stem"
-                  readOnly
-                  value={`${outputParts.stem}.`}
-                />
+                  className="form-control output-name-stem"
+                >
+                  {`${outputParts.stem}.`}
+                </output>
                 <Input
                   aria-label="Subtitle suffix"
                   aria-describedby="output-suffix-help"
@@ -384,12 +381,12 @@ function Translate() {
                     setOutputSuffix(event.target.value);
                   }}
                 />
-                <Input
+                <output
                   aria-label="Source format extension"
-                  className="output-name-extension"
-                  readOnly
-                  value={`.${outputParts.format}`}
-                />
+                  className="form-control output-name-extension"
+                >
+                  {`.${outputParts.format}`}
+                </output>
               </div>
               <p id="output-suffix-help" className="field-help" aria-live="polite">
                 Final name: <strong>{outputParts.name(outputSuffix)}</strong>
@@ -426,47 +423,61 @@ function Translate() {
           )}
         </div>
       </section>
-      <div className="submission-bar">
-        <ProviderState />
-        <Button
-          disabled={!canSubmit}
-          onClick={() => {
-            if (
-              selectedMedia &&
-              selectedCandidate &&
-              ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
-                (selectedCandidate.kind === "embedded" &&
-                  selectedCandidate.stream_index !== undefined &&
-                  selectedCandidate.format))
-            ) {
-              const request = {
-                media_path: selectedMedia,
-                ...(selectedCandidate.kind === "external"
-                  ? { subtitle_path: selectedCandidate.path }
-                  : {
-                      stream_index: selectedCandidate.stream_index,
-                      source_format: selectedCandidate.format,
-                    }),
-                target_language_code: targetLanguage,
-                output_suffix: outputSuffix,
-                output_conflict_policy: outputConflictPolicy,
-                term_map_id: selectedTermMapId,
-                dynamic_terminology_enabled: dynamicTerminologyEnabled,
-                subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
-              };
-              createJob.mutate(request, {
-                onSuccess: () => {
-                  window.localStorage.setItem(
-                    "cueweaver.target-language",
-                    targetLanguage,
-                  );
-                },
-              });
-            }
-          }}
-        >
-          {createJob.isPending ? "Queueing..." : "Start translation"}
-        </Button>
+      <div className={cn("submission-bar", createJob.isSuccess && "queued")}>
+        {createJob.isSuccess ? (
+          <QueueSuccess
+            job={createJob.data}
+            onViewJob={() => {
+              if (createJob.data?.id)
+                navigate(`/jobs/${encodeURIComponent(createJob.data.id)}`);
+            }}
+            onTranslateAnother={resetTranslationWorkflow}
+          />
+        ) : (
+          <>
+            <ProviderState />
+            <Button
+              disabled={!canSubmit}
+              onClick={() => {
+                if (
+                  selectedMedia &&
+                  selectedCandidate &&
+                  ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
+                    (selectedCandidate.kind === "embedded" &&
+                      selectedCandidate.stream_index !== undefined &&
+                      selectedCandidate.format))
+                ) {
+                  const request = {
+                    media_path: selectedMedia,
+                    ...(selectedCandidate.kind === "external"
+                      ? { subtitle_path: selectedCandidate.path }
+                      : {
+                          stream_index: selectedCandidate.stream_index,
+                          source_format: selectedCandidate.format,
+                        }),
+                    target_language_code: targetLanguage,
+                    output_suffix: outputSuffix,
+                    output_conflict_policy: outputConflictPolicy,
+                    term_map_id: selectedTermMapId,
+                    dynamic_terminology_enabled: dynamicTerminologyEnabled,
+                    subtitle_terminology_filter_enabled:
+                      subtitleTerminologyFilterEnabled,
+                  };
+                  createJob.mutate(request, {
+                    onSuccess: () => {
+                      window.localStorage.setItem(
+                        "cueweaver.target-language",
+                        targetLanguage,
+                      );
+                    },
+                  });
+                }
+              }}
+            >
+              {createJob.isPending ? "Queueing..." : "Start translation"}
+            </Button>
+          </>
+        )}
       </div>
       {createJob.isError && (
         <p className="form-error" role="alert">
@@ -883,9 +894,15 @@ function MediaEntry({
   onMediaSelect: (path: string) => void;
 }) {
   const isDirectory = entry.kind === "directory";
-  const label = entry.title
-    ? `${entry.title}${entry.year ? ` (${entry.year})` : ""}`
-    : entry.name;
+  const episodeLabel =
+    entry.season !== undefined && entry.episode !== undefined
+      ? `S${String(entry.season).padStart(2, "0")}E${String(entry.episode).padStart(2, "0")}${entry.title ? ` · ${entry.title}` : ""}`
+      : null;
+  const label =
+    episodeLabel ??
+    (entry.title
+      ? `${entry.title}${entry.year ? ` (${entry.year})` : ""}`
+      : entry.name);
   const accessibleLabel = label === entry.name ? label : `${label} (${entry.name})`;
   return (
     <Button
@@ -1098,7 +1115,7 @@ function TermMapsPage() {
                 required
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Character names"
+                placeholder="e.g. Character names"
               />
             </label>
             <div
