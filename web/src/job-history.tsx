@@ -576,7 +576,7 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
 
 function StatusHistory({ entries }: { entries: JobStatusHistoryEntry[] }) {
   return (
-    <ol className="job-status-history">
+    <ol className="job-status-history" aria-label="Job status history">
       {entries.map((entry, index) => (
         <li key={`${entry.attempt}-${entry.status}-${entry.started_at}-${index}`}>
           <div>

@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -668,6 +675,107 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "Select a Job" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps an open Job detail current while polling", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const queued = {
+      ...queuedEmbeddedJob("job-detail-polling"),
+      status_history: [
+        {
+          status: "Queued" as const,
+          attempt: 1,
+          started_at: "2026-08-13T12:00:00Z",
+          finished_at: null,
+        },
+      ],
+    };
+    const translating = {
+      ...queued,
+      status: "Translating" as const,
+      queue_position: null,
+      started_at: "2026-08-13T12:00:01Z",
+      status_history: [
+        {
+          ...queued.status_history[0],
+          finished_at: "2026-08-13T12:00:01Z",
+        },
+        {
+          status: "Translating" as const,
+          attempt: 1,
+          started_at: "2026-08-13T12:00:01Z",
+          finished_at: null,
+        },
+      ],
+    };
+    const completed = {
+      ...translating,
+      status: "Completed" as const,
+      finished_at: "2026-08-13T12:00:02Z",
+      status_history: [
+        ...translating.status_history.slice(0, 1),
+        {
+          ...translating.status_history[1],
+          finished_at: "2026-08-13T12:00:02Z",
+        },
+        {
+          status: "Completed" as const,
+          attempt: 1,
+          started_at: "2026-08-13T12:00:02Z",
+          finished_at: "2026-08-13T12:00:02Z",
+        },
+      ],
+    };
+    let currentJob: JobFixture = queued;
+    const fetchMock = jobsPageFetch(() => currentJob);
+
+    try {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      renderWithFetch("/jobs", fetchMock);
+      fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+      await screen.findByRole("heading", { name: "Request summary" });
+
+      currentJob = translating;
+      await vi.advanceTimersByTimeAsync(2000);
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole("list", { name: "Job status history" })).getByText(
+            "Translating",
+          ),
+        ).toBeInTheDocument(),
+      );
+
+      currentJob = completed;
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitFor(() =>
+        expect(
+          within(screen.getByRole("list", { name: "Job status history" })).getByText(
+            "Completed",
+          ),
+        ).toBeInTheDocument(),
+      );
+      const history = screen.getByRole("list", { name: "Job status history" });
+      expect(within(history).getAllByText("Queued")).toHaveLength(1);
+      expect(
+        within(screen.getByRole("region", { name: "Job details" })).getAllByText(
+          "Completed",
+        ),
+      ).toHaveLength(2);
+      const detailCalls = fetchMock.mock.calls.filter(
+        ([input]) => input === "/api/jobs/job-detail-polling",
+      ).length;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input]) => input === "/api/jobs/job-detail-polling",
+        ),
+      ).toHaveLength(detailCalls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("announces a newly observed completion without browser notification permission", async () => {

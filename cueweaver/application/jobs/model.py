@@ -233,10 +233,7 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
     job_id = record.get("id")
     status = record.get("status")
     request = record.get("request")
-    if not valid_job_id(job_id) or (
-        "status_history" in record
-        and not valid_status_history(record["status_history"])
-    ):
+    if not valid_job_id(job_id):
         return False
     attempt = record.get("attempt")
     if (
@@ -261,6 +258,12 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
     term_map = request.get("term_map")
     return (
         (
+            "status_history" not in record
+            or valid_status_history(
+                record["status_history"], status=status, attempt=attempt
+            )
+        )
+        and (
             "output_suffix" not in request
             or (
                 isinstance(request["output_suffix"], str)
@@ -326,22 +329,51 @@ def valid_request(request: dict[str, object]) -> bool:
     )
 
 
-def valid_status_history(value: object) -> bool:
+def valid_status_history(value: object, *, status: object, attempt: object) -> bool:
     if not isinstance(value, list) or not value:
         return False
-    return all(
-        isinstance(entry, dict)
-        and entry.keys() >= STATUS_HISTORY_FIELDS
-        and isinstance(entry.get("status"), str)
-        and entry["status"] in JOB_STATUSES
-        and isinstance(entry.get("attempt"), int)
-        and not isinstance(entry["attempt"], bool)
-        and entry["attempt"] >= 1
-        and all(
-            timestamp is None or (isinstance(timestamp, str) and bool(timestamp))
-            for timestamp in (entry.get("started_at"), entry.get("finished_at"))
-        )
-        for entry in value
+    if (
+        not isinstance(status, str)
+        or status not in JOB_STATUSES
+        or not isinstance(attempt, int)
+        or isinstance(attempt, bool)
+        or attempt < 1
+    ):
+        return False
+
+    previous_attempt = 0
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict) or not entry.keys() >= STATUS_HISTORY_FIELDS:
+            return False
+        entry_status = entry["status"]
+        entry_attempt = entry["attempt"]
+        started_at = entry["started_at"]
+        finished_at = entry["finished_at"]
+        if (
+            not isinstance(entry_status, str)
+            or entry_status not in JOB_STATUSES
+            or not isinstance(entry_attempt, int)
+            or isinstance(entry_attempt, bool)
+            or entry_attempt < 1
+            or entry_attempt < previous_attempt
+            or entry_attempt > attempt
+            or not isinstance(started_at, str)
+            or not started_at
+            or (
+                finished_at is not None
+                and (not isinstance(finished_at, str) or not finished_at)
+            )
+            or (index < len(value) - 1 and finished_at is None)
+        ):
+            return False
+        previous_attempt = entry_attempt
+
+    last = value[-1]
+    last_finished_at = last["finished_at"]
+    return not (
+        last["status"] != status
+        or last["attempt"] != attempt
+        or (status in TERMINAL_JOB_STATUSES) != (last_finished_at is not None)
     )
 
 
