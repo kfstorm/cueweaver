@@ -189,9 +189,13 @@ def _read_nfo(  # noqa: PLR0911
         if not title:
             return None
         if kind == "episodedetails":
-            season = int(values.get("season", ""))
-            episode = int(values.get("episode", ""))
-            if season < 0 or episode < 0:
+            season_text = values.get("season")
+            episode_text = values.get("episode")
+            season = int(season_text) if season_text else None
+            episode = int(episode_text) if episode_text else None
+            if (season is not None and season < 0) or (
+                episode is not None and episode < 0
+            ):
                 return None
             return _NfoMetadata(title, season=season, episode=episode)
 

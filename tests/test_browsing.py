@@ -139,6 +139,28 @@ def test_browse_reads_episode_nfo_without_year_and_does_not_propagate_tvshow_nfo
     )
 
 
+def test_browse_keeps_episode_title_when_season_and_episode_are_omitted(
+    tmp_path: Path,
+):
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "Episode.mkv").write_bytes(b"media")
+    (root / "Episode.nfo").write_text(
+        "<episodedetails><title>Episode title</title><aired>2024-01-02</aired>"
+        "</episodedetails>",
+        encoding="utf-8",
+    )
+
+    entry = MediaBrowser(root).browse(BrowseRequest(Path())).entries[0]
+
+    assert (entry.title, entry.year, entry.season, entry.episode) == (
+        "Episode title",
+        None,
+        None,
+        None,
+    )
+
+
 def test_browse_skips_malformed_media_nfo_before_movie_fallback(tmp_path: Path):
     root = tmp_path / "media"
     root.mkdir()
