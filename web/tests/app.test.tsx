@@ -71,6 +71,14 @@ function jobsFetch(job: JobFixture) {
   });
 }
 
+function jobListFetch(getJobs: () => JobFixture[]) {
+  return vi.fn().mockImplementation(async (input: string) => {
+    if (input === "/api/status") return statusResponse();
+    if (input.startsWith("/api/jobs")) return jobListResponse(getJobs());
+    return jsonResponse({ term_maps: [] });
+  });
+}
+
 function jobsPageFetch(
   getJobs: () => JobFixture,
   details: Record<string, unknown> = {},
@@ -107,6 +115,22 @@ function embeddedJob(id: string, status: "Failed" | "Interrupted", target = "zh-
       code: status === "Failed" ? "translation_failed" : "job_interrupted",
       message: status === "Failed" ? "Translation failed" : "Job was interrupted",
     },
+  };
+}
+
+function translatingEmbeddedJob(id: string) {
+  return {
+    ...embeddedJob(id, "Interrupted"),
+    status: "Translating" as const,
+    error: null,
+  };
+}
+
+function completedJob(job: JobFixture) {
+  return {
+    ...job,
+    status: "Completed" as const,
+    finished_at: "2026-08-13T12:01:00Z",
   };
 }
 
@@ -555,22 +579,10 @@ describe("product shell", () => {
 
   it("moves a completed active Job into history during polling", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const active = {
-      ...embeddedJob("polling-job-1", "Interrupted"),
-      status: "Translating",
-      error: null,
-    };
-    const completed = {
-      ...active,
-      status: "Completed",
-      finished_at: "2026-08-13T12:01:00Z",
-    };
+    const active = translatingEmbeddedJob("polling-job-1");
+    const completed = completedJob(active);
     let currentJobs: JobFixture[] = [active];
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
-      if (input.startsWith("/api/jobs")) return jobListResponse(currentJobs);
-      return jsonResponse({ term_maps: [] });
-    });
+    const fetchMock = jobListFetch(() => currentJobs);
     try {
       renderWithFetch("/jobs", fetchMock);
       expect(await screen.findByText("Translating")).toBeInTheDocument();
@@ -585,6 +597,71 @@ describe("product shell", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not announce terminal Jobs when loading another history page", async () => {
+    const firstHistory = {
+      ...embeddedJob("history-notice-page-one", "Failed"),
+      status: "Completed",
+      error: null,
+    };
+    const secondCompleted = {
+      ...embeddedJob("history-notice-page-two", "Failed"),
+      status: "Completed",
+      error: null,
+    };
+    const secondFailed = embeddedJob("history-notice-page-three", "Failed");
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs?limit=1") {
+        return jsonResponse({ active_jobs: [], history_jobs: [], next_cursor: null });
+      }
+      if (input === "/api/jobs") {
+        return jsonResponse({
+          active_jobs: [],
+          history_jobs: [firstHistory],
+          next_cursor: "cursor-notice-1",
+        });
+      }
+      if (input === "/api/jobs?limit=50&cursor=cursor-notice-1") {
+        return jsonResponse({
+          active_jobs: [],
+          history_jobs: [secondCompleted, secondFailed],
+          next_cursor: null,
+        });
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(await screen.findByText("Load more history")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more history" }));
+    await waitFor(() => expect(screen.getAllByText("Movie.mkv")).toHaveLength(3));
+    expect(
+      screen.queryByText("Movie.mkv translation completed."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Movie.mkv translation failed.")).not.toBeInTheDocument();
+  });
+
+  it("announces a terminal Job after it temporarily leaves the result", async () => {
+    const active = translatingEmbeddedJob("temporary-notice-job");
+    const completed = completedJob(active);
+    let currentJobs: JobFixture[] = [active];
+    const fetchMock = jobListFetch(() => currentJobs);
+    const { queryClient } = renderWithFetch("/jobs", fetchMock);
+
+    expect(await screen.findByText("Translating")).toBeInTheDocument();
+    currentJobs = [];
+    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    expect(
+      screen.queryByText("Movie.mkv translation completed."),
+    ).not.toBeInTheDocument();
+
+    currentJobs = [completed];
+    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    expect(
+      await screen.findByText("Movie.mkv translation completed."),
+    ).toBeInTheDocument();
   });
 
   it("pauses Job polling while hidden and refreshes when visible again", async () => {

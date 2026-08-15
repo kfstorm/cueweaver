@@ -227,41 +227,38 @@ export function useJobNotifications(data: JobListData | undefined): {
   notifications: JobNotification[];
   dismiss: (id: string) => void;
 } {
-  const previousStatuses = useRef<Map<string, Job["status"]> | null>(null);
+  const lastKnownStatuses = useRef(new Map<string, Job["status"]>());
   const [notifications, setNotifications] = useState<JobNotification[]>([]);
 
   useEffect(() => {
     if (data === undefined) return;
     const jobs = [...data.active_jobs, ...data.history_jobs];
-    const currentStatuses = new Map(jobs.map((job) => [job.id, job.status]));
-    const previous = previousStatuses.current;
-    if (previous !== null) {
-      const observed: JobNotification[] = [];
-      for (const job of jobs) {
-        if (
-          previous.get(job.id) !== job.status &&
-          (job.status === "Completed" || job.status === "Failed")
-        ) {
-          const media =
-            job.request.media_path.split("/").pop() ?? job.request.media_path;
-          observed.push({
-            id: `${job.id}-${job.status}-${job.finished_at ?? Date.now()}`,
-            jobId: job.id,
-            status: job.status,
-            message:
-              job.status === "Completed"
-                ? `${media} translation completed.`
-                : `${media} translation failed: ${job.error?.message ?? "Check Job details."}`,
-          });
-        }
+    const observed: JobNotification[] = [];
+    for (const job of jobs) {
+      const previousStatus = lastKnownStatuses.current.get(job.id);
+      if (
+        previousStatus !== undefined &&
+        previousStatus !== job.status &&
+        (job.status === "Completed" || job.status === "Failed")
+      ) {
+        const media = job.request.media_path.split("/").pop() ?? job.request.media_path;
+        observed.push({
+          id: `${job.id}-${job.status}-${job.finished_at ?? Date.now()}`,
+          jobId: job.id,
+          status: job.status,
+          message:
+            job.status === "Completed"
+              ? `${media} translation completed.`
+              : `${media} translation failed: ${job.error?.message ?? "Check Job details."}`,
+        });
       }
-      if (observed.length > 0) {
-        // The query is the external source; this state is the in-app notification queue.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setNotifications((current) => [...current, ...observed].slice(-4));
-      }
+      lastKnownStatuses.current.set(job.id, job.status);
     }
-    previousStatuses.current = currentStatuses;
+    if (observed.length > 0) {
+      // The query is the external source; this state is the in-app notification queue.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNotifications((current) => [...current, ...observed].slice(-4));
+    }
   }, [data]);
 
   const dismiss = useCallback(

@@ -173,29 +173,40 @@ async function stubMutableJobs(
   });
 }
 
-async function readJobs(page: Page) {
+type E2EJobSummary = {
+  id: string;
+  attempt: number;
+  request: {
+    target_language_code: string;
+    stream_index?: number;
+    source_format?: string;
+    output_path?: string;
+    term_map?: { id: string; name: string } | null;
+  };
+  status: string;
+  queue_position?: number | null;
+  error?: { code: string; message: string } | null;
+};
+
+type E2EJobDetail = E2EJobSummary & {
+  extraction?: {
+    status: string;
+    path: string;
+    format: string;
+    content_digest: string;
+  } | null;
+};
+
+async function readJobs(page: Page): Promise<E2EJobSummary[]> {
   const response = await page.request.get("/api/jobs");
   const body = await response.json();
-  return [...body.active_jobs, ...body.history_jobs] as Array<{
-    id: string;
-    attempt: number;
-    request: {
-      target_language_code: string;
-      stream_index?: number;
-      source_format?: string;
-      output_path?: string;
-      term_map?: { name: string; content: Record<string, string> } | null;
-    };
-    status: string;
-    queue_position?: number | null;
-    error?: { code: string; message: string } | null;
-    extraction?: {
-      status: string;
-      path: string;
-      format: string;
-      content_digest: string;
-    } | null;
-  }>;
+  return [...body.active_jobs, ...body.history_jobs] as E2EJobSummary[];
+}
+
+async function readJobDetail(page: Page, jobId: string): Promise<E2EJobDetail> {
+  const response = await page.request.get(`/api/jobs/${jobId}`);
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()) as E2EJobDetail;
 }
 
 async function waitForJob(
@@ -934,17 +945,20 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     Ship: "舰船",
   });
   const queuedExternal = await waitForJob(page, "e2e-term-map", "Queued");
-  expect(queuedExternal.request.term_map).toMatchObject({
+  expect(queuedExternal.request.term_map).toEqual({
+    id: termMap.id,
     name: "Release matrix terms",
-    content: { Captain: "队长", Ship: "舰船" },
   });
+  expect(queuedExternal.request.term_map).not.toHaveProperty("content");
   const completedBlocker = await waitForJob(page, "e2e-snapshot-blocker", "Completed");
   expect(completedBlocker.status).toBe("Completed");
   const completedExternal = await waitForJob(page, "e2e-term-map", "Completed");
-  expect(completedExternal.request.term_map).toMatchObject({
+  const completedExternalDetail = await readJobDetail(page, completedExternal.id);
+  expect(completedExternalDetail.request.term_map).toEqual({
+    id: termMap.id,
     name: "Release matrix terms",
-    content: { Captain: "队长", Ship: "舰船" },
   });
+  expect(completedExternalDetail.request.term_map).not.toHaveProperty("content");
 
   const embedded = await page.request.post("/api/jobs", {
     data: {
@@ -956,14 +970,15 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
   });
   expect(embedded.ok()).toBeTruthy();
   const completedEmbedded = await waitForJob(page, "e2e-embedded", "Completed");
+  const completedEmbeddedDetail = await readJobDetail(page, completedEmbedded.id);
   expect(completedEmbedded.request.stream_index).toBe(1);
   expect(completedEmbedded.request.source_format).toBe("srt");
-  expect(completedEmbedded.extraction).toMatchObject({
+  expect(completedEmbeddedDetail.extraction).toMatchObject({
     status: "Completed",
     path: "source.srt",
     format: "srt",
   });
-  expect(completedEmbedded.extraction?.content_digest).toMatch(/^[0-9a-f]{64}$/);
+  expect(completedEmbeddedDetail.extraction?.content_digest).toMatch(/^[0-9a-f]{64}$/);
 
   for (const targetLanguage of ["e2e-retry-external", "e2e-retry-embedded"]) {
     const request =
@@ -1067,6 +1082,7 @@ test("production restart recovers and retries an Interrupted Job", async ({ page
   expect(historical?.status).toBe("Completed");
   expect(historical?.request.term_map).toMatchObject({
     name: "Release matrix terms",
-    content: { Captain: "队长", Ship: "舰船" },
   });
+  expect(historical?.request.term_map?.id).toEqual(expect.any(String));
+  expect(historical?.request.term_map).not.toHaveProperty("content");
 });
