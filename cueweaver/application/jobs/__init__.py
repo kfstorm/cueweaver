@@ -33,8 +33,10 @@ from .model import (
     JobStatus,
     JobSummary,
     copy_job_record,
+    decode_history_cursor,
+    encode_history_cursor,
     normalize_record,
-    project_job_detail,
+    project_job_summary,
     queue_sequence,
     valid_record,
 )
@@ -42,6 +44,7 @@ from .store import FileJobRecordStore, JobRecordStore
 
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
+MAX_HISTORY_PAGE_LIMIT = 100
 APPROVED_ERROR_CONTEXT_KEYS = frozenset(
     {"field", "media_path", "output_path", "path", "stream_index"}
 )
@@ -295,6 +298,68 @@ class Jobs:
             records, key=lambda record: str(record["created_at"]), reverse=True
         )
 
+    def list_page(
+        self, limit: int = 50, cursor: str | None = None
+    ) -> dict[str, object]:
+        """Return active Jobs and one bounded page of terminal history."""
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= MAX_HISTORY_PAGE_LIMIT
+        ):
+            raise ServiceError(
+                "invalid_job_limit", "Job history limit must be between 1 and 100"
+            )
+        position: tuple[str, str] | None = None
+        if cursor is not None:
+            try:
+                position = decode_history_cursor(cursor)
+            except ValueError as error:
+                raise ServiceError(
+                    "invalid_job_cursor", "Job history cursor is invalid"
+                ) from error
+
+        with self._lock:
+            active_records = [
+                record
+                for record in self._records.values()
+                if record.get("status") in {"Queued", "Extracting", "Translating"}
+            ]
+            active_records.sort(key=_active_sort_key)
+            history_records = [
+                record
+                for record in self._records.values()
+                if record.get("status") in TERMINAL_JOB_STATUSES
+            ]
+            history_records.sort(key=_history_sort_key, reverse=True)
+            if position is not None:
+                history_records = [
+                    record
+                    for record in history_records
+                    if _history_sort_key(record) < position
+                ]
+            page_records = history_records[:limit]
+            has_more = len(history_records) > limit
+            active_jobs = [
+                self._summary_with_queue_position(record) for record in active_records
+            ]
+            history_jobs = [
+                project_job_summary(record, None) for record in page_records
+            ]
+
+        next_cursor = None
+        if has_more:
+            last = page_records[-1]
+            created_at = last.get("created_at")
+            job_id = last.get("id")
+            if isinstance(created_at, str) and isinstance(job_id, str):
+                next_cursor = encode_history_cursor(created_at, job_id)
+        return {
+            "active_jobs": active_jobs,
+            "history_jobs": history_jobs,
+            "next_cursor": next_cursor,
+        }
+
     def get(self, job_id: str) -> dict[str, object]:
         with self._lock:
             record = self._records.get(job_id)
@@ -359,16 +424,35 @@ class Jobs:
     def _record_with_queue_position(
         self, record: dict[str, object]
     ) -> dict[str, object]:
+        return self._copy_with_queue_position(record)
+
+    def _summary_with_queue_position(
+        self, record: dict[str, object]
+    ) -> dict[str, object]:
+        return self._project_with_queue_position(record, project_job_summary)
+
+    def _project_with_queue_position(
+        self,
+        record: dict[str, object],
+        projector: Callable[[JobRecord, int | None], dict[str, object]],
+    ) -> dict[str, object]:
+        return projector(record, self._queue_position(record))
+
+    def _copy_with_queue_position(self, record: dict[str, object]) -> dict[str, object]:
+        copied = copy_job_record(record)
+        copied["queue_position"] = self._queue_position(record)
+        return copied
+
+    def _queue_position(self, record: dict[str, object]) -> int | None:
         if record.get("status") != "Queued":
-            return project_job_detail(record, None)
+            return None
         queued = sorted(
             (item for item in self._records.values() if item.get("status") == "Queued"),
             key=queue_sequence,
         )
-        queue_position = next(
+        return next(
             index + 1 for index, item in enumerate(queued) if item["id"] == record["id"]
         )
-        return project_job_detail(record, queue_position)
 
     def _validate(
         self, request: CreateJobRequest
@@ -976,6 +1060,20 @@ class _JobOutputPublisher:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _history_sort_key(record: dict[str, object]) -> tuple[str, str]:
+    created_at = record.get("created_at")
+    job_id = record.get("id")
+    return (
+        created_at if isinstance(created_at, str) else "",
+        job_id if isinstance(job_id, str) else "",
+    )
+
+
+def _active_sort_key(record: dict[str, object]) -> tuple[int, str, str]:
+    created_at, job_id = _history_sort_key(record)
+    return queue_sequence(record), created_at, job_id
 
 
 def _replace_extracted_source(candidate: Path, destination: Path) -> None:

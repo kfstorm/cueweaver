@@ -1105,8 +1105,102 @@ def test_job_rejects_missing_term_map_before_queueing(tmp_path: Path):
 
         assert response.status_code == 400
         assert response.json()["error_code"] == "term_map_not_found"
-        assert client.get("/api/jobs").json()["jobs"] == []
+        assert client.get("/api/jobs").json() == {
+            "active_jobs": [],
+            "history_jobs": [],
+            "next_cursor": None,
+        }
         assert list((work_root / "jobs").glob("*.json")) == []
+
+
+def test_job_list_separates_active_jobs_and_redacts_term_map_content(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    release = threading.Event()
+    translator = RecordingTranslator(release)
+    with make_client(media_root, work_root, translator) as client:
+        term_map = client.post(
+            "/api/term-maps",
+            json={"name": "Characters", "content": {"Captain": "队长"}},
+        ).json()
+        running = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Movie.mkv",
+                "subtitle_path": "Movie.en.srt",
+                "target_language_code": "zh-Hans",
+                "term_map_id": term_map["id"],
+            },
+        ).json()
+        assert "content" not in running["request"]["term_map"]
+        assert translator.started.wait(timeout=5)
+        queued = create_job(client, "ja").json()
+
+        page = client.get("/api/jobs").json()
+        assert [job["status"] for job in page["active_jobs"]] == [
+            "Translating",
+            "Queued",
+        ]
+        assert all(
+            job["request"]["term_map"] is None
+            or "content" not in job["request"]["term_map"]
+            for job in page["active_jobs"]
+        )
+        assert page["history_jobs"] == []
+        assert page["next_cursor"] is None
+
+        release.set()
+        wait_for_status(client, running["id"], "Completed")
+        wait_for_status(client, queued["id"], "Completed")
+        detail = client.get(f"/api/jobs/{running['id']}").json()
+        assert "content" not in detail["request"]["term_map"]
+
+    persisted = json.loads(
+        (work_root / "jobs" / f"{running['id']}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["request"]["term_map"]["content"] == {"Captain": "队长"}
+
+
+def test_job_history_uses_bounded_stable_cursor_pagination(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        jobs = [create_job(client, target).json() for target in ("zh", "ja", "ko")]
+        for job in jobs:
+            wait_for_status(client, job["id"], "Completed")
+
+        first_page = client.get("/api/jobs?limit=2").json()
+        assert first_page["active_jobs"] == []
+        assert len(first_page["history_jobs"]) == 2
+        assert first_page["next_cursor"] is not None
+        assert first_page["next_cursor"] not in {
+            first_page["history_jobs"][-1]["id"],
+            first_page["history_jobs"][-1]["created_at"],
+        }
+        cursor = first_page["next_cursor"]
+        tampered_cursor = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
+        assert (
+            client.get("/api/jobs", params={"cursor": tampered_cursor}).status_code
+            == 400
+        )
+
+        second_page = client.get(
+            "/api/jobs", params={"limit": 2, "cursor": cursor}
+        ).json()
+        assert len(second_page["history_jobs"]) == 1
+        assert second_page["next_cursor"] is None
+        assert {
+            job["id"]
+            for job in first_page["history_jobs"] + second_page["history_jobs"]
+        } == {job["id"] for job in jobs}
+
+
+@pytest.mark.parametrize("query", ["?limit=0", "?limit=101", "?cursor=malformed"])
+def test_job_history_rejects_invalid_pagination_parameters(tmp_path: Path, query: str):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.get(f"/api/jobs{query}")
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] in {"invalid_request", "invalid_job_cursor"}
 
 
 def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
@@ -1190,12 +1284,10 @@ def test_running_and_queued_jobs_use_term_map_snapshots_after_rename_and_delete(
         assert first["request"]["term_map"] == {
             "id": running_term_map["id"],
             "name": "Characters",
-            "content": {"Captain": "队长"},
         }
         assert queued["request"]["term_map"] == {
             "id": queued_term_map["id"],
             "name": "Ships",
-            "content": {"Enterprise": "企业号"},
         }
         assert queued["status"] == "Queued"
         assert queued["queue_position"] == 1
@@ -1248,14 +1340,12 @@ def test_running_and_queued_jobs_use_term_map_snapshots_after_rename_and_delete(
         assert client.get(f"/api/jobs/{first['id']}").json()["request"]["term_map"] == {
             "id": running_term_map["id"],
             "name": "Characters",
-            "content": {"Captain": "队长"},
         }
         assert client.get(f"/api/jobs/{queued['id']}").json()["request"][
             "term_map"
         ] == {
             "id": queued_term_map["id"],
             "name": "Ships",
-            "content": {"Enterprise": "企业号"},
         }
 
         release.set()
@@ -1279,7 +1369,7 @@ def test_failed_term_map_job_retains_immutable_working_copy(tmp_path: Path):
 
         failed = wait_for_status(client, queued["id"], "Failed")
 
-        assert failed["request"]["term_map"]["content"] == {"Captain": "队长"}
+        assert "content" not in failed["request"]["term_map"]
         assert json.loads(
             (work_root / "jobs" / queued["id"] / "term-map.json").read_text(
                 encoding="utf-8"

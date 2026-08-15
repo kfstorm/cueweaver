@@ -84,7 +84,11 @@ async function registerJobListRoute(
   page: Page,
   getJobs: () => Array<ReturnType<typeof jobRecord>>,
 ) {
-  await page.route("**/api/jobs", async (route) => {
+  await page.route("**/api/jobs**", async (route) => {
+    if (!isJobsCollectionRequest(route.request())) {
+      await route.continue();
+      return;
+    }
     if (route.request().method() !== "GET") {
       await route.continue();
       return;
@@ -93,13 +97,22 @@ async function registerJobListRoute(
   });
 }
 
+function isJobsCollectionRequest(request: { url(): string }): boolean {
+  return new URL(request.url()).pathname === "/api/jobs";
+}
+
 async function fulfillJobList(
   route: Parameters<Parameters<Page["route"]>[1]>[0],
   jobs: Array<ReturnType<typeof jobRecord>>,
 ) {
+  const activeStatuses = new Set(["Queued", "Extracting", "Translating"]);
   await route.fulfill({
     contentType: "application/json",
-    body: JSON.stringify({ jobs }),
+    body: JSON.stringify({
+      active_jobs: jobs.filter((job) => activeStatuses.has(job.status)),
+      history_jobs: jobs.filter((job) => !activeStatuses.has(job.status)),
+      next_cursor: null,
+    }),
   });
 }
 
@@ -160,28 +173,40 @@ async function stubMutableJobs(
   });
 }
 
-async function readJobs(page: Page) {
-  const response = await page.request.get("/api/jobs");
-  return (await response.json()).jobs as Array<{
-    id: string;
-    attempt: number;
-    request: {
-      target_language_code: string;
-      stream_index?: number;
-      source_format?: string;
-      output_path?: string;
-      term_map?: { name: string; content: Record<string, string> } | null;
-    };
+type E2EJobSummary = {
+  id: string;
+  attempt: number;
+  request: {
+    target_language_code: string;
+    stream_index?: number;
+    source_format?: string;
+    output_path?: string;
+    term_map?: { id: string; name: string } | null;
+  };
+  status: string;
+  queue_position?: number | null;
+  error?: { code: string; message: string } | null;
+};
+
+type E2EJobDetail = E2EJobSummary & {
+  extraction?: {
     status: string;
-    queue_position?: number | null;
-    error?: { code: string; message: string } | null;
-    extraction?: {
-      status: string;
-      path: string;
-      format: string;
-      content_digest: string;
-    } | null;
-  }>;
+    path: string;
+    format: string;
+    content_digest: string;
+  } | null;
+};
+
+async function readJobs(page: Page): Promise<E2EJobSummary[]> {
+  const response = await page.request.get("/api/jobs");
+  const body = await response.json();
+  return [...body.active_jobs, ...body.history_jobs] as E2EJobSummary[];
+}
+
+async function readJobDetail(page: Page, jobId: string): Promise<E2EJobDetail> {
+  const response = await page.request.get(`/api/jobs/${jobId}`);
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()) as E2EJobDetail;
 }
 
 async function waitForJob(
@@ -324,12 +349,12 @@ test.describe("Job history mutations", () => {
       await expect(
         page.getByRole("button", { name: "Clear Completed (1)" }),
       ).toBeEnabled();
-      await expect(page.getByText("2 total")).toBeVisible();
+      await expect(page.getByText("2 loaded")).toBeVisible();
       await page.getByRole("button", { name: "Clear Completed (1)" }).click();
       await expect(
         page.getByRole("button", { name: "Clear Completed (0)" }),
       ).toBeDisabled();
-      await expect(page.getByText("1 total")).toBeVisible();
+      await expect(page.getByText("1 loaded")).toBeVisible();
       await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
 
       await page.getByRole("button", { name: /Example\.mkv/ }).click();
@@ -631,7 +656,11 @@ test.describe("subtitle submission", () => {
           (request) =>
             request.url().endsWith("/api/jobs") && request.method() === "POST",
         );
-        await page.route("**/api/jobs", async (route) => {
+        await page.route("**/api/jobs**", async (route) => {
+          if (!isJobsCollectionRequest(route.request())) {
+            await route.continue();
+            return;
+          }
           if (route.request().method() === "POST") {
             await route.fulfill({
               contentType: "application/json",
@@ -643,7 +672,14 @@ test.describe("subtitle submission", () => {
             });
             return;
           }
-          await route.fulfill({ contentType: "application/json", body: '{"jobs":[]}' });
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              active_jobs: [],
+              history_jobs: [],
+              next_cursor: null,
+            }),
+          });
         });
 
         await page.goto("/translate");
@@ -909,17 +945,20 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     Ship: "舰船",
   });
   const queuedExternal = await waitForJob(page, "e2e-term-map", "Queued");
-  expect(queuedExternal.request.term_map).toMatchObject({
+  expect(queuedExternal.request.term_map).toEqual({
+    id: termMap.id,
     name: "Release matrix terms",
-    content: { Captain: "队长", Ship: "舰船" },
   });
+  expect(queuedExternal.request.term_map).not.toHaveProperty("content");
   const completedBlocker = await waitForJob(page, "e2e-snapshot-blocker", "Completed");
   expect(completedBlocker.status).toBe("Completed");
   const completedExternal = await waitForJob(page, "e2e-term-map", "Completed");
-  expect(completedExternal.request.term_map).toMatchObject({
+  const completedExternalDetail = await readJobDetail(page, completedExternal.id);
+  expect(completedExternalDetail.request.term_map).toEqual({
+    id: termMap.id,
     name: "Release matrix terms",
-    content: { Captain: "队长", Ship: "舰船" },
   });
+  expect(completedExternalDetail.request.term_map).not.toHaveProperty("content");
 
   const embedded = await page.request.post("/api/jobs", {
     data: {
@@ -931,14 +970,15 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
   });
   expect(embedded.ok()).toBeTruthy();
   const completedEmbedded = await waitForJob(page, "e2e-embedded", "Completed");
+  const completedEmbeddedDetail = await readJobDetail(page, completedEmbedded.id);
   expect(completedEmbedded.request.stream_index).toBe(1);
   expect(completedEmbedded.request.source_format).toBe("srt");
-  expect(completedEmbedded.extraction).toMatchObject({
+  expect(completedEmbeddedDetail.extraction).toMatchObject({
     status: "Completed",
     path: "source.srt",
     format: "srt",
   });
-  expect(completedEmbedded.extraction?.content_digest).toMatch(/^[0-9a-f]{64}$/);
+  expect(completedEmbeddedDetail.extraction?.content_digest).toMatch(/^[0-9a-f]{64}$/);
 
   for (const targetLanguage of ["e2e-retry-external", "e2e-retry-embedded"]) {
     const request =
@@ -1042,6 +1082,7 @@ test("production restart recovers and retries an Interrupted Job", async ({ page
   expect(historical?.status).toBe("Completed");
   expect(historical?.request.term_map).toMatchObject({
     name: "Release matrix terms",
-    content: { Captain: "队长", Ship: "舰船" },
   });
+  expect(historical?.request.term_map?.id).toEqual(expect.any(String));
+  expect(historical?.request.term_map).not.toHaveProperty("content");
 });

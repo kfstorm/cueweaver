@@ -77,18 +77,25 @@ export function JobsPage() {
   const focusListOnReturn = useRef(false);
   const jobs = useJobs({ poll: false });
   const clearCompleted = useClearCompletedJobs();
-  const selected = jobs.data?.find((job) => job.id === jobId) ?? null;
+  const activeJobs = jobs.data?.active_jobs ?? [];
+  const historyJobs = jobs.data?.history_jobs ?? [];
+  const allJobs = [...activeJobs, ...historyJobs];
+  const selected = allJobs.find((job) => job.id === jobId) ?? null;
   const detail = useJob(jobId ?? null, selected === null);
   const displayedJob = selected ?? detail.data;
-  const completedCount =
-    jobs.data?.filter((job) => job.status === "Completed").length ?? 0;
+  const completedCount = historyJobs.filter((job) => job.status === "Completed").length;
+  const completedCountKnown = !jobs.hasNextPage;
+  const canClearCompleted =
+    completedCount > 0 || (jobs.hasNextPage && historyJobs.length > 0);
+  const clearCompletedLabel = completedCountKnown
+    ? `Clear Completed (${completedCount})`
+    : "Clear Completed";
 
   const clearCompletedJobs = () => {
-    if (
-      !window.confirm(
-        `Clear ${completedCount} completed Job${completedCount === 1 ? "" : "s"}? This removes their history and residual Work data.`,
-      )
-    ) {
+    const prompt = completedCountKnown
+      ? `Clear ${completedCount} completed Job${completedCount === 1 ? "" : "s"}? This removes their history and residual Work data.`
+      : "Clear all completed Jobs? This removes their history and residual Work data.";
+    if (!window.confirm(prompt)) {
       return;
     }
     clearCompleted.mutate(undefined, {
@@ -135,17 +142,15 @@ export function JobsPage() {
             </div>
             <div className="job-list-actions">
               {jobs.data && (
-                <span className="count-badge">{jobs.data.length} total</span>
+                <span className="count-badge">{allJobs.length} loaded</span>
               )}
               <Button
                 variant="outline"
                 type="button"
-                disabled={completedCount === 0 || clearCompleted.isPending}
+                disabled={!canClearCompleted || clearCompleted.isPending}
                 onClick={clearCompletedJobs}
               >
-                {clearCompleted.isPending
-                  ? "Clearing..."
-                  : `Clear Completed (${completedCount})`}
+                {clearCompleted.isPending ? "Clearing..." : clearCompletedLabel}
               </Button>
             </div>
           </div>
@@ -174,13 +179,13 @@ export function JobsPage() {
             )}
             {jobs.isError && (
               <div className="inline-state error" role="alert">
-                {jobs.error.message}
+                {jobs.error?.message ?? "Jobs could not be loaded."}
                 <Button variant="outline" onClick={() => void jobs.refetch()}>
                   Try again
                 </Button>
               </div>
             )}
-            {!jobs.isPending && !jobs.isError && jobs.data?.length === 0 && (
+            {!jobs.isPending && !jobs.isError && allJobs.length === 0 && (
               <div className="empty-state">
                 <span className="empty-icon">
                   <BriefcaseIcon size={22} aria-hidden="true" />
@@ -190,17 +195,31 @@ export function JobsPage() {
               </div>
             )}
           </div>
-          {jobs.data && jobs.data.length > 0 && (
-            <div className="job-list" role="list" aria-label="Translation Jobs">
-              {jobs.data.map((job) => (
-                <JobListItem
-                  key={job.id}
-                  job={job}
-                  selected={job.id === jobId}
-                  onSelect={() => navigate(`/jobs/${encodeURIComponent(job.id)}`)}
-                />
-              ))}
-            </div>
+          {activeJobs.length > 0 && (
+            <section aria-labelledby="active-jobs-title">
+              <h3 id="active-jobs-title">Active Jobs</h3>
+              <JobList jobs={activeJobs} selectedId={jobId} onSelect={navigate} />
+            </section>
+          )}
+          {historyJobs.length > 0 && (
+            <section aria-labelledby="history-jobs-title">
+              <h3 id="history-jobs-title">History</h3>
+              <JobList jobs={historyJobs} selectedId={jobId} onSelect={navigate} />
+            </section>
+          )}
+          {jobs.hasNextPage && (
+            <Button
+              variant="outline"
+              type="button"
+              disabled={jobs.isFetchingNextPage || jobs.isHistoryRefreshing}
+              onClick={() => void jobs.fetchNextPage()}
+            >
+              {jobs.isHistoryRefreshing
+                ? "Refreshing history..."
+                : jobs.isFetchingNextPage
+                  ? "Loading history..."
+                  : "Load more history"}
+            </Button>
           )}
         </section>
         <section className="job-detail" aria-label="Job details">
@@ -230,6 +249,29 @@ export function JobsPage() {
         </section>
       </div>
     </>
+  );
+}
+
+function JobList({
+  jobs,
+  selectedId,
+  onSelect,
+}: {
+  jobs: Job[];
+  selectedId: string | undefined;
+  onSelect: (path: string) => void;
+}) {
+  return (
+    <div className="job-list" role="list" aria-label="Translation Jobs">
+      {jobs.map((job) => (
+        <JobListItem
+          key={job.id}
+          job={job}
+          selected={job.id === selectedId}
+          onSelect={() => onSelect(`/jobs/${encodeURIComponent(job.id)}`)}
+        />
+      ))}
+    </div>
   );
 }
 
