@@ -11,6 +11,7 @@ import { Button } from "./components/ui/button";
 import {
   APPROVED_ERROR_CONTEXT_KEYS,
   useClearCompletedJobs,
+  useCancelJob,
   useDeleteJob,
   useJob,
   useJobs,
@@ -284,6 +285,8 @@ function JobListItem({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const cancelJob = useCancelJob();
+
   return (
     <article className={cn("job-item", selected && "selected")} role="listitem">
       <button
@@ -309,6 +312,18 @@ function JobListItem({
       {job.request.term_map && (
         <span className="job-queue">Term map: {job.request.term_map.name}</span>
       )}
+      {job.status === "Queued" && !selected && (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={cancelJob.isPending}
+          onClick={() => {
+            if (confirmCancelJob(job.id)) cancelJob.mutate(job.id);
+          }}
+        >
+          {cancelJob.isPending ? "Cancelling..." : "Cancel Job"}
+        </Button>
+      )}
     </article>
   );
 }
@@ -323,13 +338,16 @@ function JobDetail({
   onDeleted: () => void;
 }) {
   const retryJob = useRetryJob();
+  const cancelJob = useCancelJob();
   const deleteJob = useDeleteJob();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const retryable = job.status === "Failed" || job.status === "Interrupted";
+  const cancellable = job.status === "Queued";
   const deletable =
     job.status === "Completed" ||
     job.status === "Failed" ||
-    job.status === "Interrupted";
+    job.status === "Interrupted" ||
+    job.status === "Cancelled";
   const termMap = job.request.term_map;
 
   useEffect(() => {
@@ -360,6 +378,20 @@ function JobDetail({
       </div>
 
       <div className="job-detail-actions">
+        {cancellable && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={cancelJob.isPending}
+            onClick={() => {
+              if (confirmCancelJob(job.id)) {
+                cancelJob.mutate(job.id);
+              }
+            }}
+          >
+            {cancelJob.isPending ? "Cancelling..." : "Cancel Job"}
+          </Button>
+        )}
         {retryable && (
           <Button
             type="button"
@@ -396,6 +428,11 @@ function JobDetail({
         {deleteJob.isError && (
           <p className="form-error" role="alert">
             {deleteJob.error.message}
+          </p>
+        )}
+        {cancelJob.isError && (
+          <p className="form-error" role="alert">
+            {cancelJob.error.message}
           </p>
         )}
       </div>
@@ -474,6 +511,12 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
 
 function JobStatus({ status }: { status: Job["status"] }) {
   return <span className={`job-status status-${status.toLowerCase()}`}>{status}</span>;
+}
+
+function confirmCancelJob(jobId: string): boolean {
+  return window.confirm(
+    `Cancel Job ${jobId.slice(0, 8)}? It will remain in Job history and will not be translated.`,
+  );
 }
 
 function DetailState({

@@ -695,6 +695,11 @@ a {
   color: #9a6700;
 }
 
+.status-cancelled {
+  background: #f2f4f7;
+  color: #475467;
+}
+
 .job-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.82fr) minmax(0, 1.18fr);

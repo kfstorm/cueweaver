@@ -77,6 +77,7 @@ class JobsApplicationFixture(ApplicationFixture):
         super().__init__()
         self.jobs = self
         self.retried_job_id: str | None = None
+        self.cancelled_job_id: str | None = None
         self.deleted_job_id: str | None = None
         self.cleared_completed = False
 
@@ -94,6 +95,10 @@ class JobsApplicationFixture(ApplicationFixture):
     def retry(self, job_id: str) -> dict[str, object]:
         self.retried_job_id = job_id
         return {"id": job_id, "status": "Queued"}
+
+    def cancel(self, job_id: str) -> dict[str, object]:
+        self.cancelled_job_id = job_id
+        return {"id": job_id, "status": "Cancelled"}
 
     def delete(self, job_id: str) -> dict[str, object]:
         self.deleted_job_id = job_id
@@ -116,6 +121,36 @@ def test_http_retries_a_job_with_no_editable_request_body():
     assert response.status_code == 200
     assert response.json() == {"id": "job-1", "status": "Queued"}
     assert application.retried_job_id == "job-1"
+
+
+def test_http_cancels_a_job_with_no_editable_request_body():
+    application = JobsApplicationFixture()
+    client = TestClient(create_app(application))
+
+    response = client.post("/api/jobs/job-1/cancel")
+
+    assert response.status_code == 200
+    assert response.json() == {"id": "job-1", "status": "Cancelled"}
+    assert application.cancelled_job_id == "job-1"
+
+
+def test_http_returns_conflict_for_a_job_that_cannot_be_cancelled():
+    class ConflictingJobs(JobsApplicationFixture):
+        def cancel(self, _job_id: str) -> dict[str, object]:
+            raise ServiceError(
+                "job_cancel_conflict",
+                "Only Queued Jobs can be cancelled",
+                status="Completed",
+            )
+
+    response = TestClient(create_app(ConflictingJobs())).post("/api/jobs/job-1/cancel")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error_code": "job_cancel_conflict",
+        "message": "Only Queued Jobs can be cancelled",
+        "status": "Completed",
+    }
 
 
 def test_http_deletes_one_job_and_clears_completed_jobs_without_a_request_body():

@@ -10,14 +10,28 @@ from dataclasses import dataclass
 from typing import Literal
 
 JobStatus = Literal[
-    "Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"
+    "Queued",
+    "Extracting",
+    "Translating",
+    "Completed",
+    "Failed",
+    "Interrupted",
+    "Cancelled",
 ]
 JobRecord = dict[str, object]
 
 JOB_STATUSES = frozenset(
-    {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
+    {
+        "Queued",
+        "Extracting",
+        "Translating",
+        "Completed",
+        "Failed",
+        "Interrupted",
+        "Cancelled",
+    }
 )
-TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted"})
+TERMINAL_JOB_STATUSES = frozenset({"Completed", "Failed", "Interrupted", "Cancelled"})
 HISTORY_CURSOR_LENGTH_LIMIT = 512
 
 

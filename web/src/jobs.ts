@@ -15,7 +15,13 @@ export interface Job {
   id: string;
   attempt: number;
   status:
-    "Queued" | "Extracting" | "Translating" | "Completed" | "Failed" | "Interrupted";
+    | "Queued"
+    | "Extracting"
+    | "Translating"
+    | "Completed"
+    | "Failed"
+    | "Interrupted"
+    | "Cancelled";
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -310,6 +316,21 @@ export function useRetryJob() {
       });
       const body = (await response.json()) as Job & { message?: string };
       if (!response.ok) throw new Error(body.message ?? "Job could not be retried.");
+      return body;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useCancelJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (jobId: string): Promise<Job> => {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+        method: "POST",
+      });
+      const body = (await response.json()) as Job & { message?: string };
+      if (!response.ok) throw new Error(body.message ?? "Job could not be cancelled.");
       return body;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
