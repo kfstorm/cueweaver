@@ -1,4 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { validateTermMapContent } from "./term-map-validation";
+
+export { MAX_TERM_MAP_BYTES, validateTermMapContent } from "./term-map-validation";
+export type { TermMapContentValidation } from "./term-map-validation";
 
 export interface TermMapSummary {
   id: string;
@@ -70,16 +74,15 @@ export function useCreateTermMap() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ name, content }: { name: string; content: string }) => {
-      try {
-        JSON.parse(content);
-      } catch {
-        throw new Error("Term map content must be valid JSON");
+      const validation = validateTermMapContent(content);
+      if (validation.error || validation.content === null) {
+        throw new Error(validation.error ?? "Term map content is invalid");
       }
       return readResponse<TermMapSummary>(
         await fetch("/api/term-maps", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: `{"name":${JSON.stringify(name)},"content":${content}}`,
+          body: JSON.stringify({ name, content: validation.content }),
         }),
       );
     },
@@ -102,12 +105,11 @@ export function useReplaceTermMap() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, content }: { id: string; content: string }) => {
-      try {
-        JSON.parse(content);
-      } catch {
-        throw new Error("Term map content must be valid JSON");
+      const validation = validateTermMapContent(content);
+      if (validation.error || validation.content === null) {
+        throw new Error(validation.error ?? "Term map content is invalid");
       }
-      return requestTermMap(id, "PUT", `{"content":${content}}`);
+      return requestTermMap(id, "PUT", JSON.stringify({ content: validation.content }));
     },
     onSuccess: (_, variables) => {
       refreshTermMapQueries(queryClient, variables.id);

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
-import type { TermMapSummary } from "../src/term-maps";
+import { validateTermMapContent, type TermMapSummary } from "../src/term-maps";
 
 const CHARACTERS_TERM_MAP: TermMapSummary = {
   id: "map-1",
@@ -206,6 +206,15 @@ function termMapFetch(
     }
     return jsonResponse({ term_maps: [] });
   });
+}
+
+async function expectTermMapPost(fetchMock: ReturnType<typeof vi.fn>, body: string) {
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/term-maps",
+      expect.objectContaining({ method: "POST", body }),
+    ),
+  );
 }
 
 function renderRoute(
@@ -1150,14 +1159,9 @@ describe("product shell", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/term-maps",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ name: "New terms", content: { Captain: "队长" } }),
-        }),
-      ),
+    await expectTermMapPost(
+      fetchMock,
+      JSON.stringify({ name: "New terms", content: { Captain: "队长" } }),
     );
     expect(
       screen.getByRole("heading", { name: "No Term maps yet" }),
@@ -1177,6 +1181,95 @@ describe("product shell", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/term-maps",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("previews a valid imported JSON file and resets the source form after upload", async () => {
+    const fetchMock = termMapFetch(undefined, {
+      id: "new",
+      name: "Imported",
+      entry_count: 2,
+      updated_at: "2026-08-13T12:00:00Z",
+    });
+    renderTermMapsWithFetch(fetchMock);
+
+    await screen.findByRole("heading", { name: "No Term maps yet" });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Imported" } });
+    fireEvent.change(screen.getByLabelText("JSON file"), {
+      target: {
+        files: [
+          new File(['{"Captain":"队长","Ship":"舰船"}'], "terms.json", {
+            type: "application/json",
+          }),
+        ],
+      },
+    });
+
+    expect(await screen.findByText("Loaded terms.json")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 mappings");
+    fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
+
+    await expectTermMapPost(
+      fetchMock,
+      JSON.stringify({
+        name: "Imported",
+        content: { Captain: "队长", Ship: "舰船" },
+      }),
+    );
+    expect(screen.getByLabelText("Name")).toHaveValue("");
+    expect(screen.getByLabelText("JSON content")).toHaveValue(
+      '{\n  "Source": "Target"\n}',
+    );
+  });
+
+  it("uses the same validation for dropped JSON and blocks folded duplicate keys", async () => {
+    const fetchMock = termMapFetch();
+    renderTermMapsWithFetch(fetchMock);
+
+    await screen.findByRole("heading", { name: "No Term maps yet" });
+    fireEvent.drop(screen.getByText("Import JSON file").parentElement!, {
+      dataTransfer: {
+        files: [new File(['{"Source":"one","source":"two"}'], "terms.json")],
+      },
+    });
+
+    expect(
+      await screen.findByText(/Source keys must be unique regardless of case/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload Term map" })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/term-maps",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("matches server content validation for object shape and compact UTF-8 size", () => {
+    expect(validateTermMapContent("[]").error).toContain("non-empty object");
+    expect(validateTermMapContent('{"Source":""}').error).toContain(
+      "non-empty strings",
+    );
+    expect(
+      validateTermMapContent('{"Stra\u00dfe":"one","STRASSE":"two"}').error,
+    ).toContain("unique regardless of case");
+    expect(
+      validateTermMapContent('{"\u017fource":"one","source":"two"}').error,
+    ).toContain("unique regardless of case");
+    expect(validateTermMapContent('{"\u01f0":"one","j\u030c":"two"}').error).toContain(
+      "unique regardless of case",
+    );
+    expect(validateTermMapContent('{"\ua7ce":"one","\ua7cf":"two"}').error).toBeNull();
+    expect(validateTermMapContent('{"\ua7d2":"one","\ua7d3":"two"}').error).toBeNull();
+    expect(
+      validateTermMapContent('{"\u16ea0":"one","\u16ebb":"two"}').error,
+    ).toBeNull();
+    const prototypeMapping = validateTermMapContent('{"__proto__":"Target"}').content;
+    expect(Object.keys(prototypeMapping ?? {})).toEqual(["__proto__"]);
+    expect(prototypeMapping?.["__proto__"]).toBe("Target");
+    expect(validateTermMapContent('{\u00a0"Source":"Target"}').error).toContain(
+      "valid JSON",
+    );
+    expect(validateTermMapContent('{"Source":"Target"}').byteLength).toBe(
+      new TextEncoder().encode('{"Source":"Target"}').byteLength,
     );
   });
 
