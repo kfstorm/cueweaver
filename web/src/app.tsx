@@ -10,7 +10,15 @@ import {
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
-import { useDeferredValue, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { NavLink, Navigate, Outlet, Route, Routes } from "react-router-dom";
 
@@ -35,6 +43,7 @@ import {
   useReplaceTermMap,
   useTermMap,
   useTermMaps,
+  validateTermMapContent,
 } from "./term-maps";
 
 const routes: Array<{ label: string; path: string; icon: Icon }> = [
@@ -867,6 +876,11 @@ function TermMapsPage() {
   const remove = useDeleteTermMap();
   const [name, setName] = useState("");
   const [content, setContent] = useState('{\n  "Source": "Target"\n}');
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileReadGeneration = useRef(0);
   const [renameName, setRenameName] = useState("");
   const [replacement, setReplacement] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState("");
@@ -882,14 +896,67 @@ function TermMapsPage() {
     resetRemove();
   }, [resetRemove, resetRename, resetReplace, selectedId]);
 
+  const contentValidation = useMemo(() => validateTermMapContent(content), [content]);
+  const contentError = fileError ?? contentValidation.error;
+
+  async function loadTermMapFile(file: File) {
+    const generation = ++fileReadGeneration.current;
+    if (!file.name.toLocaleLowerCase().endsWith(".json")) {
+      setFileError("Choose a .json file containing a Term map.");
+      setFileName(null);
+      setFileLoading(false);
+      return;
+    }
+    setFileLoading(true);
+    setFileError(null);
+    try {
+      const fileContent = await readTextFile(file);
+      if (generation !== fileReadGeneration.current) return;
+      setContent(fileContent);
+      setFileName(file.name);
+      setFileError(null);
+    } catch {
+      if (generation !== fileReadGeneration.current) return;
+      setFileName(null);
+      setFileError("The selected JSON file could not be read.");
+    } finally {
+      if (generation === fileReadGeneration.current) setFileLoading(false);
+    }
+  }
+
+  function readTextFile(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") resolve(reader.result);
+        else reject(new Error("File content is not text"));
+      };
+      reader.onerror = () =>
+        reject(reader.error ?? new Error("File could not be read"));
+      reader.readAsText(file);
+    });
+  }
+
+  function handleFileDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file) void loadTermMapFile(file);
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (fileLoading || contentError !== null) return;
     create.mutate(
       { name, content },
       {
         onSuccess: () => {
+          fileReadGeneration.current += 1;
+          setFileLoading(false);
           setName("");
           setContent('{\n  "Source": "Target"\n}');
+          setFileName(null);
+          setFileError(null);
+          if (fileInputRef.current) fileInputRef.current.value = "";
         },
       },
     );
@@ -956,12 +1023,47 @@ function TermMapsPage() {
                 placeholder="Character names"
               />
             </label>
-            <label>
-              JSON content
+            <div
+              className="term-map-dropzone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleFileDrop}
+            >
+              <strong>Import JSON file</strong>
+              <span>Drop a .json file here, or select one.</span>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Select JSON file
+              </Button>
+              <input
+                ref={fileInputRef}
+                className="sr-only"
+                type="file"
+                accept=".json,application/json"
+                aria-label="JSON file"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void loadTermMapFile(file);
+                }}
+              />
+              {fileName && <span className="field-help">Loaded {fileName}</span>}
+            </div>
+            <label htmlFor="term-map-content">
+              Paste JSON
               <Textarea
+                id="term-map-content"
+                aria-label="JSON content"
                 required
                 value={content}
-                onChange={(event) => setContent(event.target.value)}
+                onChange={(event) => {
+                  fileReadGeneration.current += 1;
+                  setContent(event.target.value);
+                  setFileName(null);
+                  setFileError(null);
+                  setFileLoading(false);
+                }}
                 rows={6}
                 spellCheck={false}
                 aria-describedby="upload-help"
@@ -970,6 +1072,20 @@ function TermMapsPage() {
             <p id="upload-help" className="field-help">
               A non-empty object of Source-to-Target strings, up to 1 MiB.
             </p>
+            {fileLoading ? (
+              <p className="upload-status" role="status">
+                Reading JSON file...
+              </p>
+            ) : contentError ? (
+              <p className="form-error" role="alert">
+                {contentError}
+              </p>
+            ) : (
+              <p className="term-map-validation valid" role="status">
+                Valid Term map: {contentValidation.entryCount}{" "}
+                {contentValidation.entryCount === 1 ? "mapping" : "mappings"}.
+              </p>
+            )}
             {create.isError && (
               <p className="form-error" role="alert">
                 {create.error.message}
@@ -983,7 +1099,7 @@ function TermMapsPage() {
             <Button
               className="primary-action"
               type="submit"
-              disabled={create.isPending}
+              disabled={create.isPending || fileLoading || contentError !== null}
             >
               {create.isPending ? "Uploading..." : "Upload Term map"}
             </Button>

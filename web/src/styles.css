@@ -1123,6 +1123,32 @@ a {
   gap: 14px;
 }
 
+.term-map-dropzone {
+  display: grid;
+  gap: 7px;
+  border: 1px dashed #c8ced9;
+  border-radius: 7px;
+  padding: 13px;
+  color: #4b5568;
+  font-size: 12px;
+}
+
+.term-map-dropzone strong {
+  color: #20293a;
+  font-size: 12px;
+}
+
+.term-map-dropzone > span {
+  color: #536176;
+  font-size: 11px;
+}
+
+.term-map-dropzone > button {
+  width: fit-content;
+  min-height: 36px;
+  margin-top: 3px;
+}
+
 .term-map-upload label {
   display: grid;
   gap: 6px;
@@ -1172,6 +1198,13 @@ a {
   margin: -4px 0 0;
   color: #536176;
   font-size: 12px;
+}
+.term-map-validation {
+  margin: -4px 0 0;
+  font-size: 12px;
+}
+.term-map-validation.valid {
+  color: #087443;
 }
 .primary-action {
   min-height: 36px;
