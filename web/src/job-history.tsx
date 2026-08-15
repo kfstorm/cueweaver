@@ -19,6 +19,7 @@ import {
   type JobNotification,
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatUtcTimestamp } from "./lib/utils";
+import { useProductStatus } from "./status";
 
 export function JobNotificationRegion({
   notifications,
@@ -76,6 +77,7 @@ export function JobsPage() {
   const listTitleRef = useRef<HTMLHeadingElement>(null);
   const focusListOnReturn = useRef(false);
   const jobs = useJobs({ poll: false });
+  const status = useProductStatus();
   const clearCompleted = useClearCompletedJobs();
   const activeJobs = jobs.data?.active_jobs ?? [];
   const historyJobs = jobs.data?.history_jobs ?? [];
@@ -90,6 +92,9 @@ export function JobsPage() {
   const clearCompletedLabel = completedCountKnown
     ? `Clear Completed (${completedCount})`
     : "Clear Completed";
+  const recordHealth = status.data?.job_records;
+  const recordAttention =
+    (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
 
   const clearCompletedJobs = () => {
     const prompt = completedCountKnown
@@ -129,8 +134,8 @@ export function JobsPage() {
           <h1>Jobs</h1>
           <p>Review durable translation history, diagnostics, and retryable work.</p>
         </div>
-        <span className="worker-badge">Single worker</span>
       </header>
+      {recordAttention && recordHealth && <RecordHealthNotice health={recordHealth} />}
       <div className={cn("job-layout", jobId && "has-selection")}>
         <section className="job-list-panel" aria-labelledby="job-list-title">
           <div className="section-heading job-list-heading">
@@ -249,6 +254,38 @@ export function JobsPage() {
         </section>
       </div>
     </>
+  );
+}
+
+function RecordHealthNotice({
+  health,
+}: {
+  health: NonNullable<ReturnType<typeof useProductStatus>["data"]>["job_records"];
+}) {
+  if (!health) return null;
+  const entries = [
+    ["Corrupt", health.corrupt],
+    ["Unsupported", health.unsupported],
+  ] as const;
+  return (
+    <section className="record-health-notice" aria-labelledby="record-health-title">
+      <div>
+        <p className="eyebrow">Persistence warning</p>
+        <h2 id="record-health-title">Job records need attention</h2>
+        <p>These records were kept out of active history and need operator review.</p>
+      </div>
+      <dl>
+        {entries.map(([label, record]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>
+              {record.count} {record.count === 1 ? "record" : "records"} in{" "}
+              <code>{record.location}</code>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 

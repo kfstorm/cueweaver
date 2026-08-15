@@ -7,12 +7,14 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 JobStatus = Literal[
     "Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"
 ]
 JobRecord = dict[str, object]
+CURRENT_JOB_SCHEMA_VERSION = 1
 
 JOB_STATUSES = frozenset(
     {"Queued", "Extracting", "Translating", "Completed", "Failed", "Interrupted"}
@@ -150,11 +152,23 @@ def copy_job_record(record: Mapping[str, object]) -> JobRecord:
     return copied
 
 
+def valid_job_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value not in {".", ".."}
+        and "\\" not in value
+        and "\x00" not in value
+        and not Path(value).is_absolute()
+        and Path(value).name == value
+    )
+
+
 def valid_record(record: JobRecord) -> bool:
     job_id = record.get("id")
     status = record.get("status")
     request = record.get("request")
-    if not isinstance(job_id, str) or not job_id:
+    if not valid_job_id(job_id):
         return False
     attempt = record.get("attempt")
     if (
@@ -262,12 +276,37 @@ def normalize_record(record: JobRecord) -> None:
         record["queue_sequence"] = 0
 
 
+def migrate_record(record: JobRecord) -> tuple[JobRecord | None, bool, bool]:
+    """Return the v1 record, whether it was migrated, and whether it is future data."""
+    if "schema_version" not in record:
+        legacy = True
+    else:
+        schema_version = record["schema_version"]
+        if (
+            not isinstance(schema_version, int)
+            or isinstance(schema_version, bool)
+            or schema_version < CURRENT_JOB_SCHEMA_VERSION
+        ):
+            return None, False, False
+        if schema_version > CURRENT_JOB_SCHEMA_VERSION:
+            return None, False, True
+        legacy = False
+
+    if not valid_record(record):
+        return None, False, False
+    migrated = copy_job_record(record)
+    normalize_record(migrated)
+    migrated["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
+    return migrated, legacy, False
+
+
 def queue_sequence(record: Mapping[str, object]) -> int:
     sequence = record.get("queue_sequence")
     return sequence if isinstance(sequence, int) else 0
 
 
 __all__ = [
+    "CURRENT_JOB_SCHEMA_VERSION",
     "JOB_STATUSES",
     "TERMINAL_JOB_STATUSES",
     "JobDetail",
@@ -277,10 +316,12 @@ __all__ = [
     "copy_job_record",
     "decode_history_cursor",
     "encode_history_cursor",
+    "migrate_record",
     "normalize_record",
     "project_job_detail",
     "project_job_summary",
     "queue_sequence",
+    "valid_job_id",
     "valid_record",
     "valid_request",
 ]

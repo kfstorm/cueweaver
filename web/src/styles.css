@@ -114,6 +114,15 @@ a {
   font-size: 11px;
 }
 
+.runtime-warning {
+  margin: 12px 9px 0;
+  border-left: 2px solid #d97706;
+  padding: 1px 0 1px 8px;
+  color: #a15c08;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -161,17 +170,59 @@ a {
   line-height: 1.55;
 }
 
-.worker-badge {
-  flex: none;
-  border: 1px solid #dce1e9;
-  border-radius: 999px;
-  background: #fff;
-  padding: 5px 9px;
-  color: #667085;
-  font-size: 10px;
-  font-weight: 620;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+.record-health-notice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  margin-bottom: 24px;
+  border: 1px solid #f1d6a9;
+  border-left: 3px solid #d97706;
+  background: #fffaf0;
+  padding: 16px 18px;
+}
+
+.record-health-notice h2 {
+  margin: 3px 0 5px;
+  color: #5b3b08;
+  font-size: 15px;
+}
+
+.record-health-notice p:not(.eyebrow) {
+  margin: 0;
+  color: #7c5a21;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.record-health-notice dl {
+  display: grid;
+  gap: 8px;
+  min-width: 250px;
+  margin: 0;
+}
+
+.record-health-notice dl > div {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.record-health-notice dt {
+  color: #7c5a21;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.record-health-notice dd {
+  margin: 0;
+  color: #5b3b08;
+  font-size: 12px;
+}
+
+.record-health-notice code {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
 }
 
 .workflow-panel {
@@ -1476,8 +1527,14 @@ a {
     font-size: 21px;
   }
 
-  .worker-badge {
-    display: none;
+  .record-health-notice {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .record-health-notice dl {
+    min-width: 0;
   }
 
   .workflow-panel {

@@ -26,6 +26,7 @@ from ..media import require_readable_media
 from ..term_maps import TermMapDetail
 from ..translation import OutputPublisher, TranslateRequest, Translation, Translator
 from .model import (
+    CURRENT_JOB_SCHEMA_VERSION,
     JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     JobDetail,
@@ -38,9 +39,10 @@ from .model import (
     normalize_record,
     project_job_summary,
     queue_sequence,
+    valid_job_id,
     valid_record,
 )
-from .store import FileJobRecordStore, JobRecordStore
+from .store import FileJobRecordStore, JobRecordHealth, JobRecordStore
 
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
@@ -151,6 +153,7 @@ class Jobs:
                 job_request["stream_index"] = request.stream_index
             record: dict[str, object] = {
                 "id": job_id,
+                "schema_version": CURRENT_JOB_SCHEMA_VERSION,
                 "status": "Queued",
                 "attempt": 1,
                 "created_at": now,
@@ -366,6 +369,24 @@ class Jobs:
             if record is None:
                 raise ServiceError("job_not_found", "Job does not exist")
             return self._record_with_queue_position(record)
+
+    def record_health(self) -> dict[str, object]:
+        health = getattr(self._record_store, "health", None)
+        if not callable(health):
+            return _empty_record_health()
+        result = health()
+        if not isinstance(result, JobRecordHealth):
+            return _empty_record_health()
+        return {
+            "corrupt": {
+                "count": result.corrupt_count,
+                "location": result.corrupt_location,
+            },
+            "unsupported": {
+                "count": result.unsupported_count,
+                "location": result.unsupported_location,
+            },
+        }
 
     def _delete_terminal_job(self, job_id: str) -> None:
         try:
@@ -942,6 +963,7 @@ class Jobs:
                     self._write_record(job_id, record)
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
+        record["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
         self._record_store.write(job_id, record)
 
     def _ensure_jobs_root(self) -> None:
@@ -1076,6 +1098,13 @@ def _active_sort_key(record: dict[str, object]) -> tuple[int, str, str]:
     return queue_sequence(record), created_at, job_id
 
 
+def _empty_record_health() -> dict[str, object]:
+    return {
+        "corrupt": {"count": 0, "location": "jobs/corrupt"},
+        "unsupported": {"count": 0, "location": "jobs/unsupported"},
+    }
+
+
 def _replace_extracted_source(candidate: Path, destination: Path) -> None:
     diagnostic: Path | None = None
     if destination.is_dir():
@@ -1173,14 +1202,17 @@ def _validate_output_suffix(value: str) -> None:
 
 
 __all__ = [
+    "CURRENT_JOB_SCHEMA_VERSION",
     "JOB_STATUSES",
     "TERMINAL_JOB_STATUSES",
     "CreateJobRequest",
     "FileJobRecordStore",
     "JobDetail",
     "JobRecord",
+    "JobRecordHealth",
     "JobRecordStore",
     "JobStatus",
     "JobSummary",
     "Jobs",
+    "valid_job_id",
 ]
