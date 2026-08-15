@@ -18,13 +18,9 @@ import {
   useRetryJob,
   type Job,
   type JobNotification,
+  type JobStatusHistoryEntry,
 } from "./jobs";
-import {
-  cn,
-  formatLocalTimestamp,
-  formatRelativeTimestamp,
-  formatUtcTimestamp,
-} from "./lib/utils";
+import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
 import { useProductStatus } from "./status";
 
 const RUNNING_JOB_MESSAGE = "Running Jobs cannot be cancelled.";
@@ -91,8 +87,8 @@ export function JobsPage() {
   const historyJobs = jobs.data?.history_jobs ?? [];
   const allJobs = [...activeJobs, ...historyJobs];
   const selected = allJobs.find((job) => job.id === jobId) ?? null;
-  const detail = useJob(jobId ?? null, selected === null);
-  const displayedJob = selected ?? detail.data;
+  const detail = useJob(jobId ?? null, jobId !== undefined);
+  const displayedJob = detail.data ?? selected;
   const completedCount = historyJobs.filter((job) => job.status === "Completed").length;
   const completedCountKnown = !jobs.hasNextPage;
   const canClearCompleted =
@@ -240,7 +236,7 @@ export function JobsPage() {
           {jobId && !selected && detail.isPending && (
             <DetailState>Loading Job details</DetailState>
           )}
-          {jobId && !selected && detail.isError && (
+          {jobId && detail.isError && (
             <DetailState error>
               {detail.error.message === "Job does not exist"
                 ? "This Job is no longer available."
@@ -252,7 +248,8 @@ export function JobsPage() {
           )}
           {jobId &&
             displayedJob &&
-            (selected || (!detail.isPending && !detail.isError)) && (
+            !detail.isError &&
+            (selected || !detail.isPending) && (
               <JobDetail
                 job={displayedJob}
                 onBack={() => navigate("/jobs")}
@@ -521,12 +518,22 @@ function JobDetail({
       </section>
 
       <section className="job-detail-section" aria-labelledby="job-time-title">
-        <h3 id="job-time-title">Timestamps (UTC)</h3>
+        <h3 id="job-time-title">Timestamps (local time)</h3>
         <dl className="job-summary">
-          <SummaryItem label="Created" value={formatUtcTimestamp(job.created_at)} />
-          <SummaryItem label="Started" value={formatUtcTimestamp(job.started_at)} />
-          <SummaryItem label="Finished" value={formatUtcTimestamp(job.finished_at)} />
+          <SummaryItem label="Created" value={formatLocalTimestamp(job.created_at)} />
+          <SummaryItem label="Started" value={formatLocalTimestamp(job.started_at)} />
+          <SummaryItem label="Finished" value={formatLocalTimestamp(job.finished_at)} />
         </dl>
+      </section>
+      <section className="job-detail-section" aria-labelledby="job-history-title">
+        <h3 id="job-history-title">Status history</h3>
+        {job.status_history && job.status_history.length > 0 ? (
+          <StatusHistory entries={job.status_history} />
+        ) : (
+          <p className="job-history-unavailable">
+            Status history unavailable for this Job.
+          </p>
+        )}
       </section>
     </div>
   );
@@ -564,6 +571,31 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
       <dt>{label}</dt>
       <dd title={value}>{value}</dd>
     </div>
+  );
+}
+
+function StatusHistory({ entries }: { entries: JobStatusHistoryEntry[] }) {
+  return (
+    <ol className="job-status-history">
+      {entries.map((entry, index) => (
+        <li key={`${entry.attempt}-${entry.status}-${entry.started_at}-${index}`}>
+          <div>
+            <JobStatus status={entry.status} />
+            <span>Attempt {entry.attempt}</span>
+          </div>
+          <dl>
+            <div>
+              <dt>Started</dt>
+              <dd>{formatLocalTimestamp(entry.started_at)}</dd>
+            </div>
+            <div>
+              <dt>Finished</dt>
+              <dd>{formatLocalTimestamp(entry.finished_at)}</dd>
+            </div>
+          </dl>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -605,7 +637,10 @@ function SelectionPrompt() {
 }
 
 function sourceSummary(job: Job): string {
-  return job.request.subtitle_path ?? `Embedded stream ${job.request.stream_index}`;
+  return (
+    job.request.subtitle_path ??
+    `Embedded subtitle · Stream ${job.request.stream_index}`
+  );
 }
 
 function isRunningJob(status: Job["status"]): boolean {

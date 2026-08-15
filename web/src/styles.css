@@ -1056,6 +1056,59 @@ a {
   font-size: 12px;
 }
 
+.job-history-unavailable {
+  margin: 10px 0 0;
+  color: #697386;
+  font-size: 12px;
+}
+
+.job-status-history {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job-status-history > li {
+  border-left: 2px solid #dfe3ea;
+  padding: 2px 0 2px 12px;
+}
+
+.job-status-history > li > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-status-history > li > div > span {
+  color: #697386;
+  font-size: 11px;
+}
+
+.job-status-history dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 7px 0 0;
+}
+
+.job-status-history dl > div {
+  display: flex;
+  gap: 6px;
+}
+
+.job-status-history dt,
+.job-status-history dd {
+  color: #697386;
+  font-size: 11px;
+}
+
+.job-status-history dd {
+  margin: 0;
+  color: #273043;
+}
+
 .job-error {
   margin: 12px 0 2px;
   border: 1px solid #f2c8c4;

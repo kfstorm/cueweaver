@@ -22,6 +22,7 @@ JobStatus = Literal[
 ]
 JobRecord = dict[str, object]
 CURRENT_JOB_SCHEMA_VERSION = 1
+STATUS_HISTORY_FIELDS = frozenset({"status", "attempt", "started_at", "finished_at"})
 
 JOB_STATUSES = frozenset(
     {
@@ -80,7 +81,7 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
         "error",
     )
     if not summary:
-        fields += ("extraction",)
+        fields += ("extraction", "status_history")
     copied_record = copy_job_record(record)
     projected = {
         field: copied_record[field] for field in fields if field in copied_record
@@ -232,7 +233,10 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
     job_id = record.get("id")
     status = record.get("status")
     request = record.get("request")
-    if not valid_job_id(job_id):
+    if not valid_job_id(job_id) or (
+        "status_history" in record
+        and not valid_status_history(record["status_history"])
+    ):
         return False
     attempt = record.get("attempt")
     if (
@@ -322,6 +326,57 @@ def valid_request(request: dict[str, object]) -> bool:
     )
 
 
+def valid_status_history(value: object) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    return all(
+        isinstance(entry, dict)
+        and entry.keys() >= STATUS_HISTORY_FIELDS
+        and isinstance(entry.get("status"), str)
+        and entry["status"] in JOB_STATUSES
+        and isinstance(entry.get("attempt"), int)
+        and not isinstance(entry["attempt"], bool)
+        and entry["attempt"] >= 1
+        and all(
+            timestamp is None or (isinstance(timestamp, str) and bool(timestamp))
+            for timestamp in (entry.get("started_at"), entry.get("finished_at"))
+        )
+        for entry in value
+    )
+
+
+def transition_status(
+    record: JobRecord,
+    status: str,
+    *,
+    attempt: int | None = None,
+    at: str,
+    terminal: bool = False,
+) -> None:
+    """Record a new status only for records that already support history."""
+    history = record.get("status_history")
+    if not isinstance(history, list):
+        record["status"] = status
+        return
+    if (
+        history
+        and isinstance(history[-1], dict)
+        and history[-1].get("finished_at") is None
+    ):
+        history[-1]["finished_at"] = at
+    current_attempt = record.get("attempt", 1) if attempt is None else attempt
+    assert isinstance(current_attempt, int) and not isinstance(current_attempt, bool)
+    history.append(
+        {
+            "status": status,
+            "attempt": current_attempt,
+            "started_at": at,
+            "finished_at": at if terminal else None,
+        }
+    )
+    record["status"] = status
+
+
 def normalize_record(record: JobRecord) -> None:
     record.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     record.setdefault("started_at", None)
@@ -389,7 +444,9 @@ __all__ = [
     "project_job_detail",
     "project_job_summary",
     "queue_sequence",
+    "transition_status",
     "valid_job_id",
     "valid_record",
     "valid_request",
+    "valid_status_history",
 ]

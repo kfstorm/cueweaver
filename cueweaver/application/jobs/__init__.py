@@ -39,6 +39,7 @@ from .model import (
     normalize_record,
     project_job_summary,
     queue_sequence,
+    transition_status,
     valid_job_id,
     valid_record,
 )
@@ -159,6 +160,14 @@ class Jobs:
                 "created_at": now,
                 "started_at": None,
                 "finished_at": None,
+                "status_history": [
+                    {
+                        "status": "Queued",
+                        "attempt": 1,
+                        "started_at": now,
+                        "finished_at": None,
+                    }
+                ],
                 "request": job_request,
                 "error": None,
                 "queue_sequence": self._next_queue_sequence,
@@ -223,10 +232,17 @@ class Jobs:
                 retry_request = retry_record["request"]
                 assert isinstance(retry_request, dict)
                 next_queue_sequence = self._next_queue_sequence + 1
-                retry_record["status"] = "Queued"
                 attempt = retry_record.get("attempt", 1)
                 assert isinstance(attempt, int)
-                retry_record["attempt"] = attempt + 1
+                next_attempt = attempt + 1
+                retry_record["attempt"] = next_attempt
+                retry_at = _timestamp()
+                transition_status(
+                    retry_record,
+                    "Queued",
+                    attempt=next_attempt,
+                    at=retry_at,
+                )
                 retry_record["started_at"] = None
                 retry_record["finished_at"] = None
                 retry_record["error"] = None
@@ -254,8 +270,11 @@ class Jobs:
                     status=status,
                 )
             cancelled_record = copy_job_record(record)
-            cancelled_record["status"] = "Cancelled"
-            cancelled_record["finished_at"] = _timestamp()
+            cancelled_at = _timestamp()
+            transition_status(
+                cancelled_record, "Cancelled", at=cancelled_at, terminal=True
+            )
+            cancelled_record["finished_at"] = cancelled_at
             cancelled_record["error"] = None
             self._write_record(job_id, cancelled_record)
             self._records[job_id] = cancelled_record
@@ -707,7 +726,7 @@ class Jobs:
                         return
                     with self._lock:
                         record = self._records[job_id]
-                        record["status"] = "Translating"
+                        transition_status(record, "Translating", at=_timestamp())
                         self._write_record(job_id, record)
             if not embedded:
                 subtitle_path = self._media_root / str(request["subtitle_path"])
@@ -793,8 +812,10 @@ class Jobs:
                 request = record["request"]
                 assert isinstance(request, dict)
                 embedded = "stream_index" in request
-                record["status"] = "Extracting" if embedded else "Translating"
-                record["started_at"] = _timestamp()
+                status = "Extracting" if embedded else "Translating"
+                started_at = _timestamp()
+                transition_status(record, status, at=started_at)
+                record["started_at"] = started_at
                 output_path = self._execution_output_path(request)
                 request["output_path"] = str(output_path.relative_to(self._media_root))
                 self._write_record(job_id, record)
@@ -860,7 +881,7 @@ class Jobs:
                 return None, True
             with self._lock:
                 current_record = self._records[job_id]
-                current_record["status"] = "Translating"
+                transition_status(current_record, "Translating", at=_timestamp())
                 self._write_record(job_id, current_record)
         return source, False
 
@@ -956,8 +977,9 @@ class Jobs:
     ) -> None:
         with self._lock:
             record = self._records[job_id]
-            record["status"] = status
-            record["finished_at"] = _timestamp()
+            finished_at = _timestamp()
+            transition_status(record, status, at=finished_at, terminal=True)
+            record["finished_at"] = finished_at
             record["error"] = error
             self._write_record(job_id, record)
 
@@ -976,8 +998,9 @@ class Jobs:
                 record = self._records.get(job_id)
                 if record is None:
                     return
-                record["status"] = "Failed"
-                record["finished_at"] = _timestamp()
+                finished_at = _timestamp()
+                transition_status(record, "Failed", at=finished_at, terminal=True)
+                record["finished_at"] = finished_at
                 record["error"] = {
                     "code": "job_worker_failed",
                     "message": "Job execution could not be persisted",
@@ -1065,8 +1088,9 @@ def _embedded_error_context(
 
 def _interrupted_record(record: dict[str, object]) -> dict[str, object]:
     interrupted = copy_job_record(record)
-    interrupted["status"] = "Interrupted"
-    interrupted["finished_at"] = _timestamp()
+    finished_at = _timestamp()
+    transition_status(interrupted, "Interrupted", at=finished_at, terminal=True)
+    interrupted["finished_at"] = finished_at
     interrupted["error"] = {
         "code": "job_interrupted",
         "message": "Job was interrupted when CueWeaver stopped",

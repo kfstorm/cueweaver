@@ -29,6 +29,16 @@ function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) 
   });
 }
 
+function isJobDetailRequest(input: string): boolean {
+  return /^\/api\/jobs\/[^/]+$/.test(input);
+}
+
+async function expectEmbeddedSubtitlePrompt(language: string) {
+  expect(
+    await screen.findByText(`Embedded subtitle · Stream 3 to ${language}`),
+  ).toBeInTheDocument();
+}
+
 function emptyMediaResponse() {
   return jsonResponse({ path: "", entries: [] });
 }
@@ -73,6 +83,7 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
 function jobsFetch(job: JobFixture) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/status") return statusResponse();
+    if (isJobDetailRequest(input)) return jsonResponse(job);
     if (input.startsWith("/api/jobs")) return jobListResponse([job]);
     return jsonResponse({ term_maps: [] });
   });
@@ -81,6 +92,7 @@ function jobsFetch(job: JobFixture) {
 function jobListFetch(getJobs: () => JobFixture[]) {
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/status") return statusResponse();
+    if (isJobDetailRequest(input)) return jsonResponse(getJobs()[0]);
     if (input.startsWith("/api/jobs")) return jobListResponse(getJobs());
     return jsonResponse({ term_maps: [] });
   });
@@ -110,6 +122,7 @@ function cancelJobFetch(jobId: string, cancelError?: string) {
       };
       return jsonResponse(currentJob);
     }
+    if (isJobDetailRequest(input)) return jsonResponse(currentJob);
     if (input.startsWith("/api/jobs")) return jobListResponse([currentJob]);
     return jsonResponse({ term_maps: [] });
   });
@@ -122,6 +135,7 @@ function jobsPageFetch(
   return vi.fn().mockImplementation(async (input: string) => {
     if (input === "/api/status") return statusResponse();
     if (input in details) return jsonResponse(details[input]);
+    if (isJobDetailRequest(input)) return jsonResponse(getJobs());
     if (input.startsWith("/api/jobs")) return jobListResponse([getJobs()]);
     return jsonResponse({ term_maps: [] });
   });
@@ -209,6 +223,7 @@ function retryFetch(job: JobFixture, firstFailure?: string) {
         response = { status: "Queued", attempt: 2 };
         return jsonResponse({ ...job, ...response, error: null });
       }
+      if (isJobDetailRequest(input)) return jsonResponse(job);
       if (input.startsWith("/api/jobs")) return jobListResponse([job]);
       return jsonResponse({ term_maps: [] });
     });
@@ -587,7 +602,7 @@ describe("product shell", () => {
     expect(screen.getByText("subtitle")).toBeInTheDocument();
   });
 
-  it("opens a durable Job detail with local list time and UTC diagnostics", async () => {
+  it("opens a durable Job detail with local timestamps and status history", async () => {
     const job = {
       id: "job-detail-1",
       attempt: 2,
@@ -595,6 +610,20 @@ describe("product shell", () => {
       created_at: "2026-08-13T12:00:00Z",
       started_at: "2026-08-13T12:00:01Z",
       finished_at: "2026-08-13T12:00:02Z",
+      status_history: [
+        {
+          status: "Queued" as const,
+          attempt: 2,
+          started_at: "2026-08-13T12:00:00Z",
+          finished_at: "2026-08-13T12:00:01Z",
+        },
+        {
+          status: "Completed" as const,
+          attempt: 2,
+          started_at: "2026-08-13T12:00:01Z",
+          finished_at: "2026-08-13T12:00:02Z",
+        },
+      ],
       queue_position: null,
       request: {
         media_path: "Shows/Movie.mkv",
@@ -627,9 +656,13 @@ describe("product shell", () => {
     expect(screen.getByRole("heading", { name: "Shows/Movie.mkv" })).toHaveFocus();
     expect(screen.getByText("Characters")).toBeInTheDocument();
     expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
-    expect(screen.getAllByText(/13 Aug 2026.*UTC/).length).toBe(3);
+    expect(screen.getByText("Status history")).toBeInTheDocument();
+    expect(screen.getAllByText("Attempt 2")).toHaveLength(2);
     expect(screen.queryByText(/work\/jobs/)).not.toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalledWith("/api/jobs/job-detail-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/job-detail-1",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Back to Jobs" }));
     expect(
@@ -646,7 +679,7 @@ describe("product shell", () => {
     const fetchMock = jobsPageFetch(() => currentJob);
     const { queryClient } = renderWithFetch("/jobs", fetchMock);
 
-    await screen.findByText("Embedded stream 3 to zh-Hans");
+    await screen.findByText("Embedded subtitle · Stream 3 to zh-Hans");
     currentJob = {
       ...currentJob,
       status: "Completed",
@@ -669,7 +702,7 @@ describe("product shell", () => {
     const fetchMock = jobsPageFetch(() => currentJob);
     const { queryClient } = renderWithFetch("/jobs", fetchMock);
 
-    await screen.findByText("Embedded stream 3 to zh-Hans");
+    await screen.findByText("Embedded subtitle · Stream 3 to zh-Hans");
     currentJob = {
       ...currentJob,
       status: "Failed",
@@ -1025,6 +1058,7 @@ describe("product shell", () => {
         if (input.endsWith("mutation-state-1") && init?.method === "DELETE") {
           return jsonResponse({ message: "Job could not be deleted." }, false);
         }
+        if (isJobDetailRequest(input)) return jsonResponse(job);
         if (input.startsWith("/api/jobs")) return jobListResponse([job]);
         return jsonResponse({ term_maps: [] });
       });
@@ -1033,7 +1067,7 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
     fireEvent.click(screen.getByRole("button", { name: "Retry Job" }));
     expect(await screen.findByRole("button", { name: "Retrying..." })).toBeDisabled();
-    resolveRetry(jsonResponse({ ...job, status: "Queued", error: null }));
+    resolveRetry(jsonResponse({ ...job, status: "Failed", error: null }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Retry Job" })).toBeInTheDocument(),
     );
@@ -1089,7 +1123,7 @@ describe("product shell", () => {
     const retry = retryFetch(job, "Embedded subtitle stream disappeared.");
     renderWithFetch("/jobs", retry.fetchMock);
 
-    expect(await screen.findByText("Embedded stream 3 to zh-Hans")).toBeInTheDocument();
+    await expectEmbeddedSubtitlePrompt("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: /Movie\.mkv/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
     await waitFor(() => expect(retry.attempts()).toBe(1));
@@ -1108,7 +1142,7 @@ describe("product shell", () => {
     const retry = retryFetch(job);
     renderWithFetch("/jobs", retry.fetchMock);
 
-    expect(await screen.findByText("Embedded stream 3 to zh")).toBeInTheDocument();
+    await expectEmbeddedSubtitlePrompt("zh");
     fireEvent.click(screen.getByRole("button", { name: /Movie\.mkv/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
     await waitFor(() => expect(retry.attempts()).toBe(1));
