@@ -2,8 +2,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PySubtrans.Options import SettingsType
+from PySubtrans.Providers.Clients.CustomClient import CustomClient
 
-from cueweaver.translation import PySubtransTranslator
+from cueweaver.translation import PySubtransTranslator, _disable_thinking
 
 
 class Event:
@@ -12,6 +14,39 @@ class Event:
 
     def disconnect(self, *_args, **_kwargs) -> None:
         pass
+
+
+def test_disable_thinking_adds_explicit_request_body_option():
+    client = CustomClient(
+        SettingsType(
+            {
+                "server_address": "http://127.0.0.1:1234",
+                "endpoint": "/v1/chat/completions",
+                "instructions": "Translate the subtitles.",
+                "supports_conversation": True,
+                "model": "deepseek-v4-flash",
+            }
+        )
+    )
+    request = SimpleNamespace(
+        prompt=SimpleNamespace(
+            messages=[{"role": "user", "content": "Translate this."}],
+            content="Translate this.",
+        )
+    )
+    engine = SimpleNamespace(client=client)
+
+    _disable_thinking(engine)
+
+    request_body = engine.client._generate_request_body(request, 0.0)
+
+    assert request_body == {
+        "temperature": 0.0,
+        "stream": False,
+        "model": "deepseek-v4-flash",
+        "messages": [{"role": "user", "content": "Translate this."}],
+        "thinking": {"type": "disabled"},
+    }
 
 
 def _patch_translation_dependencies(
@@ -28,8 +63,16 @@ def _patch_translation_dependencies(
     monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", engine)
 
 
-def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("provider_name", "model", "thinking_disabled"),
+    [
+        ("DeepSeek", "any-model", True),
+        ("Custom Server", "deepseek-v4-flash", True),
+        ("Custom Server", "unrelated-model", False),
+    ],
+)
+def test_translation_uses_provider_specific_thinking_policy(
+    tmp_path, monkeypatch, provider_name, model, thinking_disabled
 ):
     source = tmp_path / "source.srt"
     source.write_text(
@@ -55,6 +98,10 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
         def __init__(self, _options, _provider, *, resume, terminology_map):
             captured["resume"] = resume
             captured["terminology_map"] = terminology_map
+            self.client = SimpleNamespace(
+                _generate_request_body=lambda *_args, **_kwargs: {"model": "test-model"}
+            )
+            captured["client"] = self.client
             self.aborted = False
             self.errors = []
             self.terminology_map = terminology_map
@@ -66,7 +113,7 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
 
     def init_options(**settings):
         captured["settings"] = settings
-        return SimpleNamespace(provider="Test Provider")
+        return SimpleNamespace(provider=provider_name, model=model)
 
     def save_translation(path: str) -> None:
         Path(path).write_bytes(source.read_bytes())
@@ -93,6 +140,10 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
         "project_file": True,
     }
     assert captured["terminology_map"] == {"Jon": "琼恩"}
+    request_body = captured["client"]._generate_request_body()
+    assert ("thinking" in request_body) is thinking_disabled
+    if thinking_disabled:
+        assert request_body["thinking"] == {"type": "disabled"}
     assert list(work_directory.glob("*/source.srt"))
 
 

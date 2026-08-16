@@ -77,6 +77,8 @@ class PySubtransTranslator:
         engine = SubtitleTranslator(
             options, provider, resume=True, terminology_map=terminology_map
         )
+        if _should_disable_thinking(options.provider, getattr(options, "model", None)):
+            _disable_thinking(engine)
 
         def save_checkpoint(_sender: Any, **_kwargs: Any) -> None:
             project.SaveProjectFile()
@@ -109,6 +111,33 @@ class PySubtransTranslator:
                 engine.events.terminology_updated.disconnect(
                     preserve_static_terminology
                 )
+
+
+def _disable_thinking(engine: SubtitleTranslator) -> None:
+    """Explicitly select non-thinking mode for OpenAI-compatible providers."""
+
+    # PySubtrans 1.6.0 has no public request-body hook.
+    client = engine.client
+    original_generate_request_body = client._generate_request_body
+
+    def generate_request_body(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        request_body = original_generate_request_body(*args, **kwargs)
+        if not isinstance(request_body, dict):
+            raise TypeError("PySubtrans returned an invalid provider request body")
+        request_body["thinking"] = {"type": "disabled"}
+        return request_body
+
+    client._generate_request_body = generate_request_body
+
+
+def _should_disable_thinking(provider: str, model: str | None) -> bool:
+    if provider == "DeepSeek":
+        return True
+    return (
+        provider == "Custom Server"
+        and model is not None
+        and model.strip().casefold().startswith("deepseek-")
+    )
 
 
 def _build_terminology_seed(
