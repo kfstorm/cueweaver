@@ -36,4 +36,4 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 - Production mounts need readable Media, a writable selected Media directory for publishing output, and a writable Work root. E2E runs use `--user "$(id -u):$(id -g)"` so bind-mounted test files remain owned by the test runner.
 - Use `uvicorn cueweaver.product:create_product_app_from_env --factory` for production; the development factory is API-only and runs behind Vite.
 - Production SPA fallback applies only to non-API routes. Unknown `/api` paths, including `/api` itself, must remain structured API 404 responses rather than returning `index.html`.
-- An unconfigured PySubtrans provider does not prevent startup; configure it in PySubtrans service settings and restart before creating translation Jobs.
+- An unconfigured PySubtrans provider does not prevent startup; set `PROVIDER` and the selected provider's environment variables before startup, then restart after changing them.
