@@ -77,7 +77,6 @@ class FileTermMapStore:
             )
 
     def create(self, name: str, content: Mapping[str, str]) -> TermMapSummary:
-        content = validate_term_map_content(content)
         with self._locked():
             records = self._read_index()
             folded_name = name.casefold()
@@ -137,7 +136,6 @@ class FileTermMapStore:
             return self._summary(updated)
 
     def replace(self, term_map_id: str, content: Mapping[str, str]) -> TermMapSummary:
-        content = validate_term_map_content(content)
         with self._locked():
             records = self._read_index()
             record = self._find(records, term_map_id)

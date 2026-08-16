@@ -73,8 +73,7 @@ class TermMaps:
         return self._store.get(term_map_id)
 
     def create(self, name: str, content: Mapping[str, str]) -> TermMapSummary:
-        validate_term_map(name, content)
-        return self._store.create(name, validate_term_map_content(content))
+        return self._store.create(name, validate_term_map(name, content))
 
     def rename(self, term_map_id: str, name: str) -> TermMapSummary:
         validate_term_map_name(name)
@@ -94,9 +93,9 @@ class TermMaps:
         return self._store.delete(term_map_id, name)
 
 
-def validate_term_map(name: str, content: Mapping[str, str]) -> None:
+def validate_term_map(name: str, content: Mapping[str, str]) -> dict[str, str]:
     validate_term_map_name(name)
-    validate_term_map_content(content)
+    return validate_term_map_content(content)
 
 
 def validate_term_map_name(name: str) -> None:
