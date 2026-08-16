@@ -1824,15 +1824,6 @@ describe("product shell", () => {
     expect(validateTermMapContent('{"Source":""}').error).toContain(
       "non-empty strings",
     );
-    expect(
-      validateTermMapContent('{"Stra\u00dfe":"one","STRASSE":"two"}').error,
-    ).toContain("unique regardless of case");
-    expect(
-      validateTermMapContent('{"\u017fource":"one","source":"two"}').error,
-    ).toContain("unique regardless of case");
-    expect(validateTermMapContent('{"\u01f0":"one","j\u030c":"two"}').error).toContain(
-      "unique regardless of case",
-    );
     const prototypeMapping = validateTermMapContent('{"__proto__":"Target"}').content;
     expect(Object.keys(prototypeMapping ?? {})).toEqual(["__proto__"]);
     expect(prototypeMapping?.["__proto__"]).toBe("Target");

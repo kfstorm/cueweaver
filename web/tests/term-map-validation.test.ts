@@ -1,6 +1,5 @@
 import contract from "../../contracts/term-map-validation.json";
 import { describe, expect, it } from "vitest";
-import { UNICODE_CASEFOLD_VERSION } from "../src/unicode-casefold-data";
 import {
   MAX_TERM_MAP_BYTES,
   MAX_TERM_MAP_UPLOAD_BYTES,
@@ -27,10 +26,6 @@ function caseText(testCase: ContractCase): string {
 }
 
 describe("Term map validation contract", () => {
-  it("uses the shared Unicode casefold data version", () => {
-    expect(UNICODE_CASEFOLD_VERSION).toBe(contract.unicodeCasefoldVersion);
-  });
-
   for (const testCase of contract.cases as ContractCase[]) {
     it(`matches the shared vector: ${testCase.name}`, () => {
       const result = validateTermMapContent(caseText(testCase));

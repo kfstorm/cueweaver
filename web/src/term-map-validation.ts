@@ -1,5 +1,3 @@
-import { UNICODE_CASEFOLD_DATA } from "./unicode-casefold-data";
-
 export const MAX_TERM_MAP_BYTES = 1024 * 1024;
 export const MAX_TERM_MAP_UPLOAD_BYTES = MAX_TERM_MAP_BYTES;
 
@@ -42,7 +40,7 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     if (hasUnpairedSurrogate(source)) {
       return invalidTermMapContent("Term map must contain valid Unicode strings.");
     }
-    const foldedSource = casefold(source);
+    const foldedSource = source.toLowerCase();
     if (foldedSources.has(foldedSource)) {
       return invalidTermMapContent(
         "Source keys must be unique regardless of case; remove the duplicate mapping.",
@@ -89,22 +87,6 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
 
 function invalidTermMapContent(error: string): TermMapContentValidation {
   return { content: null, entryCount: 0, rawByteLength: 0, byteLength: 0, error };
-}
-
-function casefold(value: string): string {
-  let folded = "";
-  for (const character of value.toLowerCase()) {
-    const codePoint = character.codePointAt(0)!;
-    const mapping = UNICODE_CASEFOLD_DATA[codePoint.toString(16).toUpperCase()];
-    folded += mapping === undefined ? character : foldCodePoints(mapping);
-  }
-  return folded;
-}
-
-function foldCodePoints(mapping: number | readonly number[]): string {
-  return typeof mapping === "number"
-    ? String.fromCodePoint(mapping)
-    : String.fromCodePoint(...mapping);
 }
 
 function hasUnpairedSurrogate(value: string): boolean {

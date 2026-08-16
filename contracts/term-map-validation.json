@@ -1,5 +1,4 @@
 {
-  "unicodeCasefoldVersion": "16.0.0",
   "maxCanonicalBytes": 1048576,
   "maxRawContentBytes": 1048576,
   "cases": [
@@ -26,26 +25,6 @@
     {
       "name": "duplicate-keys",
       "text": "{\"Source\":\"one\",\"Source\":\"two\"}",
-      "valid": false
-    },
-    {
-      "name": "unicode-sharp-s-folding",
-      "text": "{\"Straße\":\"one\",\"STRASSE\":\"two\"}",
-      "valid": false
-    },
-    {
-      "name": "unicode-long-s-folding",
-      "text": "{\"ſource\":\"one\",\"source\":\"two\"}",
-      "valid": false
-    },
-    {
-      "name": "unicode-combining-folding",
-      "text": "{\"ǰ\":\"one\",\"ǰ\":\"two\"}",
-      "valid": false
-    },
-    {
-      "name": "unicode-armenian-folding",
-      "text": "{\"և\":\"one\",\"եւ\":\"two\"}",
       "valid": false
     },
     {

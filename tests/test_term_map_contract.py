@@ -1,5 +1,4 @@
 import json
-import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +17,18 @@ CONTRACT = Path(__file__).parents[1] / "contracts" / "term-map-validation.json"
 CONTRACT_DATA = json.loads(CONTRACT.read_text(encoding="utf-8"))
 
 
-def test_python_casefold_data_matches_shared_unicode_version():
-    assert unicodedata.unidata_version == CONTRACT_DATA["unicodeCasefoldVersion"]
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"Straße":"one","STRASSE":"two"}',
+        '{"ſource":"one","source":"two"}',
+        '{"ǰ":"one","ǰ":"two"}',
+        '{"և":"one","եւ":"two"}',
+    ],
+)
+def test_python_casefold_rejects_unicode_collisions(text: str):
+    with pytest.raises(ServiceError, match="unique regardless of case"):
+        validate_term_map_entries(_object_pairs(text))
 
 
 def _case_text(case: dict[str, Any]) -> str:

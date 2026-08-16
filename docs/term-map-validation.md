@@ -19,4 +19,6 @@ The HTTP adapter also applies raw-byte limits before semantic validation:
 Raw limits protect request parsing and preserve the upload contract. The
 canonical limit protects the stored and translated Term map value. The shared
 vectors in `contracts/term-map-validation.json` cover both layers and are used
-by Python and TypeScript tests.
+by Python and TypeScript tests. The Web layer provides best-effort
+pre-validation with platform-native behavior; the backend remains authoritative
+for full Python `str.casefold()` semantics.
