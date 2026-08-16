@@ -16,7 +16,7 @@ from typing import Literal
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ..errors import ServiceError
 from ..extraction import Extraction, ExtractRequest
-from ..output import OutputPublicationError, OutputPublisher
+from ..output import OutputPublisher
 from ..term_maps import validate_term_map_content
 from ..translation import (
     TranslateRequest,
@@ -195,47 +195,58 @@ class JobExecution:
         term_map_path = _write_term_map(
             execution_input.work_directory, execution_input.term_map
         )
-        try:
-            result = Translation(
-                self._translator,
-                self._output,
-                publication_guard=self._publication_guard,
-                before_publication=self._check_publication_allowed,
-            ).translate(
-                TranslateRequest(
-                    subtitle_path=subtitle_path,
-                    target_language_code=execution_input.target_language_code,
-                    output_path=execution_input.output_path,
-                    work_directory=execution_input.work_directory,
-                    term_map_path=term_map_path,
-                    dynamic_terminology_enabled=execution_input.dynamic_terminology_enabled,
-                    subtitle_terminology_filter_enabled=(
-                        execution_input.subtitle_terminology_filter_enabled
-                    ),
-                    overwrite=execution_input.overwrite,
-                )
+        result = Translation(
+            self._translator,
+            self._output,
+            publication_guard=self._publication_guard,
+            before_publication=self._check_publication_allowed,
+            on_publication_failure=lambda error: self._publication_failed(
+                finalize, error
+            ),
+            after_publication=lambda: self._publication_succeeded(
+                execution_input.work_directory, finalize
+            ),
+        ).translate(
+            TranslateRequest(
+                subtitle_path=subtitle_path,
+                target_language_code=execution_input.target_language_code,
+                output_path=execution_input.output_path,
+                work_directory=execution_input.work_directory,
+                term_map_path=term_map_path,
+                dynamic_terminology_enabled=execution_input.dynamic_terminology_enabled,
+                subtitle_terminology_filter_enabled=(
+                    execution_input.subtitle_terminology_filter_enabled
+                ),
+                overwrite=execution_input.overwrite,
             )
-        except OutputPublicationError as error:
-            with self._publication_guard():
-                self._finalize_failure(finalize, error)
-            raise _PublicationFailureError(error) from error
-
-        with self._publication_guard():
-            try:
-                shutil.rmtree(execution_input.work_directory)
-            except OSError as error:
-                failure = ServiceError(
-                    "work_cleanup_failed",
-                    "Completed Job work data could not be cleaned up",
-                )
-                self._finalize_failure(finalize, failure)
-                raise _PublicationFailureError(failure) from error
-            self._finalize_success(finalize)
-            return result
+        )
+        return result
 
     def _check_publication_allowed(self) -> None:
         if self._should_stop():
             raise _ExecutionInterruptedError
+
+    def _publication_failed(
+        self, finalize: Callable[[JobExecutionOutcome], bool], error: ServiceError
+    ) -> None:
+        self._finalize_failure(finalize, error)
+        raise _PublicationFailureError(error)
+
+    def _publication_succeeded(
+        self,
+        work_directory: Path,
+        finalize: Callable[[JobExecutionOutcome], bool],
+    ) -> None:
+        try:
+            shutil.rmtree(work_directory)
+        except OSError as error:
+            failure = ServiceError(
+                "work_cleanup_failed",
+                "Completed Job work data could not be cleaned up",
+            )
+            self._finalize_failure(finalize, failure)
+            raise _PublicationFailureError(failure) from error
+        self._finalize_success(finalize)
 
     @staticmethod
     def _finalize_failure(

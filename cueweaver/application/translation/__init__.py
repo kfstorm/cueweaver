@@ -58,11 +58,15 @@ class Translation:
         *,
         publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
         before_publication: Callable[[], None] | None = None,
+        on_publication_failure: Callable[[ServiceError], None] | None = None,
+        after_publication: Callable[[], None] | None = None,
     ) -> None:
         self._translator = translator
         self._output = output
         self._publication_guard = publication_guard or nullcontext
         self._before_publication = before_publication or (lambda: None)
+        self._on_publication_failure = on_publication_failure or (lambda _error: None)
+        self._after_publication = after_publication or (lambda: None)
 
     def translate(self, request: TranslateRequest) -> TranslateResult:
         subtitle_format = matching_format(request.subtitle_path, request.output_path)
@@ -91,15 +95,20 @@ class Translation:
                     request.output_path, write, overwrite=request.overwrite
                 )
             except ServiceError as error:
-                raise OutputPublicationError(error) from error
+                publication_error = OutputPublicationError(error)
+                self._on_publication_failure(publication_error)
+                raise publication_error from error
             except Exception as error:
-                raise OutputPublicationError(
+                publication_error = OutputPublicationError(
                     ServiceError(
                         "output_write_failed",
                         "Output could not be published",
                         path=request.output_path,
                     )
-                ) from error
+                )
+                self._on_publication_failure(publication_error)
+                raise publication_error from error
+            self._after_publication()
         return TranslateResult(
             request.output_path, request.target_language_code, subtitle_format
         )
