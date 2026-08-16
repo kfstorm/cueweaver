@@ -59,7 +59,7 @@ The selected media directory must be writable when CueWeaver publishes a transla
 
 For another PySubtrans provider, set `PROVIDER` to that provider's name and pass the provider-specific environment variables documented by PySubtrans. CueWeaver reads these variables when it starts; changing them requires a restart.
 
-For `DeepSeek` and `Custom Server`, CueWeaver explicitly sends `thinking: {"type": "disabled"}` so DeepSeek V4 Flash uses non-thinking mode.
+For the `DeepSeek` provider, or for `Custom Server` when the configured model starts with `deepseek-`, CueWeaver explicitly sends `thinking: {"type": "disabled"}` so DeepSeek V4 Flash uses non-thinking mode.
 
 ## Use CueWeaver
 

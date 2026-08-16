@@ -20,8 +20,6 @@ from PySubtrans import (
 
 from .terminology import filter_terminology_for_text
 
-_THINKING_DISABLED_PROVIDERS = frozenset({"DeepSeek", "Custom Server"})
-
 
 class PySubtransTranslator:
     """Translate one explicit subtitle file using PySubtrans configuration."""
@@ -79,7 +77,7 @@ class PySubtransTranslator:
         engine = SubtitleTranslator(
             options, provider, resume=True, terminology_map=terminology_map
         )
-        if options.provider in _THINKING_DISABLED_PROVIDERS:
+        if _should_disable_thinking(options.provider, getattr(options, "model", None)):
             _disable_thinking(engine)
 
         def save_checkpoint(_sender: Any, **_kwargs: Any) -> None:
@@ -130,6 +128,16 @@ def _disable_thinking(engine: SubtitleTranslator) -> None:
         return request_body
 
     client._generate_request_body = generate_request_body
+
+
+def _should_disable_thinking(provider: str, model: str | None) -> bool:
+    if provider == "DeepSeek":
+        return True
+    return (
+        provider == "Custom Server"
+        and model is not None
+        and model.strip().casefold().startswith("deepseek-")
+    )
 
 
 def _build_terminology_seed(

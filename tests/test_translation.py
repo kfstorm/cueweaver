@@ -63,9 +63,16 @@ def _patch_translation_dependencies(
     monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", engine)
 
 
-@pytest.mark.parametrize("provider_name", ["DeepSeek", "Custom Server"])
-def test_translation_uses_the_explicit_work_directory_and_disables_thinking(
-    tmp_path, monkeypatch, provider_name
+@pytest.mark.parametrize(
+    ("provider_name", "model", "thinking_disabled"),
+    [
+        ("DeepSeek", "any-model", True),
+        ("Custom Server", "deepseek-v4-flash", True),
+        ("Custom Server", "unrelated-model", False),
+    ],
+)
+def test_translation_uses_provider_specific_thinking_policy(
+    tmp_path, monkeypatch, provider_name, model, thinking_disabled
 ):
     source = tmp_path / "source.srt"
     source.write_text(
@@ -106,7 +113,7 @@ def test_translation_uses_the_explicit_work_directory_and_disables_thinking(
 
     def init_options(**settings):
         captured["settings"] = settings
-        return SimpleNamespace(provider=provider_name)
+        return SimpleNamespace(provider=provider_name, model=model)
 
     def save_translation(path: str) -> None:
         Path(path).write_bytes(source.read_bytes())
@@ -133,9 +140,10 @@ def test_translation_uses_the_explicit_work_directory_and_disables_thinking(
         "project_file": True,
     }
     assert captured["terminology_map"] == {"Jon": "琼恩"}
-    assert captured["client"]._generate_request_body()["thinking"] == {
-        "type": "disabled"
-    }
+    request_body = captured["client"]._generate_request_body()
+    assert ("thinking" in request_body) is thinking_disabled
+    if thinking_disabled:
+        assert request_body["thinking"] == {"type": "disabled"}
     assert list(work_directory.glob("*/source.srt"))
 
 
