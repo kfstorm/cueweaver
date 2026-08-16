@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..errors import ServiceError
 from ..translation import (
     OutputPublisher,
     TranslateRequest,
@@ -64,17 +63,11 @@ def _write_term_map(
 ) -> Path | None:
     if term_map is None:
         return None
-    try:
-        work_directory.mkdir(parents=True, exist_ok=True)
-        term_map_path = work_directory / "term-map.json"
-        term_map_path.write_text(
-            json.dumps(dict(term_map), ensure_ascii=False), encoding="utf-8"
-        )
-    except OSError as error:
-        raise ServiceError(
-            "translation_failed",
-            "Translation failed",
-        ) from error
+    work_directory.mkdir(parents=True, exist_ok=True)
+    term_map_path = work_directory / "term-map.json"
+    term_map_path.write_text(
+        json.dumps(dict(term_map), ensure_ascii=False), encoding="utf-8"
+    )
     return term_map_path
 
 

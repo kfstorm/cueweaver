@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import queue
 import shutil
@@ -23,7 +24,7 @@ from ..errors import ServiceError
 from ..extraction import Extraction, ExtractRequest
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
-from ..translation import OutputPublisher, Translator
+from ..translation import OutputPublisher, TranslateRequest, Translation, Translator
 from .execution import JobExecution, JobExecutionInput
 from .model import (
     CURRENT_JOB_SCHEMA_VERSION,
@@ -729,7 +730,7 @@ class Jobs:
                         transition_status(record, "Translating", at=_timestamp())
                         self._write_record(job_id, record)
             if not embedded:
-                self._execute_translation(
+                self._execute_external(
                     job_id,
                     request,
                     self._media_root / str(request["subtitle_path"]),
@@ -737,8 +738,8 @@ class Jobs:
                 )
             else:
                 assert subtitle_path is not None
-                self._execute_translation(
-                    job_id, request, subtitle_path, work_directory
+                self._execute_embedded_translation(
+                    request, subtitle_path, work_directory, job_id
                 )
         except ServiceError as error:
             context = self._error_context(error.context)
@@ -777,7 +778,46 @@ class Jobs:
             )
             return
 
-    def _execute_translation(
+    def _execute_embedded_translation(
+        self,
+        request: dict[str, object],
+        subtitle_path: Path,
+        work_directory: Path,
+        job_id: str,
+    ) -> None:
+        term_map_path: Path | None = None
+        term_map = request.get("term_map")
+        if isinstance(term_map, dict):
+            content = term_map.get("content")
+            if not isinstance(content, dict):
+                raise ServiceError("invalid_term_map", "Job Term map is invalid")
+            work_directory.mkdir(parents=True, exist_ok=True)
+            term_map_path = work_directory / "term-map.json"
+            term_map_path.write_text(
+                json.dumps(content, ensure_ascii=False), encoding="utf-8"
+            )
+        Translation(
+            self._translator,
+            _JobOutputPublisher(
+                AtomicOutputPublisher(),
+                self._lifecycle_lock,
+                self._closed,
+                lambda: self._finish_published(job_id, work_directory),
+            ),
+        ).translate(
+            TranslateRequest(
+                subtitle_path,
+                str(request["target_language_code"]),
+                self._media_root / str(request["output_path"]),
+                work_directory,
+                term_map_path,
+                bool(request.get("dynamic_terminology_enabled", True)),
+                bool(request.get("subtitle_terminology_filter_enabled", True)),
+                request.get("output_conflict_policy") == "overwrite",
+            )
+        )
+
+    def _execute_external(
         self,
         job_id: str,
         request: dict[str, object],

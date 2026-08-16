@@ -113,23 +113,3 @@ def test_job_execution_preserves_translation_failure_as_service_error(
         )
 
     assert error.value.error_code == "translation_failed"
-
-
-def test_job_execution_rejects_unwritable_term_map_work_directory(tmp_path: Path):
-    subtitle = tmp_path / "Movie.en.srt"
-    subtitle.write_bytes(SRT)
-    work_directory = tmp_path / "work"
-    work_directory.write_text("not a directory", encoding="utf-8")
-
-    with pytest.raises(ServiceError) as error:
-        JobExecution(TranslatorFixture(), OutputFixture()).execute(
-            JobExecutionInput(
-                subtitle_path=subtitle,
-                target_language_code="zh-Hans",
-                output_path=tmp_path / "Movie.zh-Hans.srt",
-                work_directory=work_directory,
-                term_map={"Captain": "队长"},
-            )
-        )
-
-    assert error.value.error_code == "translation_failed"
