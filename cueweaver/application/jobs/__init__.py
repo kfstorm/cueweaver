@@ -891,6 +891,7 @@ class Jobs:
     ) -> bool:
         with self._lifecycle_lock:
             if self._closed.is_set():
+                self._finish_interrupted(job_id)
                 return False
             with self._lock:
                 record = copy_job_record(self._records[job_id])
@@ -1000,8 +1001,17 @@ class Jobs:
         self, job_id: str, status: str, error: dict[str, object] | None
     ) -> None:
         with self._lifecycle_lock:
-            if not self._closed.is_set():
+            if self._closed.is_set():
+                self._finish_interrupted(job_id)
+            else:
                 self._finish(job_id, status, error)
+
+    def _finish_interrupted(self, job_id: str) -> None:
+        with self._lock:
+            interrupted = _interrupted_record(self._records[job_id])
+            self._records[job_id] = interrupted
+            with suppress(OSError):
+                self._write_record(job_id, interrupted)
 
     def _mark_failed_after_worker_error(self, job_id: str, error: Exception) -> None:
         with self._lifecycle_lock:

@@ -3041,15 +3041,7 @@ def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     started = threading.Event()
     release = threading.Event()
 
-    class BlockingTranslator(FakeTranslator):
-        def translate(
-            self, source: Path, target_language: str, **kwargs: object
-        ) -> bytes:
-            started.set()
-            release.wait(timeout=5)
-            return super().translate(source, target_language, **kwargs)
-
-    jobs = Jobs(BlockingTranslator(), media_root, work_root)
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
     jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
     assert started.wait(timeout=5)
 
@@ -3061,6 +3053,30 @@ def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     release.set()
     shutdown.join(timeout=5)
     jobs._worker.join(timeout=5)
+
+
+def test_shutdown_marks_blocked_translation_interrupted_at_safe_point(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    jobs.close()
+    release.set()
+    jobs._worker.join(timeout=5)
+
+    interrupted = jobs.get(str(queued["id"]))
+    assert interrupted["status"] == "Interrupted"
+    assert interrupted["error"] == {
+        "code": "job_interrupted",
+        "message": "Job was interrupted when CueWeaver stopped",
+    }
+    assert not (media_root / "Movie.zh.srt").exists()
 
 
 def test_shutdown_after_publish_persists_completed_job(
