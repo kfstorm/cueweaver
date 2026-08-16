@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cueweaver.translation import PySubtransTranslator
+from cueweaver.translation import PySubtransTranslator, _disable_thinking
 
 
 class Event:
@@ -12,6 +12,18 @@ class Event:
 
     def disconnect(self, *_args, **_kwargs) -> None:
         pass
+
+
+def test_disable_thinking_adds_explicit_request_body_option():
+    class Client:
+        def _generate_request_body(self, *_args, **_kwargs):
+            return {"model": "deepseek-v4-flash", "stream": False}
+
+    engine = SimpleNamespace(client=Client())
+
+    _disable_thinking(engine)
+
+    assert engine.client._generate_request_body()["thinking"] == {"type": "disabled"}
 
 
 def _patch_translation_dependencies(
@@ -28,8 +40,9 @@ def _patch_translation_dependencies(
     monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", engine)
 
 
-def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("provider_name", ["DeepSeek", "Custom Server"])
+def test_translation_uses_the_explicit_work_directory_and_disables_thinking(
+    tmp_path, monkeypatch, provider_name
 ):
     source = tmp_path / "source.srt"
     source.write_text(
@@ -55,6 +68,10 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
         def __init__(self, _options, _provider, *, resume, terminology_map):
             captured["resume"] = resume
             captured["terminology_map"] = terminology_map
+            self.client = SimpleNamespace(
+                _generate_request_body=lambda *_args, **_kwargs: {"model": "test-model"}
+            )
+            captured["client"] = self.client
             self.aborted = False
             self.errors = []
             self.terminology_map = terminology_map
@@ -66,7 +83,7 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
 
     def init_options(**settings):
         captured["settings"] = settings
-        return SimpleNamespace(provider="Test Provider")
+        return SimpleNamespace(provider=provider_name)
 
     def save_translation(path: str) -> None:
         Path(path).write_bytes(source.read_bytes())
@@ -93,6 +110,9 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
         "project_file": True,
     }
     assert captured["terminology_map"] == {"Jon": "琼恩"}
+    assert captured["client"]._generate_request_body()["thinking"] == {
+        "type": "disabled"
+    }
     assert list(work_directory.glob("*/source.srt"))
 
 
