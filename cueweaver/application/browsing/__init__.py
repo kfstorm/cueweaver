@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, cast
-from xml.parsers import expat
+from typing import Literal
 
 from ..errors import ServiceError
+from .nfo import MAX_NFO_BYTES, NfoMetadata, parse_nfo
 
 MEDIA_EXTENSIONS = frozenset(
     {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".ts", ".m2ts"}
 )
-MAX_NFO_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -37,14 +35,6 @@ class BrowseEntry:
 class BrowseResult:
     path: Path
     entries: list[BrowseEntry] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class _NfoMetadata:
-    title: str
-    year: int | None = None
-    season: int | None = None
-    episode: int | None = None
 
 
 class MediaBrowser:
@@ -149,7 +139,7 @@ def _natural_key(name: str) -> tuple[tuple[int, str | int], ...]:
     )
 
 
-def _media_nfo(media: Path, root: Path) -> _NfoMetadata | None:
+def _media_nfo(media: Path, root: Path) -> NfoMetadata | None:
     candidates = (
         () if media.stem.casefold() == "tvshow" else (media.with_suffix(".nfo"),)
     )
@@ -160,88 +150,20 @@ def _media_nfo(media: Path, root: Path) -> _NfoMetadata | None:
     return None
 
 
-def _read_nfo(  # noqa: PLR0911
+def _read_nfo(
     path: Path,
     root: Path,
     expected_kind: Literal["media", "tvshow"],
-) -> _NfoMetadata | None:
+) -> NfoMetadata | None:
     try:
         if not path.resolve().is_relative_to(root):
             return None
         if not path.is_file() or path.stat().st_size > MAX_NFO_BYTES:
             return None
         content = path.read_bytes()
-        if len(content) > MAX_NFO_BYTES:
-            return None
-        _reject_unsafe_xml(content)
-        document = ET.fromstring(content)
-        values = {
-            element.tag.rsplit("}", 1)[-1].casefold(): (element.text or "").strip()
-            for element in document.iter()
-        }
-        kind = document.tag.rsplit("}", 1)[-1].casefold()
-        if expected_kind == "tvshow" and kind != "tvshow":
-            return None
-        if expected_kind == "media" and kind not in {"movie", "episodedetails"}:
-            return None
-
-        title = values.get("title", "")
-        if not title:
-            return None
-        if kind == "episodedetails":
-            season_text = values.get("season")
-            episode_text = values.get("episode")
-            season = int(season_text) if season_text else None
-            episode = int(episode_text) if episode_text else None
-            if (season is not None and season < 0) or (
-                episode is not None and episode < 0
-            ):
-                return None
-            return _NfoMetadata(title, season=season, episode=episode)
-
-        year = _nfo_year(values.get("year"))
-        if year is None:
-            dates = [
-                (value, parsed_year)
-                for key in ("premiered", "aired")
-                if (value := values.get(key))
-                and (parsed_year := _nfo_year(value)) is not None
-            ]
-            if not dates:
-                return None
-            year = max(dates)[1]
-        if year < 1:
-            return None
-        return _NfoMetadata(title, year=year)
-    except (
-        ET.ParseError,
-        expat.ExpatError,
-        LookupError,
-        OSError,
-        RuntimeError,
-        UnicodeError,
-        ValueError,
-    ):
+        return parse_nfo(content, expected_kind)
+    except (OSError, RuntimeError):
         return None
-
-
-def _nfo_year(value: str | None) -> int | None:
-    if value is None:
-        return None
-    match = re.match(r"^(\d{4})", value.strip())
-    return int(match.group(1)) if match is not None else None
-
-
-def _reject_unsafe_xml(content: bytes) -> None:
-    parser = expat.ParserCreate()
-
-    def reject(*_args: object) -> None:
-        raise ValueError("unsafe XML")
-
-    parser.StartDoctypeDeclHandler = cast(Any, reject)
-    parser.EntityDeclHandler = cast(Any, reject)
-    parser.ExternalEntityRefHandler = cast(Any, reject)
-    parser.Parse(content, True)
 
 
 __all__ = ["BrowseEntry", "BrowseRequest", "BrowseResult", "MediaBrowser"]
