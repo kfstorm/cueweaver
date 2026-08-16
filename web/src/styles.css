@@ -3,6 +3,8 @@
 :root {
   color: #172033;
   background: #f7f8fa;
+  --text-muted: #5f6b7a;
+  --text-subtle: #526073;
   font-family:
     "Geist",
     "Inter",
@@ -79,7 +81,7 @@ a {
   gap: 10px;
   border-radius: 6px;
   padding: 0 9px;
-  color: #667085;
+  color: var(--text-muted);
   font-size: 13px;
   font-weight: 520;
   text-decoration: none;
@@ -110,7 +112,7 @@ a {
   gap: 8px;
   margin-top: auto;
   padding: 10px 9px 2px;
-  color: #687386;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -165,7 +167,7 @@ a {
 .page-header p {
   max-width: 62ch;
   margin: 7px 0 0;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 13px;
   line-height: 1.55;
 }
@@ -237,7 +239,7 @@ a {
 }
 
 .step-index {
-  color: #8490a3;
+  color: var(--text-subtle);
   font-family: ui-monospace, "SFMono-Regular", monospace;
   font-size: 10px;
   line-height: 22px;
@@ -252,7 +254,7 @@ a {
 
 .step-content p {
   margin: 5px 0 16px;
-  color: #778195;
+  color: var(--text-subtle);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -260,7 +262,7 @@ a {
 .field-help {
   display: block;
   margin-top: 6px;
-  color: #778195;
+  color: var(--text-subtle);
   font-size: 12px;
 }
 
@@ -284,11 +286,6 @@ a {
 
 .step-content > label select {
   width: min(100%, 360px);
-}
-
-.step-content > label select:focus-visible {
-  outline: 2px solid #6366f1;
-  outline-offset: 1px;
 }
 
 .advanced-settings {
@@ -366,7 +363,7 @@ a {
 .output-name-stem,
 .output-name-extension {
   background: #f1f3f6;
-  color: #667085;
+  color: var(--text-muted);
 }
 
 .output-conflict-policy {
@@ -421,7 +418,6 @@ a {
 }
 
 .breadcrumbs button:focus-visible,
-.media-filter input:focus-visible,
 .media-entry:focus-visible {
   outline: 2px solid #6366f1;
   outline-offset: 2px;
@@ -431,7 +427,7 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #667085;
+  color: var(--text-muted);
 }
 
 .media-filter {
@@ -514,7 +510,7 @@ a {
 }
 
 .media-entry-copy small {
-  color: #667085;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -565,13 +561,13 @@ a {
 
 .subtitle-heading p {
   margin: 4px 0 0;
-  color: #667085;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
 .selection-note,
 .disabled-note {
-  color: #667085;
+  color: var(--text-muted);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -634,7 +630,7 @@ a {
 }
 
 .subtitle-copy small {
-  color: #667085;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -669,7 +665,6 @@ a {
   border-radius: 9px;
   background: white;
   padding: 12px 14px;
-  box-shadow: 0 8px 22px rgb(42 52 75 / 5%);
 }
 
 .submission-bar.queued {
@@ -704,7 +699,7 @@ a {
 
 .queue-success-heading p:last-child {
   margin: 6px 0 0;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -722,7 +717,7 @@ a {
 }
 
 .queue-success-summary dt {
-  color: #697386;
+  color: var(--text-muted);
   font-size: 10px;
   font-weight: 620;
   letter-spacing: 0.04em;
@@ -745,7 +740,7 @@ a {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #667085;
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -789,14 +784,14 @@ a {
 
 .job-item p {
   margin: 5px 0 0;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
 .job-id {
   display: block;
   margin-bottom: 4px;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -961,7 +956,7 @@ a {
 .job-output,
 .job-item-select time,
 .job-queue {
-  color: #697386;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -1020,7 +1015,7 @@ a {
 
 .job-detail-title p:last-child {
   margin: 5px 0 0;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -1065,7 +1060,7 @@ a {
 }
 
 .job-summary dt {
-  color: #697386;
+  color: var(--text-muted);
   font-size: 10px;
   font-weight: 620;
   letter-spacing: 0.04em;
@@ -1089,7 +1084,7 @@ a {
 
 .job-history-unavailable {
   margin: 10px 0 0;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -1113,7 +1108,7 @@ a {
 }
 
 .job-status-history > li > div > span {
-  color: #697386;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -1131,7 +1126,7 @@ a {
 
 .job-status-history dt,
 .job-status-history dd {
-  color: #697386;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -1184,7 +1179,7 @@ a {
   place-items: center;
   align-content: center;
   gap: 8px;
-  color: #697386;
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -1267,8 +1262,7 @@ a {
   border: 1px solid #dde2ea;
   border-radius: 10px;
   background: #fff;
-  color: #667085;
-  box-shadow: 0 5px 14px rgb(42 52 75 / 5%);
+  color: var(--text-muted);
 }
 
 .empty-state h2 {
@@ -1378,6 +1372,16 @@ a {
   font-weight: 400;
 }
 
+.form-control:focus-visible,
+.media-filter input:focus-visible,
+select:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
 .term-map-upload input {
   min-height: 36px;
 }
@@ -1386,12 +1390,6 @@ a {
   font-family: ui-monospace, monospace;
   font-size: 12px;
   line-height: 1.55;
-}
-.term-map-upload input:focus-visible,
-.term-map-upload textarea:focus-visible,
-.search-field .form-control:focus-visible {
-  outline: 2px solid #6366f1;
-  outline-offset: 1px;
 }
 .field-help {
   margin: -6px 0 0;
@@ -1587,7 +1585,7 @@ a {
 }
 .term-table-wrap th {
   background: #f8f9fb;
-  color: #697386;
+  color: var(--text-muted);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.06em;

@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 const routes = [
@@ -260,6 +261,48 @@ test("mobile shell renders every product route", async ({ page }) => {
   await expectResponsiveShell(page, true);
 });
 
+test.describe("accessibility regressions", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} product routes have no axe violations`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+
+      for (const [path, title] of routes) {
+        await page.goto(path);
+        await expect(
+          page.getByRole("heading", { name: title, exact: true }),
+        ).toBeVisible();
+        const results = await new AxeBuilder({ page }).analyze();
+        expect(results.violations, `${path} accessibility violations`).toEqual([]);
+      }
+    });
+
+    test(`${viewport.name} active translation configuration has no axe violations`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/translate");
+
+      await page.getByRole("button", { name: "Select Example movie" }).click();
+      await page
+        .getByRole("button", {
+          name: /Select external subtitle en \(Example\.en\.srt\)/,
+        })
+        .click();
+      await expect(
+        page.getByRole("combobox", { name: "Common target language" }),
+      ).toBeEnabled();
+
+      const results = await new AxeBuilder({ page }).analyze();
+      expect(results.violations, "active translation configuration violations").toEqual(
+        [],
+      );
+    });
+  }
+});
+
 test("mobile primary actions meet the touch target", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/translate");
@@ -483,7 +526,12 @@ test("Term map mutations update the browser state", async ({ page }) => {
   expect(
     (await page.getByRole("button", { name: "Save name" }).boundingBox())?.height,
   ).toBeGreaterThanOrEqual(44);
-  await expect(page.getByText(/Updated 2026-08-13T12:00:00Z/)).toBeVisible();
+  const updated = page.locator(
+    '.term-map-detail time[datetime="2026-08-13T12:00:00Z"]',
+  );
+  await expect(updated).toBeVisible();
+  await expect(updated).toContainText("2026");
+  await expect(updated).not.toHaveText("2026-08-13T12:00:00Z");
   await page.getByLabel("New Term map name").fill("People");
   await page.getByRole("button", { name: "Save name" }).click();
   await expect(page.getByRole("heading", { name: "People" })).toBeVisible();

@@ -38,7 +38,7 @@ import {
   type SubtitleCandidate,
   type UnsupportedSubtitleCandidate,
 } from "./browse";
-import { cn } from "./lib/utils";
+import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
 import { jobRecordAttention, useProductStatus } from "./status";
 import { useCreateJob, useJobs, useJobNotifications } from "./jobs";
 import { JobNotificationRegion, JobsPage } from "./job-history";
@@ -255,7 +255,10 @@ function Translate() {
           )}
         </div>
       </section>
-      <section className="workflow-panel muted" aria-labelledby="configure-title">
+      <section
+        className={cn("workflow-panel", selectedCandidate === undefined && "muted")}
+        aria-labelledby="configure-title"
+      >
         <div className="step-index">02</div>
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
@@ -1253,7 +1256,12 @@ function TermMapsPage() {
                 <span>
                   {map.entry_count} {map.entry_count === 1 ? "entry" : "entries"}
                 </span>
-                <time dateTime={map.updated_at}>{map.updated_at}</time>
+                <time
+                  dateTime={map.updated_at}
+                  title={formatLocalTimestamp(map.updated_at)}
+                >
+                  {formatRelativeTimestamp(map.updated_at)}
+                </time>
               </button>
             ))}
           </div>
@@ -1283,7 +1291,7 @@ function TermMapsPage() {
                 <p>
                   {selected.data.entry_count} entries · Updated{" "}
                   <time dateTime={selected.data.updated_at}>
-                    {selected.data.updated_at}
+                    {formatLocalTimestamp(selected.data.updated_at)}
                   </time>
                 </p>
               )}
