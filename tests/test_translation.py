@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PySubtrans.Options import SettingsType
+from PySubtrans.Providers.Clients.CustomClient import CustomClient
 
 from cueweaver.translation import PySubtransTranslator, _disable_thinking
 
@@ -15,15 +17,36 @@ class Event:
 
 
 def test_disable_thinking_adds_explicit_request_body_option():
-    class Client:
-        def _generate_request_body(self, *_args, **_kwargs):
-            return {"model": "deepseek-v4-flash", "stream": False}
-
-    engine = SimpleNamespace(client=Client())
+    client = CustomClient(
+        SettingsType(
+            {
+                "server_address": "http://127.0.0.1:1234",
+                "endpoint": "/v1/chat/completions",
+                "instructions": "Translate the subtitles.",
+                "supports_conversation": True,
+                "model": "deepseek-v4-flash",
+            }
+        )
+    )
+    request = SimpleNamespace(
+        prompt=SimpleNamespace(
+            messages=[{"role": "user", "content": "Translate this."}],
+            content="Translate this.",
+        )
+    )
+    engine = SimpleNamespace(client=client)
 
     _disable_thinking(engine)
 
-    assert engine.client._generate_request_body()["thinking"] == {"type": "disabled"}
+    request_body = engine.client._generate_request_body(request, 0.0)
+
+    assert request_body == {
+        "temperature": 0.0,
+        "stream": False,
+        "model": "deepseek-v4-flash",
+        "messages": [{"role": "user", "content": "Translate this."}],
+        "thinking": {"type": "disabled"},
+    }
 
 
 def _patch_translation_dependencies(
