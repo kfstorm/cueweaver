@@ -1010,6 +1010,7 @@ class Jobs:
         with self._lock:
             interrupted = _interrupted_record(self._records[job_id])
             self._records[job_id] = interrupted
+            # A failed write is recovered on the next startup without blocking shutdown.
             with suppress(OSError):
                 self._write_record(job_id, interrupted)
 

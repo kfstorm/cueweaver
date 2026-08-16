@@ -112,6 +112,18 @@ class FalsyRecordStore:
         del self.records[job_id]
 
 
+class FailOnceOnInterruptedStore(FileJobRecordStore):
+    def __init__(self, jobs_root: Path):
+        super().__init__(jobs_root)
+        self.failed = False
+
+    def write(self, job_id: str, record: dict[str, object]) -> None:
+        if record.get("status") == "Interrupted" and not self.failed:
+            self.failed = True
+            raise OSError("record unavailable")
+        super().write(job_id, record)
+
+
 def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -3077,6 +3089,37 @@ def test_shutdown_marks_blocked_translation_interrupted_at_safe_point(
         "message": "Job was interrupted when CueWeaver stopped",
     }
     assert not (media_root / "Movie.zh.srt").exists()
+
+
+def test_shutdown_recovers_after_interrupted_record_write_failure(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    store = FailOnceOnInterruptedStore(work_root / "jobs")
+    jobs = Jobs(
+        FakeTranslator(started=started, release=release),
+        media_root,
+        work_root,
+        record_store=store,
+    )
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    jobs.close()
+    release.set()
+    jobs._worker.join(timeout=5)
+
+    assert jobs.get(str(queued["id"]))["status"] == "Interrupted"
+    persisted = json.loads(
+        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["status"] == "Translating"
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
+    assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
+    restarted.close()
 
 
 def test_shutdown_after_publish_persists_completed_job(
