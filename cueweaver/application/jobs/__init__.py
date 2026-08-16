@@ -765,9 +765,7 @@ class Jobs:
                     target_language_code=str(request["target_language_code"]),
                     output_path=self._media_root / str(request["output_path"]),
                     work_directory=work_directory,
-                    translation_directory=self._work.ensure_translation_directory(
-                        job_id
-                    ),
+                    translation_directory=self._translation_directory(job_id),
                     term_map=term_map,
                     dynamic_terminology_enabled=bool(
                         request.get("dynamic_terminology_enabled", True)
@@ -1015,6 +1013,12 @@ class Jobs:
                 code,
                 message,
             ) from error
+
+    def _translation_directory(self, job_id: str) -> Path:
+        try:
+            return self._work.ensure_translation_directory(job_id)
+        except ValueError as error:
+            raise ServiceError("invalid_work_directory", str(error)) from error
 
 
 def _source_format(value: str | None) -> str:

@@ -57,20 +57,20 @@ class WorkRoot:
         )
 
     def ensure_translation_directory(self, job_id: str) -> Path:
-        directory = self.translation_directory(job_id)
-        try:
-            directory.mkdir(parents=True, exist_ok=True)
-        except OSError as error:
-            raise ValueError("Job translation directory cannot be created") from error
-        return self.translation_directory(job_id)
+        return self._ensure_directory(
+            self.translation_directory(job_id), "Job translation directory"
+        )
 
     def ensure_term_maps_directory(self) -> Path:
-        directory = self._safe_directory(self.term_maps_directory, "Term map directory")
+        return self._ensure_directory(self.term_maps_directory, "Term map directory")
+
+    def _ensure_directory(self, directory: Path, label: str) -> Path:
+        directory = self._safe_directory(directory, label)
         try:
             directory.mkdir(parents=True, exist_ok=True)
         except OSError as error:
-            raise ValueError("Term map directory cannot be created") from error
-        return self._safe_directory(directory, "Term map directory")
+            raise ValueError(f"{label} cannot be created") from error
+        return self._safe_directory(directory, label)
 
     def _safe_directory(self, directory: Path, label: str) -> Path:
         if directory.is_symlink():

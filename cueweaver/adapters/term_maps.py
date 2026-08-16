@@ -184,7 +184,13 @@ class FileTermMapStore:
         with self._thread_lock:
             try:
                 if self._work_root is not None:
-                    self._directory = self._work_root.ensure_term_maps_directory()
+                    try:
+                        self._directory = self._work_root.ensure_term_maps_directory()
+                    except ValueError as error:
+                        raise ServiceError(
+                            "term_maps_unavailable",
+                            "Term map storage cannot be opened",
+                        ) from error
                 self._directory.mkdir(parents=True, exist_ok=True)
                 lock_file = self._lock_path.open("a+")
             except OSError as error:
