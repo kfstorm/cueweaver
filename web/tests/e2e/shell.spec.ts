@@ -278,6 +278,28 @@ test.describe("accessibility regressions", () => {
         expect(results.violations, `${path} accessibility violations`).toEqual([]);
       }
     });
+
+    test(`${viewport.name} active translation configuration has no axe violations`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/translate");
+
+      await page.getByRole("button", { name: "Select Example movie" }).click();
+      await page
+        .getByRole("button", {
+          name: /Select external subtitle en \(Example\.en\.srt\)/,
+        })
+        .click();
+      await expect(
+        page.getByRole("combobox", { name: "Common target language" }),
+      ).toBeEnabled();
+
+      const results = await new AxeBuilder({ page }).analyze();
+      expect(results.violations, "active translation configuration violations").toEqual(
+        [],
+      );
+    });
   }
 });
 

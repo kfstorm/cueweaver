@@ -255,7 +255,10 @@ function Translate() {
           )}
         </div>
       </section>
-      <section className="workflow-panel muted" aria-labelledby="configure-title">
+      <section
+        className={cn("workflow-panel", selectedCandidate === undefined && "muted")}
+        aria-labelledby="configure-title"
+      >
         <div className="step-index">02</div>
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
