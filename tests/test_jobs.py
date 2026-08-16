@@ -3258,6 +3258,7 @@ def test_shutdown_after_publish_persists_completed_job(
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     published = threading.Event()
     release = threading.Event()
+    close_attempted = threading.Event()
 
     class BlockingPublisher(AtomicOutputPublisher):
         def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
@@ -3265,22 +3266,42 @@ def test_shutdown_after_publish_persists_completed_job(
             published.set()
             release.wait(timeout=5)
 
+    class InstrumentedLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.observe_acquire = False
+
+        def acquire(self, *args, **kwargs) -> bool:
+            if self.observe_acquire:
+                close_attempted.set()
+            return self._lock.acquire(*args, **kwargs)
+
+        def release(self) -> None:
+            self._lock.release()
+
+        def __enter__(self) -> "InstrumentedLock":
+            self.acquire()
+            return self
+
+        def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+            self.release()
+
     monkeypatch.setattr(
         "cueweaver.application.jobs.AtomicOutputPublisher", BlockingPublisher
     )
     jobs = Jobs(FakeTranslator(), media_root, work_root)
+    lifecycle_lock = InstrumentedLock()
+    jobs._lifecycle_lock = lifecycle_lock
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
     assert published.wait(timeout=5)
-
-    close_started = threading.Event()
+    lifecycle_lock.observe_acquire = True
 
     def close_jobs() -> None:
-        close_started.set()
         jobs.close()
 
     close_thread = threading.Thread(target=close_jobs)
     close_thread.start()
-    assert close_started.wait(timeout=5)
+    assert close_attempted.wait(timeout=5)
     assert close_thread.is_alive()
 
     release.set()
