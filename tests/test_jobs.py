@@ -1676,7 +1676,9 @@ def test_retry_restores_terminal_record_when_directory_sync_fails(
             raise OSError("directory sync failed")
         original_fsync(file_descriptor)
 
-    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", fail_directory_sync)
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
+    )
 
     with pytest.raises(OSError):
         jobs.retry(str(queued["id"]))
@@ -1792,6 +1794,48 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
     ]
     assert (media_root / f"Movie.zh-Hans.{source_format}").read_bytes() == SRT
     assert not (work_root / "jobs" / str(queued["id"])).exists()
+    jobs.close()
+
+
+def test_embedded_phase_persistence_failure_marks_worker_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, media, _subtitle = make_roots(tmp_path)
+    media_adapter = MediaExtractorFixture([{"index": 3, "codec_name": "subrip"}])
+    jobs = Jobs(
+        FakeTranslator(),
+        media_root,
+        work_root,
+        extraction=Extraction(media_adapter, AtomicOutputPublisher()),
+    )
+    original_write = Jobs._write_record
+    failed_once = False
+
+    def fail_translating_write(
+        current_jobs: Jobs, job_id: str, record: dict[str, object]
+    ) -> None:
+        nonlocal failed_once
+        if not failed_once and record["status"] == "Translating":
+            failed_once = True
+            raise OSError("record unavailable")
+        original_write(current_jobs, job_id, record)
+
+    monkeypatch.setattr(Jobs, "_write_record", fail_translating_write)
+    queued = jobs.create(
+        CreateJobRequest(
+            media.name,
+            None,
+            "zh-Hans",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"]["code"] == "job_worker_failed"
+    assert jobs.get(str(queued["id"]))["status"] == "Failed"
+    assert len(media_adapter.extract_calls) == 1
     jobs.close()
 
 
@@ -2425,7 +2469,9 @@ def test_delete_record_sync_failure_restores_history_record(
     def fail_directory_sync(_file_descriptor: int) -> None:
         raise OSError("directory sync failed")
 
-    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", fail_directory_sync)
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
+    )
 
     with pytest.raises(ServiceError) as raised:
         jobs.delete(str(queued["id"]))
@@ -2434,7 +2480,7 @@ def test_delete_record_sync_failure_restores_history_record(
     assert record_path.exists()
     assert jobs.get(str(queued["id"]))["status"] == "Completed"
     assert not work_directory.exists()
-    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", original_fsync)
+    monkeypatch.setattr("cueweaver.application.jobs.store.os.fsync", original_fsync)
     jobs.close()
 
 
