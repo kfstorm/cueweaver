@@ -774,6 +774,15 @@ def wait_for_status_from_jobs(
     pytest.fail(f"Job did not reach {expected}")
 
 
+def finish_shutdown(
+    jobs: Jobs, job_id: str, release: threading.Event
+) -> dict[str, object]:
+    jobs.close()
+    release.set()
+    jobs._worker.join(timeout=5)
+    return jobs.get(job_id)
+
+
 def create_queued_job(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
@@ -3078,16 +3087,70 @@ def test_shutdown_marks_blocked_translation_interrupted_at_safe_point(
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
     assert started.wait(timeout=5)
 
-    jobs.close()
-    release.set()
-    jobs._worker.join(timeout=5)
-
-    interrupted = jobs.get(str(queued["id"]))
+    interrupted = finish_shutdown(jobs, str(queued["id"]), release)
     assert interrupted["status"] == "Interrupted"
     assert interrupted["error"] == {
         "code": "job_interrupted",
         "message": "Job was interrupted when CueWeaver stopped",
     }
+    assert not (media_root / "Movie.zh.srt").exists()
+
+
+def test_shutdown_marks_failed_blocked_translation_interrupted(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    jobs = Jobs(
+        FakeTranslator(
+            started=started,
+            release=release,
+            error=RuntimeError("translation failed after stop"),
+        ),
+        media_root,
+        work_root,
+    )
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
+        "Interrupted"
+    )
+
+
+def test_shutdown_marks_blocked_extraction_interrupted_before_translation(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    extractor = MediaExtractorFixture(
+        [{"index": 3, "codec_name": "subrip"}],
+        started=started,
+        release=release,
+    )
+    translator = FakeTranslator()
+    jobs = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=Extraction(extractor, AtomicOutputPublisher()),
+    )
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+    assert started.wait(timeout=5)
+
+    interrupted = finish_shutdown(jobs, str(queued["id"]), release)
+    assert interrupted["status"] == "Interrupted"
+    assert translator.sources == []
     assert not (media_root / "Movie.zh.srt").exists()
 
 
@@ -3107,11 +3170,9 @@ def test_shutdown_recovers_after_interrupted_record_write_failure(
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
     assert started.wait(timeout=5)
 
-    jobs.close()
-    release.set()
-    jobs._worker.join(timeout=5)
-
-    assert jobs.get(str(queued["id"]))["status"] == "Interrupted"
+    assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
+        "Interrupted"
+    )
     persisted = json.loads(
         (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
     )

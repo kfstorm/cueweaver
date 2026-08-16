@@ -7,8 +7,8 @@ import shutil
 import tempfile
 import threading
 import uuid
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,15 +21,14 @@ from ..errors import ServiceError
 from ..extraction import Extraction
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
-from ..translation import (
-    OutputPublisher,
-    Translator,
-)
+from ..translation import Translator
 from .execution import (
     EmbeddedExecutionInput,
     JobExecution,
     JobExecutionInput,
+    JobExecutionOutcome,
     JobExecutionProgress,
+    JobExecutionProgressPersistenceError,
 )
 from .model import (
     CURRENT_JOB_SCHEMA_VERSION,
@@ -77,18 +76,13 @@ class TermMapResolver(Protocol):
     def get(self, term_map_id: str) -> TermMapDetail: ...
 
 
-class _EmbeddedExecutionOptions(TypedDict):
+class _ExecutionOptions(TypedDict):
     target_language_code: str
     output_path: Path
-    work_directory: Path
     term_map: dict[str, str] | None
     dynamic_terminology_enabled: bool
     subtitle_terminology_filter_enabled: bool
     overwrite: bool
-
-
-class _EmbeddedProgressPersistenceError(Exception):
-    pass
 
 
 class Jobs:
@@ -723,15 +717,13 @@ class Jobs:
         if prepared is None:
             return
         request, embedded, work_directory, record = prepared
-        extracting = embedded
         try:
             work_directory = self._job_work_directory(job_id)
             if not embedded:
-                self._execute_external(
-                    job_id,
+                outcome = self._run_execution(
                     request,
-                    self._media_root / str(request["subtitle_path"]),
                     work_directory,
+                    subtitle_path=self._media_root / str(request["subtitle_path"]),
                 )
             else:
                 stream_index = request.get("stream_index")
@@ -749,72 +741,115 @@ class Jobs:
                 )
 
                 def on_progress(progress: JobExecutionProgress) -> bool:
-                    nonlocal extracting
                     continued = self._persist_embedded_progress(job_id, progress)
-                    if continued:
-                        extracting = False
                     return continued
 
-                result = JobExecution(
-                    self._translator,
-                    self._job_output_publisher(job_id, work_directory),
-                    extraction=self._extraction,
-                ).execute(
-                    JobExecutionInput(
-                        subtitle_path=None,
-                        **self._embedded_execution_options(request, work_directory),
-                        embedded=embedded_details,
-                    ),
+                outcome = self._run_execution(
+                    request,
+                    work_directory,
+                    subtitle_path=None,
+                    embedded=embedded_details,
                     on_progress=on_progress,
                 )
-                if result is None:
-                    return
-        except _EmbeddedProgressPersistenceError:
+            self._finish_execution(job_id, outcome, request, embedded, work_directory)
+        except JobExecutionProgressPersistenceError:
             raise
         except ServiceError as error:
+            self._finish_execution(
+                job_id,
+                JobExecutionOutcome("Failed", error=error),
+                request,
+                embedded,
+                work_directory,
+            )
+        except Exception:
+            self._finish_execution(
+                job_id,
+                JobExecutionOutcome(
+                    "Failed",
+                    error=ServiceError(
+                        "extraction_failed" if embedded else "translation_failed",
+                        "Extraction failed" if embedded else "Translation failed",
+                    ),
+                ),
+                request,
+                embedded,
+                work_directory,
+            )
+
+    def _run_execution(
+        self,
+        request: dict[str, object],
+        work_directory: Path,
+        *,
+        subtitle_path: Path | None,
+        embedded: EmbeddedExecutionInput | None = None,
+        on_progress: Callable[[JobExecutionProgress], bool] | None = None,
+    ) -> JobExecutionOutcome:
+        options = self._execution_options(request)
+        return JobExecution(
+            self._translator,
+            AtomicOutputPublisher(),
+            extraction=self._extraction,
+            publication_guard=self._publication_guard,
+            should_stop=self._closed.is_set,
+        ).execute(
+            JobExecutionInput(
+                subtitle_path=subtitle_path,
+                target_language_code=options["target_language_code"],
+                output_path=options["output_path"],
+                work_directory=work_directory,
+                term_map=options["term_map"],
+                dynamic_terminology_enabled=options["dynamic_terminology_enabled"],
+                subtitle_terminology_filter_enabled=options[
+                    "subtitle_terminology_filter_enabled"
+                ],
+                overwrite=options["overwrite"],
+                embedded=embedded,
+            ),
+            on_progress=on_progress,
+        )
+
+    @contextmanager
+    def _publication_guard(self) -> Iterator[None]:
+        with self._lifecycle_lock:
+            yield
+
+    def _finish_execution(
+        self,
+        job_id: str,
+        outcome: JobExecutionOutcome,
+        request: dict[str, object],
+        embedded: bool,
+        work_directory: Path,
+    ) -> None:
+        with self._lifecycle_lock:
+            if outcome.status == "Completed":
+                self._finish(job_id, "Completed", None)
+                return
+            if outcome.status == "Interrupted":
+                self._finish_interrupted(job_id)
+                return
+            if self._closed.is_set() and not outcome.preserve_failure:
+                self._finish_interrupted(job_id)
+                return
+            error = outcome.error
+            assert error is not None
             context = self._error_context(error.context)
             if embedded:
                 context = _embedded_error_context(
                     context, request, self._media_root, work_directory
                 )
-            self._finish_if_active(
+            self._finish(
                 job_id,
                 "Failed",
-                {
-                    "code": error.error_code,
-                    "message": error.message,
-                    **context,
-                },
+                {"code": error.error_code, "message": error.message, **context},
             )
-            return
 
-        except Exception:
-            self._finish_if_active(
-                job_id,
-                "Failed",
-                {
-                    "code": "extraction_failed" if extracting else "translation_failed",
-                    "message": "Extraction failed"
-                    if extracting
-                    else "Translation failed",
-                    **(
-                        _embedded_error_context(
-                            {}, request, self._media_root, work_directory
-                        )
-                        if embedded
-                        else {}
-                    ),
-                },
-            )
-            return
-
-    def _embedded_execution_options(
-        self, request: dict[str, object], work_directory: Path
-    ) -> _EmbeddedExecutionOptions:
+    def _execution_options(self, request: dict[str, object]) -> _ExecutionOptions:
         return {
             "target_language_code": str(request["target_language_code"]),
             "output_path": self._media_root / str(request["output_path"]),
-            "work_directory": work_directory,
             "term_map": self._embedded_term_map(request),
             "dynamic_terminology_enabled": bool(
                 request.get("dynamic_terminology_enabled", True)
@@ -834,64 +869,11 @@ class Jobs:
             raise ServiceError("invalid_term_map", "Job Term map is invalid")
         return cast(dict[str, str], content)
 
-    def _execute_external(
-        self,
-        job_id: str,
-        request: dict[str, object],
-        subtitle_path: Path,
-        work_directory: Path,
-    ) -> None:
-        term_map = request.get("term_map")
-        term_map_content: dict[str, str] | None = None
-        if isinstance(term_map, dict):
-            content = term_map.get("content")
-            if not isinstance(content, dict):
-                raise ServiceError("invalid_term_map", "Job Term map is invalid")
-            if not all(
-                isinstance(source, str) and isinstance(target, str)
-                for source, target in content.items()
-            ):
-                raise ServiceError("invalid_term_map", "Job Term map is invalid")
-            term_map_content = dict(content)
-        output = _JobOutputPublisher(
-            AtomicOutputPublisher(),
-            self._lifecycle_lock,
-            self._closed,
-            lambda: self._finish_published(job_id, work_directory),
-        )
-        JobExecution(self._translator, output).execute(
-            JobExecutionInput(
-                subtitle_path=subtitle_path,
-                target_language_code=str(request["target_language_code"]),
-                output_path=self._media_root / str(request["output_path"]),
-                work_directory=work_directory,
-                term_map=term_map_content,
-                dynamic_terminology_enabled=bool(
-                    request.get("dynamic_terminology_enabled", True)
-                ),
-                subtitle_terminology_filter_enabled=bool(
-                    request.get("subtitle_terminology_filter_enabled", True)
-                ),
-                overwrite=request.get("output_conflict_policy") == "overwrite",
-            )
-        )
-
-    def _job_output_publisher(
-        self, job_id: str, work_directory: Path
-    ) -> _JobOutputPublisher:
-        return _JobOutputPublisher(
-            AtomicOutputPublisher(),
-            self._lifecycle_lock,
-            self._closed,
-            lambda: self._finish_published(job_id, work_directory),
-        )
-
     def _persist_embedded_progress(
         self, job_id: str, progress: JobExecutionProgress
     ) -> bool:
         with self._lifecycle_lock:
             if self._closed.is_set():
-                self._finish_interrupted(job_id)
                 return False
             with self._lock:
                 record = copy_job_record(self._records[job_id])
@@ -906,7 +888,7 @@ class Jobs:
                 try:
                     self._write_record(job_id, record)
                 except OSError as error:
-                    raise _EmbeddedProgressPersistenceError from error
+                    raise JobExecutionProgressPersistenceError from error
                 self._records[job_id] = record
         return True
 
@@ -969,23 +951,6 @@ class Jobs:
                 safe[key] = path.name
         return safe
 
-    def _finish_published(self, job_id: str, work_directory: Path) -> None:
-        """Commit the published output while holding the lifecycle lock."""
-        try:
-            self._job_work_directory(job_id)
-            shutil.rmtree(work_directory)
-        except OSError:
-            self._finish(
-                job_id,
-                "Failed",
-                {
-                    "code": "work_cleanup_failed",
-                    "message": "Completed Job work data could not be cleaned up",
-                },
-            )
-            return
-        self._finish(job_id, "Completed", None)
-
     def _finish(
         self, job_id: str, status: str, error: dict[str, object] | None
     ) -> None:
@@ -996,15 +961,6 @@ class Jobs:
             record["finished_at"] = finished_at
             record["error"] = error
             self._write_record(job_id, record)
-
-    def _finish_if_active(
-        self, job_id: str, status: str, error: dict[str, object] | None
-    ) -> None:
-        with self._lifecycle_lock:
-            if self._closed.is_set():
-                self._finish_interrupted(job_id)
-            else:
-                self._finish(job_id, status, error)
 
     def _finish_interrupted(self, job_id: str) -> None:
         with self._lock:
@@ -1120,35 +1076,6 @@ def _interrupted_record(record: dict[str, object]) -> dict[str, object]:
         "message": "Job was interrupted when CueWeaver stopped",
     }
     return interrupted
-
-
-class _JobOutputPublisher:
-    def __init__(
-        self,
-        publisher: OutputPublisher,
-        lifecycle_lock: threading.Lock,
-        closed: threading.Event,
-        on_published: Callable[[], None],
-    ) -> None:
-        self._publisher = publisher
-        self._lifecycle_lock = lifecycle_lock
-        self._closed = closed
-        self._on_published = on_published
-
-    def publish(
-        self,
-        output_path: Path,
-        write: Callable[[Path], None],
-        *,
-        overwrite: bool = False,
-    ) -> None:
-        with self._lifecycle_lock:
-            if self._closed.is_set():
-                raise ServiceError(
-                    "job_interrupted", "Job was interrupted when CueWeaver stopped"
-                )
-            self._publisher.publish(output_path, write, overwrite=overwrite)
-            self._on_published()
 
 
 def _timestamp() -> str:
