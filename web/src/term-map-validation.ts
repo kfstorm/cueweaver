@@ -1,8 +1,10 @@
 export const MAX_TERM_MAP_BYTES = 1024 * 1024;
+export const MAX_TERM_MAP_UPLOAD_BYTES = MAX_TERM_MAP_BYTES;
 
 export interface TermMapContentValidation {
   content: Record<string, string> | null;
   entryCount: number;
+  rawByteLength: number;
   byteLength: number;
   error: string | null;
 }
@@ -35,7 +37,10 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     if (!source) {
       return invalidTermMapContent("Source keys must be non-empty strings.");
     }
-    const foldedSource = casefold(source);
+    if (hasUnpairedSurrogate(source)) {
+      return invalidTermMapContent("Term map must contain valid Unicode strings.");
+    }
+    const foldedSource = source.toLowerCase();
     if (foldedSources.has(foldedSource)) {
       return invalidTermMapContent(
         "Source keys must be unique regardless of case; remove the duplicate mapping.",
@@ -52,6 +57,9 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     if (typeof target !== "string" || !target) {
       return invalidTermMapContent("Target values must be non-empty strings.");
     }
+    if (hasUnpairedSurrogate(target)) {
+      return invalidTermMapContent("Term map must contain valid Unicode strings.");
+    }
     Object.defineProperty(content, source, {
       configurable: true,
       enumerable: true,
@@ -60,49 +68,41 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     });
   }
 
-  const byteLength = new TextEncoder().encode(text).byteLength;
+  const rawByteLength = new TextEncoder().encode(text).byteLength;
+  if (rawByteLength > MAX_TERM_MAP_UPLOAD_BYTES) {
+    return invalidTermMapContent("Term map must be at most 1 MiB.");
+  }
+  const byteLength = new TextEncoder().encode(JSON.stringify(content)).byteLength;
   if (byteLength > MAX_TERM_MAP_BYTES) {
     return invalidTermMapContent("Term map must be at most 1 MiB.");
   }
-  return { content, entryCount: entries.length, byteLength, error: null };
+  return {
+    content,
+    entryCount: entries.length,
+    rawByteLength,
+    byteLength,
+    error: null,
+  };
 }
 
 function invalidTermMapContent(error: string): TermMapContentValidation {
-  return { content: null, entryCount: 0, byteLength: 0, error };
+  return { content: null, entryCount: 0, rawByteLength: 0, byteLength: 0, error };
 }
 
-const CASEFOLD_EXCEPTIONS: ReadonlyMap<number, string> = new Map([
-  [0x00b5, "\u03bc"],
-  [0x00df, "ss"],
-  [0x0149, "\u02bcn"],
-  [0x017f, "s"],
-  [0x01f0, "j\u030c"],
-  [0x0345, "\u03b9"],
-  [0x0390, "\u03b9\u0308\u0301"],
-  [0x03b0, "\u03c5\u0308\u0301"],
-  [0x03c2, "\u03c3"],
-  [0x03d0, "\u03b2"],
-  [0x03d1, "\u03b8"],
-  [0x03d5, "\u03c6"],
-  [0x03d6, "\u03c0"],
-  [0x03f0, "\u03ba"],
-  [0x03f1, "\u03c1"],
-  [0x03f5, "\u03b5"],
-  [0xfb00, "ff"],
-  [0xfb01, "fi"],
-  [0xfb02, "fl"],
-  [0xfb03, "ffi"],
-  [0xfb04, "ffl"],
-  [0xfb05, "st"],
-  [0xfb06, "st"],
-]);
-
-function casefold(value: string): string {
-  let folded = "";
-  for (const character of value.toLowerCase()) {
-    folded += CASEFOLD_EXCEPTIONS.get(character.codePointAt(0)!) ?? character;
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return true;
   }
-  return folded;
+  return false;
 }
 
 function readTopLevelObjectKeys(text: string): string[] {

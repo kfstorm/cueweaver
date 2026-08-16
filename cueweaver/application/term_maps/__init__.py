@@ -10,6 +10,27 @@ from typing import Protocol
 from ..errors import ServiceError
 
 MAX_TERM_MAP_BYTES = 1 * 1024 * 1024
+# The canonical content limit applies after JSON parsing. Upload and request
+# limits are raw UTF-8 byte limits enforced by the HTTP adapter.
+MAX_TERM_MAP_UPLOAD_BYTES = MAX_TERM_MAP_BYTES
+MAX_TERM_MAP_REQUEST_BYTES = MAX_TERM_MAP_BYTES * 2
+_HIGH_SURROGATE_START = 0xD800
+_HIGH_SURROGATE_END = 0xDBFF
+_LOW_SURROGATE_START = 0xDC00
+_LOW_SURROGATE_END = 0xDFFF
+
+
+def reject_duplicate_json_pairs(
+    pairs: list[tuple[object, object]],
+) -> dict[object, object]:
+    """Build a JSON object while rejecting duplicate keys at every level."""
+
+    result: dict[object, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 @dataclass(frozen=True)
@@ -52,16 +73,15 @@ class TermMaps:
         return self._store.get(term_map_id)
 
     def create(self, name: str, content: Mapping[str, str]) -> TermMapSummary:
-        validate_term_map(name, content)
-        return self._store.create(name, content)
+        return self._store.create(name, validate_term_map(name, content))
 
     def rename(self, term_map_id: str, name: str) -> TermMapSummary:
         validate_term_map_name(name)
         return self._store.rename(term_map_id, name)
 
     def replace(self, term_map_id: str, content: Mapping[str, str]) -> TermMapSummary:
-        validate_term_map_content(content)
-        return self._store.replace(term_map_id, content)
+        validated = validate_term_map_content(content)
+        return self._store.replace(term_map_id, validated)
 
     def delete(self, term_map_id: str, name: str) -> TermMapSummary:
         if not isinstance(name, str) or not name:
@@ -73,9 +93,9 @@ class TermMaps:
         return self._store.delete(term_map_id, name)
 
 
-def validate_term_map(name: str, content: Mapping[str, str]) -> None:
+def validate_term_map(name: str, content: Mapping[str, str]) -> dict[str, str]:
     validate_term_map_name(name)
-    validate_term_map_content(content)
+    return validate_term_map_content(content)
 
 
 def validate_term_map_name(name: str) -> None:
@@ -85,23 +105,31 @@ def validate_term_map_name(name: str) -> None:
         )
 
 
-def validate_term_map_content(content: Mapping[str, str]) -> None:
+def validate_term_map_content(content: Mapping[str, str]) -> dict[str, str]:
     if not isinstance(content, dict) or not content:
         raise ServiceError(
             "invalid_term_map",
             "Term map must be a non-empty JSON object",
             field="content",
         )
-    validate_term_map_entries(content.items())
+    return validate_term_map_entries(content.items())
+
+
+def canonical_term_map_bytes(content: Mapping[str, str]) -> bytes:
+    """Return the compact UTF-8 JSON representation used for size checks."""
+
     try:
-        encoded = json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode(
+        return json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
         )
     except (TypeError, ValueError) as error:
         raise ServiceError(
-            "invalid_term_map", "Term map must contain JSON values"
+            "invalid_term_map", "Term map must contain valid Unicode strings"
         ) from error
-    if len(encoded) > MAX_TERM_MAP_BYTES:
+
+
+def _validate_canonical_size(content: Mapping[str, str]) -> None:
+    if len(canonical_term_map_bytes(content)) > MAX_TERM_MAP_BYTES:
         raise ServiceError(
             "invalid_term_map", "Term map must be at most 1 MiB", field="content"
         )
@@ -113,19 +141,21 @@ def validate_term_map_entries(
     """Validate JSON object pairs without losing duplicate or folded keys."""
     content: dict[str, str] = {}
     folded_sources: set[str] = set()
-    for source, target in entries:
-        if not isinstance(source, str) or not source:
+    for raw_source, raw_target in entries:
+        if not isinstance(raw_source, str) or not raw_source:
             raise ServiceError(
                 "invalid_term_map",
                 "Term map source keys must be non-empty strings",
                 field="content",
             )
-        if not isinstance(target, str) or not target:
+        if not isinstance(raw_target, str) or not raw_target:
             raise ServiceError(
                 "invalid_term_map",
                 "Term map target values must be non-empty strings",
                 field="content",
             )
+        source = _normalize_unicode_scalars(raw_source)
+        target = _normalize_unicode_scalars(raw_target)
         folded_source = source.casefold()
         if folded_source in folded_sources:
             raise ServiceError(
@@ -141,4 +171,48 @@ def validate_term_map_entries(
             "Term map must be a non-empty JSON object",
             field="content",
         )
+    _validate_canonical_size(content)
     return content
+
+
+def _normalize_unicode_scalars(value: str) -> str:
+    normalized: list[str] = []
+    index = 0
+    while index < len(value):
+        code_point = ord(value[index])
+        if (
+            _HIGH_SURROGATE_START <= code_point <= _HIGH_SURROGATE_END
+            and index + 1 < len(value)
+        ):
+            next_code_point = ord(value[index + 1])
+            if _LOW_SURROGATE_START <= next_code_point <= _LOW_SURROGATE_END:
+                normalized.append(
+                    chr(
+                        0x10000
+                        + ((code_point - 0xD800) << 10)
+                        + next_code_point
+                        - 0xDC00
+                    )
+                )
+                index += 2
+                continue
+        normalized.append(value[index])
+        index += 1
+    return "".join(normalized)
+
+
+__all__ = [
+    "MAX_TERM_MAP_BYTES",
+    "MAX_TERM_MAP_REQUEST_BYTES",
+    "MAX_TERM_MAP_UPLOAD_BYTES",
+    "TermMapDetail",
+    "TermMapStore",
+    "TermMapSummary",
+    "TermMaps",
+    "canonical_term_map_bytes",
+    "reject_duplicate_json_pairs",
+    "validate_term_map",
+    "validate_term_map_content",
+    "validate_term_map_entries",
+    "validate_term_map_name",
+]

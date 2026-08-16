@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 
 from ..application.errors import ServiceError
 from ..application.term_maps import (
-    MAX_TERM_MAP_BYTES,
+    MAX_TERM_MAP_REQUEST_BYTES,
+    MAX_TERM_MAP_UPLOAD_BYTES,
     TermMapDetail,
     TermMaps,
     TermMapSummary,
@@ -27,7 +28,9 @@ class JsonPairs(list[tuple[object, object]]):
     """Keep JSON object pairs so case-fold collisions are not silently lost."""
 
 
-MAX_REQUEST_BYTES = MAX_TERM_MAP_BYTES * 2
+# These limits apply to the raw request and raw JSON content respectively.
+# The application validator separately measures compact canonical UTF-8 content.
+MAX_REQUEST_BYTES = MAX_TERM_MAP_REQUEST_BYTES
 
 
 def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
@@ -45,7 +48,7 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
     async def create_term_map(request: Request) -> dict[str, object]:
         raw_body = await _read_limited_body(request)
         pairs, content_size = _decode_upload(raw_body)
-        if content_size > MAX_TERM_MAP_BYTES:
+        if content_size > MAX_TERM_MAP_UPLOAD_BYTES:
             raise ServiceError(
                 "invalid_term_map", "Term map must be at most 1 MiB", field="content"
             )
@@ -70,7 +73,7 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
     async def replace_term_map(term_map_id: str, request: Request) -> dict[str, object]:
         raw_body = await _read_limited_body(request)
         pairs, content_size = _decode_upload(raw_body)
-        if content_size > MAX_TERM_MAP_BYTES:
+        if content_size > MAX_TERM_MAP_UPLOAD_BYTES:
             raise ServiceError(
                 "invalid_term_map", "Term map must be at most 1 MiB", field="content"
             )

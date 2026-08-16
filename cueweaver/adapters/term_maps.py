@@ -15,7 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..application.errors import ServiceError
-from ..application.term_maps import TermMapDetail, TermMapSummary
+from ..application.term_maps import (
+    TermMapDetail,
+    TermMapSummary,
+    reject_duplicate_json_pairs,
+    validate_term_map_content,
+)
 
 try:
     import fcntl
@@ -41,13 +46,27 @@ class FileTermMapStore:
             record = self._find(self._read_index(), term_map_id)
             content_path = self._directory / record.content_file
             try:
-                content = json.loads(content_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                content = json.loads(
+                    content_path.read_text(encoding="utf-8"),
+                    object_pairs_hook=reject_duplicate_json_pairs,
+                )
+            except (
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as error:
                 raise ServiceError(
                     "term_map_unreadable", "Term map content cannot be read"
                 ) from error
             if not isinstance(content, dict):
                 raise ServiceError("term_map_unreadable", "Term map content is invalid")
+            try:
+                content = validate_term_map_content(content)
+            except ServiceError as error:
+                raise ServiceError(
+                    "term_map_unreadable", "Term map content is invalid"
+                ) from error
             summary = self._summary(record)
             return TermMapDetail(
                 id=summary.id,

@@ -10,6 +10,7 @@ from typing import Protocol
 
 from ...subtitle_formats import matching_format
 from ..errors import ServiceError
+from ..term_maps import reject_duplicate_json_pairs, validate_term_map_content
 
 
 @dataclass(frozen=True)
@@ -117,17 +118,18 @@ def _load_term_map(term_map_path: Path | None) -> dict[str, str]:
     if term_map_path is None:
         return {}
     try:
-        payload = json.loads(term_map_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        payload = json.loads(
+            term_map_path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_json_pairs,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ServiceError(
             "invalid_term_map", "Term map cannot be read", path=term_map_path
         ) from error
-    if not isinstance(payload, dict) or any(
-        not isinstance(source, str)
-        or not source
-        or not isinstance(target, str)
-        or not target
-        for source, target in payload.items()
-    ):
+    if not isinstance(payload, dict):
         raise ServiceError("invalid_term_map", "Term map must map non-empty strings")
-    return payload
+    try:
+        return validate_term_map_content(payload)
+    except ServiceError as error:
+        # Keep the Translation operation's existing error context contract.
+        raise ServiceError(error.error_code, error.message) from error

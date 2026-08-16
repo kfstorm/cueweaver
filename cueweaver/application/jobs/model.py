@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from ..errors import ServiceError
+from ..term_maps import validate_term_map_content
+
 JobStatus = Literal[
     "Queued",
     "Extracting",
@@ -284,25 +287,27 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
                 "subtitle_terminology_filter_enabled",
             )
         )
-        and (
-            term_map is None
-            or (
-                isinstance(term_map, dict)
-                and isinstance(term_map.get("id"), str)
-                and bool(term_map["id"])
-                and isinstance(term_map.get("name"), str)
-                and bool(term_map["name"])
-                and isinstance(term_map.get("content"), dict)
-                and all(
-                    isinstance(source, str)
-                    and bool(source)
-                    and isinstance(target, str)
-                    and bool(target)
-                    for source, target in term_map["content"].items()
-                )
-            )
-        )
+        and _valid_term_map_snapshot(term_map)
     )
+
+
+def _valid_term_map_snapshot(term_map: object) -> bool:
+    if term_map is None:
+        return True
+    if (
+        not isinstance(term_map, dict)
+        or not isinstance(term_map.get("id"), str)
+        or not term_map["id"]
+        or not isinstance(term_map.get("name"), str)
+        or not term_map["name"]
+        or not isinstance(term_map.get("content"), dict)
+    ):
+        return False
+    try:
+        validate_term_map_content(term_map["content"])
+    except (TypeError, ServiceError):
+        return False
+    return True
 
 
 def valid_request(request: dict[str, object]) -> bool:
