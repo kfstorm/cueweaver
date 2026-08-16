@@ -12,7 +12,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict, cast
+from typing import Literal, Protocol, cast
 from unicodedata import category
 
 from ...adapters.output import AtomicOutputPublisher
@@ -75,15 +75,6 @@ class CreateJobRequest:
 
 class TermMapResolver(Protocol):
     def get(self, term_map_id: str) -> TermMapDetail: ...
-
-
-class _ExecutionOptions(TypedDict):
-    target_language_code: str
-    output_path: Path
-    term_map: dict[str, str] | None
-    dynamic_terminology_enabled: bool
-    subtitle_terminology_filter_enabled: bool
-    overwrite: bool
 
 
 class Jobs:
@@ -733,14 +724,10 @@ class Jobs:
                 )
                 return True
 
-            if not embedded:
-                outcome = self._run_execution(
-                    request,
-                    work_directory,
-                    subtitle_path=self._media_root / str(request["subtitle_path"]),
-                    finalize=finalize,
-                )
-            else:
+            subtitle_path: Path | None = None
+            on_progress: Callable[[JobExecutionProgress], bool] | None = None
+            embedded_details: EmbeddedExecutionInput | None = None
+            if embedded:
                 stream_index = request.get("stream_index")
                 if not isinstance(stream_index, int):
                     raise ServiceError(
@@ -755,18 +742,40 @@ class Jobs:
                     extraction_marker if isinstance(extraction_marker, dict) else None,
                 )
 
-                def on_progress(progress: JobExecutionProgress) -> bool:
+                def persist_progress(progress: JobExecutionProgress) -> bool:
                     continued = self._persist_embedded_progress(job_id, progress)
                     return continued
 
-                outcome = self._run_execution(
-                    request,
-                    work_directory,
-                    subtitle_path=None,
+                on_progress = persist_progress
+            else:
+                subtitle_path = self._media_root / str(request["subtitle_path"])
+
+            term_map = self._embedded_term_map(request)
+            outcome = JobExecution(
+                self._translator,
+                AtomicOutputPublisher(),
+                extraction=self._extraction,
+                publication_guard=self._publication_guard,
+                should_stop=self._closed.is_set,
+                finalize=finalize,
+            ).execute(
+                JobExecutionInput(
+                    subtitle_path=subtitle_path,
+                    target_language_code=str(request["target_language_code"]),
+                    output_path=self._media_root / str(request["output_path"]),
+                    work_directory=work_directory,
+                    term_map=term_map,
+                    dynamic_terminology_enabled=bool(
+                        request.get("dynamic_terminology_enabled", True)
+                    ),
+                    subtitle_terminology_filter_enabled=bool(
+                        request.get("subtitle_terminology_filter_enabled", True)
+                    ),
+                    overwrite=request.get("output_conflict_policy") == "overwrite",
                     embedded=embedded_details,
-                    on_progress=on_progress,
-                    finalize=finalize,
-                )
+                ),
+                on_progress=on_progress,
+            )
         except JobExecutionProgressPersistenceError:
             raise
         except JobExecutionFinalizationError:
@@ -783,41 +792,6 @@ class Jobs:
             )
         if not outcome.terminal_persisted:
             self._finish_execution(job_id, outcome, request, embedded, work_directory)
-
-    def _run_execution(  # noqa: PLR0913
-        self,
-        request: dict[str, object],
-        work_directory: Path,
-        *,
-        subtitle_path: Path | None,
-        embedded: EmbeddedExecutionInput | None = None,
-        on_progress: Callable[[JobExecutionProgress], bool] | None = None,
-        finalize: Callable[[JobExecutionOutcome], bool],
-    ) -> JobExecutionOutcome:
-        options = self._execution_options(request)
-        return JobExecution(
-            self._translator,
-            AtomicOutputPublisher(),
-            extraction=self._extraction,
-            publication_guard=self._publication_guard,
-            should_stop=self._closed.is_set,
-            finalize=finalize,
-        ).execute(
-            JobExecutionInput(
-                subtitle_path=subtitle_path,
-                target_language_code=options["target_language_code"],
-                output_path=options["output_path"],
-                work_directory=work_directory,
-                term_map=options["term_map"],
-                dynamic_terminology_enabled=options["dynamic_terminology_enabled"],
-                subtitle_terminology_filter_enabled=options[
-                    "subtitle_terminology_filter_enabled"
-                ],
-                overwrite=options["overwrite"],
-                embedded=embedded,
-            ),
-            on_progress=on_progress,
-        )
 
     @contextmanager
     def _publication_guard(self) -> Iterator[None]:
@@ -871,20 +845,6 @@ class Jobs:
             "Failed",
             {"code": error.error_code, "message": error.message, **context},
         )
-
-    def _execution_options(self, request: dict[str, object]) -> _ExecutionOptions:
-        return {
-            "target_language_code": str(request["target_language_code"]),
-            "output_path": self._media_root / str(request["output_path"]),
-            "term_map": self._embedded_term_map(request),
-            "dynamic_terminology_enabled": bool(
-                request.get("dynamic_terminology_enabled", True)
-            ),
-            "subtitle_terminology_filter_enabled": bool(
-                request.get("subtitle_terminology_filter_enabled", True)
-            ),
-            "overwrite": request.get("output_conflict_policy") == "overwrite",
-        }
 
     def _embedded_term_map(self, request: dict[str, object]) -> dict[str, str] | None:
         term_map = request.get("term_map")
