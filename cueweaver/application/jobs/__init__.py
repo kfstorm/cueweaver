@@ -25,6 +25,7 @@ from ..translation import Translator
 from .execution import (
     EmbeddedExecutionInput,
     JobExecution,
+    JobExecutionFinalizationError,
     JobExecutionInput,
     JobExecutionOutcome,
     JobExecutionProgress,
@@ -708,7 +709,12 @@ class Jobs:
             except Exception as error:
                 # A persistence error must not kill the serial worker or strand a Job.
                 if job_id is not None:
-                    self._mark_failed_after_worker_error(job_id, error)
+                    self._mark_failed_after_worker_error(
+                        job_id,
+                        error,
+                        force=isinstance(error, JobExecutionFinalizationError)
+                        or self._closed.is_set(),
+                    )
             finally:
                 self._pending.task_done()
 
@@ -717,13 +723,22 @@ class Jobs:
         if prepared is None:
             return
         request, embedded, work_directory, record = prepared
+        outcome: JobExecutionOutcome
         try:
             work_directory = self._job_work_directory(job_id)
+
+            def finalize(outcome_to_persist: JobExecutionOutcome) -> bool:
+                self._finish_execution_locked(
+                    job_id, outcome_to_persist, request, embedded, work_directory
+                )
+                return True
+
             if not embedded:
                 outcome = self._run_execution(
                     request,
                     work_directory,
                     subtitle_path=self._media_root / str(request["subtitle_path"]),
+                    finalize=finalize,
                 )
             else:
                 stream_index = request.get("stream_index")
@@ -750,34 +765,26 @@ class Jobs:
                     subtitle_path=None,
                     embedded=embedded_details,
                     on_progress=on_progress,
+                    finalize=finalize,
                 )
-            self._finish_execution(job_id, outcome, request, embedded, work_directory)
         except JobExecutionProgressPersistenceError:
             raise
+        except JobExecutionFinalizationError:
+            raise
         except ServiceError as error:
-            self._finish_execution(
-                job_id,
-                JobExecutionOutcome("Failed", error=error),
-                request,
-                embedded,
-                work_directory,
-            )
+            outcome = JobExecutionOutcome("Failed", error=error)
         except Exception:
-            self._finish_execution(
-                job_id,
-                JobExecutionOutcome(
-                    "Failed",
-                    error=ServiceError(
-                        "extraction_failed" if embedded else "translation_failed",
-                        "Extraction failed" if embedded else "Translation failed",
-                    ),
+            outcome = JobExecutionOutcome(
+                "Failed",
+                error=ServiceError(
+                    "extraction_failed" if embedded else "translation_failed",
+                    "Extraction failed" if embedded else "Translation failed",
                 ),
-                request,
-                embedded,
-                work_directory,
             )
+        if not outcome.terminal_persisted:
+            self._finish_execution(job_id, outcome, request, embedded, work_directory)
 
-    def _run_execution(
+    def _run_execution(  # noqa: PLR0913
         self,
         request: dict[str, object],
         work_directory: Path,
@@ -785,6 +792,7 @@ class Jobs:
         subtitle_path: Path | None,
         embedded: EmbeddedExecutionInput | None = None,
         on_progress: Callable[[JobExecutionProgress], bool] | None = None,
+        finalize: Callable[[JobExecutionOutcome], bool],
     ) -> JobExecutionOutcome:
         options = self._execution_options(request)
         return JobExecution(
@@ -793,6 +801,7 @@ class Jobs:
             extraction=self._extraction,
             publication_guard=self._publication_guard,
             should_stop=self._closed.is_set,
+            finalize=finalize,
         ).execute(
             JobExecutionInput(
                 subtitle_path=subtitle_path,
@@ -823,28 +832,45 @@ class Jobs:
         embedded: bool,
         work_directory: Path,
     ) -> None:
-        with self._lifecycle_lock:
-            if outcome.status == "Completed":
-                self._finish(job_id, "Completed", None)
-                return
-            if outcome.status == "Interrupted":
-                self._finish_interrupted(job_id)
-                return
-            if self._closed.is_set() and not outcome.preserve_failure:
-                self._finish_interrupted(job_id)
-                return
-            error = outcome.error
-            assert error is not None
-            context = self._error_context(error.context)
-            if embedded:
-                context = _embedded_error_context(
-                    context, request, self._media_root, work_directory
+        try:
+            with self._lifecycle_lock:
+                self._finish_execution_locked(
+                    job_id, outcome, request, embedded, work_directory
                 )
-            self._finish(
-                job_id,
-                "Failed",
-                {"code": error.error_code, "message": error.message, **context},
+        except JobExecutionFinalizationError:
+            raise
+        except Exception as error:
+            raise JobExecutionFinalizationError from error
+
+    def _finish_execution_locked(
+        self,
+        job_id: str,
+        outcome: JobExecutionOutcome,
+        request: dict[str, object],
+        embedded: bool,
+        work_directory: Path,
+    ) -> None:
+        if outcome.status == "Completed":
+            self._finish(job_id, "Completed", None)
+            return
+        if outcome.status == "Interrupted":
+            self._finish_interrupted(job_id)
+            return
+        if self._closed.is_set() and not outcome.preserve_failure:
+            self._finish_interrupted(job_id)
+            return
+        error = outcome.error
+        assert error is not None
+        context = self._error_context(error.context)
+        if embedded:
+            context = _embedded_error_context(
+                context, request, self._media_root, work_directory
             )
+        self._finish(
+            job_id,
+            "Failed",
+            {"code": error.error_code, "message": error.message, **context},
+        )
 
     def _execution_options(self, request: dict[str, object]) -> _ExecutionOptions:
         return {
@@ -970,9 +996,11 @@ class Jobs:
             with suppress(OSError):
                 self._write_record(job_id, interrupted)
 
-    def _mark_failed_after_worker_error(self, job_id: str, error: Exception) -> None:
+    def _mark_failed_after_worker_error(
+        self, job_id: str, error: Exception, *, force: bool = False
+    ) -> None:
         with self._lifecycle_lock:
-            if self._closed.is_set():
+            if self._closed.is_set() and not force:
                 return
             with self._lock:
                 record = self._records.get(job_id)
@@ -985,7 +1013,7 @@ class Jobs:
                     "code": "job_worker_failed",
                     "message": "Job execution could not be persisted",
                 }
-                with suppress(OSError):
+                with suppress(Exception):
                     self._write_record(job_id, record)
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:

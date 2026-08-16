@@ -347,12 +347,20 @@ def test_job_execution_publishes_before_cleaning_work_directory(
     monkeypatch.setattr(
         "cueweaver.application.jobs.execution.shutil.rmtree", record_cleanup
     )
-    outcome = JobExecution(TranslatorFixture(), RecordingOutput()).execute(
-        external_input(tmp_path)
-    )
+
+    def record_terminal(_outcome) -> bool:
+        events.append("terminal")
+        return True
+
+    outcome = JobExecution(
+        TranslatorFixture(),
+        RecordingOutput(),
+        finalize=record_terminal,
+    ).execute(external_input(tmp_path))
 
     assert outcome.status == "Completed"
-    assert events == ["publish", "cleanup"]
+    assert outcome.terminal_persisted is True
+    assert events == ["publish", "cleanup", "terminal"]
 
 
 def test_job_execution_returns_cleanup_failure(tmp_path: Path, monkeypatch):

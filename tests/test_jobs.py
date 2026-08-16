@@ -112,15 +112,17 @@ class FalsyRecordStore:
         del self.records[job_id]
 
 
-class FailOnceOnInterruptedStore(FileJobRecordStore):
-    def __init__(self, jobs_root: Path):
+class InterruptedWriteFailureStore(FileJobRecordStore):
+    def __init__(self, jobs_root: Path, error: Exception, *, once: bool = False):
         super().__init__(jobs_root)
+        self.error = error
+        self.once = once
         self.failed = False
 
     def write(self, job_id: str, record: dict[str, object]) -> None:
-        if record.get("status") == "Interrupted" and not self.failed:
+        if record.get("status") == "Interrupted" and (not self.once or not self.failed):
             self.failed = True
-            raise OSError("record unavailable")
+            raise self.error
         super().write(job_id, record)
 
 
@@ -2343,6 +2345,43 @@ def test_worker_survives_a_persistence_failure_and_processes_next_job(
     assert completed["status"] == "Completed"
 
 
+@pytest.mark.parametrize(
+    "write_failure",
+    [OSError("terminal record unavailable"), RuntimeError("store down")],
+)
+def test_terminal_persistence_failure_is_classified_as_worker_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_failure: Exception
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
+    original_write = Jobs._write_record
+    first_id: str | None = None
+
+    def fail_completed_write(jobs, job_id, record):
+        if job_id == first_id and record["status"] in {"Completed", "Failed"}:
+            raise write_failure
+        original_write(jobs, job_id, record)
+
+    monkeypatch.setattr(Jobs, "_write_record", fail_completed_write)
+    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    first_id = str(first["id"])
+    assert started.wait(timeout=5)
+    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+    release.set()
+
+    failed = wait_for_status_from_jobs(jobs, first_id, "Failed")
+    completed = wait_for_status_from_jobs(jobs, str(second["id"]), "Completed")
+
+    assert failed["error"] == {
+        "code": "job_worker_failed",
+        "message": "Job execution could not be persisted",
+    }
+    assert completed["status"] == "Completed"
+    jobs.close()
+
+
 def test_cleanup_failure_does_not_claim_job_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3160,7 +3199,9 @@ def test_shutdown_recovers_after_interrupted_record_write_failure(
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     started = threading.Event()
     release = threading.Event()
-    store = FailOnceOnInterruptedStore(work_root / "jobs")
+    store = InterruptedWriteFailureStore(
+        work_root / "jobs", OSError("record unavailable"), once=True
+    )
     jobs = Jobs(
         FakeTranslator(started=started, release=release),
         media_root,
@@ -3181,6 +3222,34 @@ def test_shutdown_recovers_after_interrupted_record_write_failure(
     restarted = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
     assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
     restarted.close()
+
+
+def test_non_oserror_interrupted_persistence_failure_is_worker_failure(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    store = InterruptedWriteFailureStore(
+        work_root / "jobs", RuntimeError("record store unavailable")
+    )
+    jobs = Jobs(
+        FakeTranslator(started=started, release=release),
+        media_root,
+        work_root,
+        record_store=store,
+    )
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    jobs.close()
+    release.set()
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"] == {
+        "code": "job_worker_failed",
+        "message": "Job execution could not be persisted",
+    }
 
 
 def test_shutdown_after_publish_persists_completed_job(
