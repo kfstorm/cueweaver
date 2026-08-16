@@ -64,12 +64,21 @@ class WorkRoot:
     def ensure_term_maps_directory(self) -> Path:
         return self._ensure_directory(self.term_maps_directory, "Term map directory")
 
-    def _ensure_directory(self, directory: Path, label: str) -> Path:
+    def _ensure_directory(
+        self,
+        directory: Path,
+        label: str,
+        *,
+        symlink_message: str | None = None,
+        create_message: str | None = None,
+    ) -> Path:
+        if symlink_message is not None and directory.is_symlink():
+            raise ValueError(symlink_message)
         directory = self._safe_directory(directory, label)
         try:
             directory.mkdir(parents=True, exist_ok=True)
         except OSError as error:
-            raise ValueError(f"{label} cannot be created") from error
+            raise ValueError(create_message or f"{label} cannot be created") from error
         return self._safe_directory(directory, label)
 
     def _safe_directory(self, directory: Path, label: str) -> Path:
@@ -84,12 +93,12 @@ class WorkRoot:
         return directory
 
     def _ensure_jobs_directory(self) -> None:
-        if self.jobs_directory.is_symlink():
-            raise ValueError("Job Work root must not be a symbolic link")
-        try:
-            self.jobs_directory.mkdir(parents=True, exist_ok=True)
-        except OSError as error:
-            raise ValueError("Job Work root cannot be created") from error
+        self._ensure_directory(
+            self.jobs_directory,
+            "Job Work root",
+            symlink_message="Job Work root must not be a symbolic link",
+            create_message="Job Work root cannot be created",
+        )
 
 
 def is_safe_job_identifier(value: object) -> bool:
