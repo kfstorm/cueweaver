@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -11,6 +10,7 @@ from ...subtitle_formats import EXTRACT_CODEC_FORMATS, output_format
 from ..discovery import MediaProbe
 from ..errors import ServiceError
 from ..media import require_readable_media, stream_index
+from ..output import OutputPublisher
 
 
 @dataclass(frozen=True)
@@ -30,10 +30,6 @@ class MediaExtractor(MediaProbe, Protocol):
     def extract_subtitle(
         self, media_path: Path, stream_index: int, output_path: Path
     ) -> None: ...
-
-
-class OutputPublisher(Protocol):
-    def publish(self, output_path: Path, write: Callable[[Path], None]) -> None: ...
 
 
 class Extraction:

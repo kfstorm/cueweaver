@@ -162,3 +162,23 @@ def test_translation_preserves_structured_publisher_errors(tmp_path):
 
     assert error.value.error_code == "output_exists"
     assert error.value.context == {"path": "output.srt"}
+    assert type(error.value) is ServiceError
+
+
+def test_translation_preserves_unstructured_publisher_errors(tmp_path):
+    subtitle = tmp_path / "Movie.srt"
+    subtitle.write_bytes(SRT)
+    failure = RuntimeError("publisher failed")
+
+    class FailingOutput:
+        def publish(
+            self, _output_path: Path, _write, *, overwrite: bool = False
+        ) -> None:
+            raise failure
+
+    with pytest.raises(RuntimeError) as error:
+        Translation(TranslatorFixture(), FailingOutput()).translate(
+            TranslateRequest(subtitle, "zh", tmp_path / "output.srt", tmp_path / "work")
+        )
+
+    assert error.value is failure

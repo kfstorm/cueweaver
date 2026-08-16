@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from ...subtitle_formats import matching_format
 from ..errors import ServiceError
+from ..output import OutputPublisher
 from ..term_maps import reject_duplicate_json_pairs, validate_term_map_content
 
 
@@ -48,20 +50,23 @@ class Translator(Protocol):
     ) -> bytes: ...
 
 
-class OutputPublisher(Protocol):
-    def publish(
-        self,
-        output_path: Path,
-        write: Callable[[Path], None],
-        *,
-        overwrite: bool = False,
-    ) -> None: ...
-
-
 class Translation:
-    def __init__(self, translator: Translator, output: OutputPublisher) -> None:
+    def __init__(
+        self,
+        translator: Translator,
+        output: OutputPublisher,
+        *,
+        publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        before_publication: Callable[[], None] | None = None,
+        on_publication_failure: Callable[[Exception], None] | None = None,
+        after_publication: Callable[[], None] | None = None,
+    ) -> None:
         self._translator = translator
         self._output = output
+        self._publication_guard = publication_guard or nullcontext
+        self._before_publication = before_publication or (lambda: None)
+        self._on_publication_failure = on_publication_failure or (lambda _error: None)
+        self._after_publication = after_publication or (lambda: None)
 
     def translate(self, request: TranslateRequest) -> TranslateResult:
         subtitle_format = matching_format(request.subtitle_path, request.output_path)
@@ -83,7 +88,16 @@ class Translation:
         def write(temporary_path: Path) -> None:
             temporary_path.write_bytes(content)
 
-        self._output.publish(request.output_path, write, overwrite=request.overwrite)
+        with self._publication_guard():
+            self._before_publication()
+            try:
+                self._output.publish(
+                    request.output_path, write, overwrite=request.overwrite
+                )
+            except Exception as error:
+                self._on_publication_failure(error)
+                raise
+            self._after_publication()
         return TranslateResult(
             request.output_path, request.target_language_code, subtitle_format
         )
