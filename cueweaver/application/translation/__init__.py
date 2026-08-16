@@ -11,7 +11,7 @@ from typing import Protocol
 
 from ...subtitle_formats import matching_format
 from ..errors import ServiceError
-from ..output import OutputPublicationError, OutputPublisher
+from ..output import OutputPublisher
 from ..term_maps import reject_duplicate_json_pairs, validate_term_map_content
 
 
@@ -58,7 +58,7 @@ class Translation:
         *,
         publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
         before_publication: Callable[[], None] | None = None,
-        on_publication_failure: Callable[[ServiceError], None] | None = None,
+        on_publication_failure: Callable[[Exception], None] | None = None,
         after_publication: Callable[[], None] | None = None,
     ) -> None:
         self._translator = translator
@@ -94,20 +94,9 @@ class Translation:
                 self._output.publish(
                     request.output_path, write, overwrite=request.overwrite
                 )
-            except ServiceError as error:
-                publication_error = OutputPublicationError(error)
-                self._on_publication_failure(publication_error)
-                raise publication_error from error
             except Exception as error:
-                publication_error = OutputPublicationError(
-                    ServiceError(
-                        "output_write_failed",
-                        "Output could not be published",
-                        path=request.output_path,
-                    )
-                )
-                self._on_publication_failure(publication_error)
-                raise publication_error from error
+                self._on_publication_failure(error)
+                raise
             self._after_publication()
         return TranslateResult(
             request.output_path, request.target_language_code, subtitle_format

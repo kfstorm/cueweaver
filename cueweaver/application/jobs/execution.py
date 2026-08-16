@@ -227,10 +227,15 @@ class JobExecution:
             raise _ExecutionInterruptedError
 
     def _publication_failed(
-        self, finalize: Callable[[JobExecutionOutcome], bool], error: ServiceError
+        self, finalize: Callable[[JobExecutionOutcome], bool], error: Exception
     ) -> None:
-        self._finalize_failure(finalize, error)
-        raise _PublicationFailureError(error)
+        failure = (
+            error
+            if isinstance(error, ServiceError)
+            else ServiceError("output_write_failed", "Output could not be published")
+        )
+        self._finalize_failure(finalize, failure)
+        raise _PublicationFailureError(failure) from error
 
     def _publication_succeeded(
         self,

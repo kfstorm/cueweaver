@@ -6,8 +6,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from .errors import ServiceError
-
 
 class OutputPublisher(Protocol):
     def publish(
@@ -17,10 +15,3 @@ class OutputPublisher(Protocol):
         *,
         overwrite: bool = False,
     ) -> None: ...
-
-
-class OutputPublicationError(ServiceError):
-    """A structured error raised while an operation publishes its output."""
-
-    def __init__(self, error: ServiceError) -> None:
-        super().__init__(error.error_code, error.message, **error.context)
