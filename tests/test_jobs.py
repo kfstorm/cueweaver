@@ -2202,7 +2202,7 @@ def test_failed_job_retains_structured_error_context(tmp_path: Path, monkeypatch
         )
 
     monkeypatch.setattr(
-        "cueweaver.application.jobs.Translation.translate", fail_translation
+        "cueweaver.application.jobs.execution.Translation.translate", fail_translation
     )
 
     failed = wait_for_status(client, create_job(client).json()["id"], "Failed")
