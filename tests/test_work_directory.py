@@ -31,3 +31,15 @@ def test_work_root_rejects_symlinked_job_directory(tmp_path: Path):
 
     with pytest.raises(ValueError, match="must not be a symbolic link"):
         root.job_directory("job-1")
+
+
+def test_work_root_rejects_symlinked_translation_directory(tmp_path: Path):
+    root = WorkRoot(tmp_path / "work")
+    job_directory = root.job_directory("job-1")
+    job_directory.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (job_directory / "translation").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symbolic link"):
+        root.translation_directory("job-1")

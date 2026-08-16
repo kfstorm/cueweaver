@@ -25,8 +25,8 @@ class WorkRoot:
                 raise OSError
             with tempfile.TemporaryDirectory(
                 prefix=".cueweaver-check-", dir=self.path
-            ) as raw:
-                probe_directory = Path(raw)
+            ) as temporary_directory:
+                probe_directory = Path(temporary_directory)
                 source = probe_directory / "source"
                 destination = probe_directory / "destination"
                 source.write_bytes(b"ready")
@@ -45,28 +45,42 @@ class WorkRoot:
         if not is_safe_job_identifier(job_id):
             raise ValueError("Job ID is invalid")
         self._ensure_jobs_directory()
-        directory = self.jobs_directory / job_id
+        return self._safe_directory(
+            self.jobs_directory / job_id,
+            "Job Work directory",
+        )
+
+    def translation_directory(self, job_id: str) -> Path:
+        return self._safe_directory(
+            self.job_directory(job_id) / "translation",
+            "Job translation directory",
+        )
+
+    def ensure_translation_directory(self, job_id: str) -> Path:
+        directory = self.translation_directory(job_id)
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ValueError("Job translation directory cannot be created") from error
+        return self.translation_directory(job_id)
+
+    def ensure_term_maps_directory(self) -> Path:
+        directory = self._safe_directory(self.term_maps_directory, "Term map directory")
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ValueError("Term map directory cannot be created") from error
+        return self._safe_directory(directory, "Term map directory")
+
+    def _safe_directory(self, directory: Path, label: str) -> Path:
         if directory.is_symlink():
-            raise ValueError("Job Work directory must not be a symbolic link")
+            raise ValueError(f"{label} must not be a symbolic link")
         try:
             resolved = directory.resolve()
         except OSError as error:
-            raise ValueError("Job Work directory cannot be resolved") from error
+            raise ValueError(f"{label} cannot be resolved") from error
         if not resolved.is_relative_to(self.path):
-            raise ValueError("Job Work directory must remain inside the Work root")
-        return directory
-
-    def translation_directory(self, job_id: str) -> Path:
-        directory = self.job_directory(job_id) / "translation"
-        if directory.is_symlink():
-            raise ValueError("Job translation directory must not be a symbolic link")
-        try:
-            if not directory.resolve().is_relative_to(self.path):
-                raise ValueError(
-                    "Job translation directory must remain inside the Work root"
-                )
-        except OSError as error:
-            raise ValueError("Job translation directory cannot be resolved") from error
+            raise ValueError(f"{label} must remain inside the Work root")
         return directory
 
     def _ensure_jobs_directory(self) -> None:
