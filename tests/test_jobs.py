@@ -3253,15 +3253,39 @@ def test_non_oserror_interrupted_persistence_failure_is_worker_failure(
 
 
 def test_shutdown_after_publish_persists_completed_job(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    published = threading.Event()
+    release = threading.Event()
+
+    class BlockingPublisher(AtomicOutputPublisher):
+        def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
+            super().publish(output_path, write, overwrite=overwrite)
+            published.set()
+            release.wait(timeout=5)
+
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.AtomicOutputPublisher", BlockingPublisher
+    )
     jobs = Jobs(FakeTranslator(), media_root, work_root)
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    deadline = time.monotonic() + 5
-    while not (media_root / "Movie.zh.srt").exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    jobs.close()
+    assert published.wait(timeout=5)
+
+    close_started = threading.Event()
+
+    def close_jobs() -> None:
+        close_started.set()
+        jobs.close()
+
+    close_thread = threading.Thread(target=close_jobs)
+    close_thread.start()
+    assert close_started.wait(timeout=5)
+    assert close_thread.is_alive()
+
+    release.set()
+    close_thread.join(timeout=5)
+    assert not close_thread.is_alive()
     record = json.loads(
         (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
     )
