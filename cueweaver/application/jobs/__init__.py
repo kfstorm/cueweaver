@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os  # noqa: F401  # Kept as the module seam for filesystem fault tests.
 import queue
 import shutil
 import tempfile

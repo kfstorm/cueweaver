@@ -1676,7 +1676,9 @@ def test_retry_restores_terminal_record_when_directory_sync_fails(
             raise OSError("directory sync failed")
         original_fsync(file_descriptor)
 
-    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", fail_directory_sync)
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
+    )
 
     with pytest.raises(OSError):
         jobs.retry(str(queued["id"]))
@@ -2467,7 +2469,9 @@ def test_delete_record_sync_failure_restores_history_record(
     def fail_directory_sync(_file_descriptor: int) -> None:
         raise OSError("directory sync failed")
 
-    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", fail_directory_sync)
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
+    )
 
     with pytest.raises(ServiceError) as raised:
         jobs.delete(str(queued["id"]))
@@ -2476,7 +2480,7 @@ def test_delete_record_sync_failure_restores_history_record(
     assert record_path.exists()
     assert jobs.get(str(queued["id"]))["status"] == "Completed"
     assert not work_directory.exists()
-    monkeypatch.setattr("cueweaver.application.jobs.os.fsync", original_fsync)
+    monkeypatch.setattr("cueweaver.application.jobs.store.os.fsync", original_fsync)
     jobs.close()
 
 
