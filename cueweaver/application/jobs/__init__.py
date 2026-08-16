@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
+import os  # noqa: F401  # Kept as the module seam for filesystem fault tests.
 import queue
 import shutil
 import tempfile
@@ -15,17 +13,25 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypedDict, cast
 from unicodedata import category
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ..errors import ServiceError
-from ..extraction import Extraction, ExtractRequest
+from ..extraction import Extraction
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
-from ..translation import OutputPublisher, TranslateRequest, Translation, Translator
-from .execution import JobExecution, JobExecutionInput
+from ..translation import (
+    OutputPublisher,
+    Translator,
+)
+from .execution import (
+    EmbeddedExecutionInput,
+    JobExecution,
+    JobExecutionInput,
+    JobExecutionProgress,
+)
 from .model import (
     CURRENT_JOB_SCHEMA_VERSION,
     JOB_STATUSES,
@@ -70,6 +76,20 @@ class CreateJobRequest:
 
 class TermMapResolver(Protocol):
     def get(self, term_map_id: str) -> TermMapDetail: ...
+
+
+class _EmbeddedExecutionOptions(TypedDict):
+    target_language_code: str
+    output_path: Path
+    work_directory: Path
+    term_map: dict[str, str] | None
+    dynamic_terminology_enabled: bool
+    subtitle_terminology_filter_enabled: bool
+    overwrite: bool
+
+
+class _EmbeddedProgressPersistenceError(Exception):
+    pass
 
 
 class Jobs:
@@ -704,31 +724,9 @@ class Jobs:
         if prepared is None:
             return
         request, embedded, work_directory, record = prepared
-        subtitle_path: Path | None = None
         extracting = embedded
         try:
             work_directory = self._job_work_directory(job_id)
-            if embedded:
-                subtitle_path, should_stop = self._reuse_extracted_source(
-                    job_id, record, work_directory
-                )
-                if should_stop:
-                    return
-                extracting = subtitle_path is None
-            if extracting:
-                subtitle_path = self._extract_embedded_source(
-                    job_id, request, work_directory
-                )
-                if subtitle_path is None:
-                    return
-                extracting = False
-                with self._lifecycle_lock:
-                    if self._closed.is_set():
-                        return
-                    with self._lock:
-                        record = self._records[job_id]
-                        transition_status(record, "Translating", at=_timestamp())
-                        self._write_record(job_id, record)
             if not embedded:
                 self._execute_external(
                     job_id,
@@ -737,10 +735,43 @@ class Jobs:
                     work_directory,
                 )
             else:
-                assert subtitle_path is not None
-                self._execute_embedded_translation(
-                    request, subtitle_path, work_directory, job_id
+                stream_index = request.get("stream_index")
+                if not isinstance(stream_index, int):
+                    raise ServiceError(
+                        "invalid_stream_index",
+                        "Embedded subtitle stream index is invalid",
+                    )
+                extraction_marker = record.get("extraction")
+                embedded_details = EmbeddedExecutionInput(
+                    self._media_root / str(request["media_path"]),
+                    stream_index,
+                    str(request["source_format"]),
+                    extraction_marker if isinstance(extraction_marker, dict) else None,
                 )
+
+                def on_progress(progress: JobExecutionProgress) -> bool:
+                    nonlocal extracting
+                    continued = self._persist_embedded_progress(job_id, progress)
+                    if continued:
+                        extracting = False
+                    return continued
+
+                result = JobExecution(
+                    self._translator,
+                    self._job_output_publisher(job_id, work_directory),
+                    extraction=self._extraction,
+                ).execute(
+                    JobExecutionInput(
+                        subtitle_path=None,
+                        **self._embedded_execution_options(request, work_directory),
+                        embedded=embedded_details,
+                    ),
+                    on_progress=on_progress,
+                )
+                if result is None:
+                    return
+        except _EmbeddedProgressPersistenceError:
+            raise
         except ServiceError as error:
             context = self._error_context(error.context)
             if embedded:
@@ -778,44 +809,31 @@ class Jobs:
             )
             return
 
-    def _execute_embedded_translation(
-        self,
-        request: dict[str, object],
-        subtitle_path: Path,
-        work_directory: Path,
-        job_id: str,
-    ) -> None:
-        term_map_path: Path | None = None
-        term_map = request.get("term_map")
-        if isinstance(term_map, dict):
-            content = term_map.get("content")
-            if not isinstance(content, dict):
-                raise ServiceError("invalid_term_map", "Job Term map is invalid")
-            work_directory.mkdir(parents=True, exist_ok=True)
-            term_map_path = work_directory / "term-map.json"
-            term_map_path.write_text(
-                json.dumps(content, ensure_ascii=False), encoding="utf-8"
-            )
-        Translation(
-            self._translator,
-            _JobOutputPublisher(
-                AtomicOutputPublisher(),
-                self._lifecycle_lock,
-                self._closed,
-                lambda: self._finish_published(job_id, work_directory),
+    def _embedded_execution_options(
+        self, request: dict[str, object], work_directory: Path
+    ) -> _EmbeddedExecutionOptions:
+        return {
+            "target_language_code": str(request["target_language_code"]),
+            "output_path": self._media_root / str(request["output_path"]),
+            "work_directory": work_directory,
+            "term_map": self._embedded_term_map(request),
+            "dynamic_terminology_enabled": bool(
+                request.get("dynamic_terminology_enabled", True)
             ),
-        ).translate(
-            TranslateRequest(
-                subtitle_path,
-                str(request["target_language_code"]),
-                self._media_root / str(request["output_path"]),
-                work_directory,
-                term_map_path,
-                bool(request.get("dynamic_terminology_enabled", True)),
-                bool(request.get("subtitle_terminology_filter_enabled", True)),
-                request.get("output_conflict_policy") == "overwrite",
-            )
-        )
+            "subtitle_terminology_filter_enabled": bool(
+                request.get("subtitle_terminology_filter_enabled", True)
+            ),
+            "overwrite": request.get("output_conflict_policy") == "overwrite",
+        }
+
+    def _embedded_term_map(self, request: dict[str, object]) -> dict[str, str] | None:
+        term_map = request.get("term_map")
+        if term_map is None:
+            return None
+        content = term_map.get("content") if isinstance(term_map, dict) else None
+        if not isinstance(content, dict):
+            raise ServiceError("invalid_term_map", "Job Term map is invalid")
+        return cast(dict[str, str], content)
 
     def _execute_external(
         self,
@@ -859,6 +877,39 @@ class Jobs:
             )
         )
 
+    def _job_output_publisher(
+        self, job_id: str, work_directory: Path
+    ) -> _JobOutputPublisher:
+        return _JobOutputPublisher(
+            AtomicOutputPublisher(),
+            self._lifecycle_lock,
+            self._closed,
+            lambda: self._finish_published(job_id, work_directory),
+        )
+
+    def _persist_embedded_progress(
+        self, job_id: str, progress: JobExecutionProgress
+    ) -> bool:
+        with self._lifecycle_lock:
+            if self._closed.is_set():
+                return False
+            with self._lock:
+                record = copy_job_record(self._records[job_id])
+                source = progress.embedded_subtitle
+                record["extraction"] = {
+                    "status": "Completed",
+                    "path": source.path.name,
+                    "format": source.format,
+                    "content_digest": source.content_digest,
+                }
+                transition_status(record, progress.phase, at=_timestamp())
+                try:
+                    self._write_record(job_id, record)
+                except OSError as error:
+                    raise _EmbeddedProgressPersistenceError from error
+                self._records[job_id] = record
+        return True
+
     def _prepare_execution(
         self, job_id: str
     ) -> tuple[dict[str, object], bool, Path, dict[str, object]] | None:
@@ -897,103 +948,6 @@ class Jobs:
         return media.with_name(
             f"{media.stem}.{request['output_suffix']}.{request['source_format']}"
         )
-
-    def _verified_extracted_source(
-        self, record: dict[str, object], work_directory: Path
-    ) -> Path | None:
-        request = record.get("request")
-        marker = record.get("extraction")
-        if not isinstance(request, dict) or not isinstance(marker, dict):
-            return None
-        source_format = request.get("source_format")
-        if (
-            not isinstance(source_format, str)
-            or source_format not in EXTERNAL_FORMATS.values()
-            or marker.get("status") != "Completed"
-            or marker.get("path") != f"source.{source_format}"
-            or marker.get("format") != source_format
-            or not isinstance(marker.get("content_digest"), str)
-        ):
-            return None
-        source = work_directory / f"source.{source_format}"
-        try:
-            if (
-                source.is_symlink()
-                or not source.is_file()
-                or _content_digest(source) != marker["content_digest"]
-            ):
-                return None
-        except OSError:
-            return None
-        return source
-
-    def _reuse_extracted_source(
-        self,
-        job_id: str,
-        record: dict[str, object],
-        work_directory: Path,
-    ) -> tuple[Path | None, bool]:
-        source = self._verified_extracted_source(record, work_directory)
-        if source is None:
-            return None, False
-        with self._lifecycle_lock:
-            if self._closed.is_set():
-                return None, True
-            with self._lock:
-                current_record = self._records[job_id]
-                transition_status(current_record, "Translating", at=_timestamp())
-                self._write_record(job_id, current_record)
-        return source, False
-
-    def _extract_embedded_source(
-        self,
-        job_id: str,
-        request: dict[str, object],
-        work_directory: Path,
-    ) -> Path | None:
-        if self._extraction is None:
-            raise ServiceError(
-                "extraction_unavailable",
-                "Embedded subtitle Extraction is unavailable",
-            )
-        source_format = str(request["source_format"])
-        stream_index = request["stream_index"]
-        assert isinstance(stream_index, int)
-        subtitle_path = work_directory / f"source.{source_format}"
-        work_directory.mkdir(parents=True, exist_ok=True)
-        descriptor, raw_path = tempfile.mkstemp(
-            dir=work_directory,
-            prefix=f".{subtitle_path.name}.retry.",
-            suffix=subtitle_path.suffix,
-        )
-        os.close(descriptor)
-        candidate_path = Path(raw_path)
-        candidate_path.unlink()
-        try:
-            self._extraction.extract(
-                ExtractRequest(
-                    self._media_root / str(request["media_path"]),
-                    stream_index,
-                    candidate_path,
-                )
-            )
-            _replace_extracted_source(candidate_path, subtitle_path)
-            digest = _content_digest(subtitle_path)
-        finally:
-            candidate_path.unlink(missing_ok=True)
-        with self._lifecycle_lock:
-            if self._closed.is_set():
-                return None
-            with self._lock:
-                record = self._records[job_id]
-                record["extraction"] = {
-                    "status": "Completed",
-                    "path": subtitle_path.name,
-                    "format": source_format,
-                    "content_digest": digest,
-                }
-                self._write_record(job_id, record)
-        return subtitle_path
 
     def _error_context(self, context: dict[str, object]) -> dict[str, object]:
         roots = (self._media_root, self._jobs_root.parent.resolve())
@@ -1212,45 +1166,9 @@ def _empty_record_health() -> dict[str, object]:
     }
 
 
-def _replace_extracted_source(candidate: Path, destination: Path) -> None:
-    diagnostic: Path | None = None
-    if destination.is_dir():
-        descriptor, raw_path = tempfile.mkstemp(
-            dir=destination.parent,
-            prefix=f"{destination.name}.invalid.",
-        )
-        os.close(descriptor)
-        diagnostic = Path(raw_path)
-        diagnostic.unlink()
-        destination.replace(diagnostic)
-    try:
-        candidate.replace(destination)
-    except OSError:
-        if diagnostic is not None:
-            diagnostic.replace(destination)
-        raise
-    _fsync_directory(destination.parent)
-
-
-def _content_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _safe_input_path(value: str) -> str:
     normalized = value.replace("\\", "/").rstrip("/")
     return normalized.rsplit("/", maxsplit=1)[-1] or "<invalid path>"
-
-
-def _fsync_directory(directory: Path) -> None:
-    directory_descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)
 
 
 def _require_writable_directory(directory: Path) -> None:
