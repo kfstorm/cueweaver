@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from cueweaver.adapters.term_maps import FileTermMapStore
 from cueweaver.work import WorkRoot
 
 
@@ -43,3 +44,8 @@ def test_work_root_rejects_symlinked_translation_directory(tmp_path: Path):
 
     with pytest.raises(ValueError, match="must not be a symbolic link"):
         root.translation_directory("job-1")
+
+
+def test_term_map_store_requires_the_work_root_policy(tmp_path: Path):
+    with pytest.raises(TypeError, match="requires a WorkRoot"):
+        FileTermMapStore(tmp_path)  # type: ignore[arg-type]
