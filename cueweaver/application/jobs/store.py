@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Protocol
 
 from ..errors import ServiceError
-from ..term_maps import reject_duplicate_json_pairs
 from .model import JobRecord, migrate_record, valid_job_id
 
 CORRUPT_DIRECTORY = "corrupt"
 UNSUPPORTED_DIRECTORY = "unsupported"
+
+
+class _JsonPairs(list[tuple[object, object]]):
+    """Preserve object pairs for the one nested duplicate-key check we need."""
 
 
 @dataclass(frozen=True)
@@ -172,7 +175,7 @@ def _classify_record(
     if raw_record is None or record_path.is_symlink():
         return "corrupt", None, False, raw_record, None
     try:
-        parsed = json.loads(raw_record, object_pairs_hook=reject_duplicate_json_pairs)
+        parsed = json.loads(raw_record)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
         return "corrupt", None, False, raw_record, None
     if not isinstance(parsed, dict):
@@ -180,12 +183,36 @@ def _classify_record(
     record_id = parsed.get("id")
     if not isinstance(record_id, str):
         record_id = None
-    record, migrated, future = migrate_record(parsed)
+    if _term_map_content_has_duplicate_keys(raw_record):
+        record, migrated, future = None, False, False
+    else:
+        record, migrated, future = migrate_record(parsed)
     if future:
         return UNSUPPORTED_DIRECTORY, None, False, raw_record, record_id
     if record is None:
         return "corrupt", None, False, raw_record, record_id
     return "valid", record, migrated, raw_record, record_id
+
+
+def _term_map_content_has_duplicate_keys(raw_record: bytes) -> bool:
+    paired = json.loads(raw_record, object_pairs_hook=_JsonPairs)
+    request = _last_json_object_value(paired, "request")
+    term_map = _last_json_object_value(request, "term_map")
+    content = _last_json_object_value(term_map, "content")
+    if not isinstance(content, _JsonPairs):
+        return False
+    keys = [key for key, _value in content]
+    return len(keys) != len(set(keys))
+
+
+def _last_json_object_value(value: object, key: str) -> object | None:
+    if not isinstance(value, _JsonPairs):
+        return None
+    result: object | None = None
+    for object_key, object_value in value:
+        if object_key == key:
+            result = object_value
+    return result
 
 
 def _quarantine_destination(directory: Path, filename: str) -> Path:

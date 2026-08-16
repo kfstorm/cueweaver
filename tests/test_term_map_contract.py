@@ -1,4 +1,5 @@
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,11 @@ from cueweaver.application.term_maps import (
 from cueweaver.http.term_maps import _decode_upload
 
 CONTRACT = Path(__file__).parents[1] / "contracts" / "term-map-validation.json"
+CONTRACT_DATA = json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+
+def test_python_casefold_data_matches_shared_unicode_version():
+    assert unicodedata.unidata_version == CONTRACT_DATA["unicodeCasefoldVersion"]
 
 
 def _case_text(case: dict[str, Any]) -> str:
@@ -35,7 +41,7 @@ def _object_pairs(text: str) -> list[tuple[object, object]]:
 
 @pytest.mark.parametrize(
     "case",
-    json.loads(CONTRACT.read_text(encoding="utf-8"))["cases"],
+    CONTRACT_DATA["cases"],
     ids=lambda case: case["name"],
 )
 def test_python_validator_matches_shared_term_map_contract(case: dict[str, Any]):
@@ -52,11 +58,7 @@ def test_python_validator_matches_shared_term_map_contract(case: dict[str, Any])
 
 @pytest.mark.parametrize(
     "case",
-    [
-        case
-        for case in json.loads(CONTRACT.read_text(encoding="utf-8"))["cases"]
-        if "generated" in case
-    ],
+    [case for case in CONTRACT_DATA["cases"] if "generated" in case],
     ids=lambda case: case["name"],
 )
 def test_raw_content_limit_is_separate_from_canonical_limit(case: dict[str, Any]):

@@ -290,6 +290,44 @@ def test_record_store_migrates_a_legacy_record_with_a_noncanonical_filename(
     assert not (jobs_root / "legacy-name.json").exists()
 
 
+def test_record_store_keeps_last_value_for_unrelated_duplicate_job_fields(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = persisted_job_record("duplicate-status")
+    raw_record = json.dumps(record).replace(
+        '"status": "Failed"', '"status": "Failed", "status": "Completed"'
+    )
+    (jobs_root / "duplicate-status.json").write_text(raw_record, encoding="utf-8")
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert records[0]["status"] == "Completed"
+    assert not (jobs_root / "corrupt" / "duplicate-status.json").exists()
+
+
+def test_record_store_quarantines_duplicate_term_map_content_keys(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = persisted_job_record("duplicate-term-map")
+    request = record["request"]
+    assert isinstance(request, dict)
+    request["term_map"] = {
+        "id": "map-1",
+        "name": "Terms",
+        "content": {"Source": "one"},
+    }
+    raw_record = json.dumps(record).replace(
+        '"Source": "one"', '"Source": "one", "Source": "two"'
+    )
+    record_path = jobs_root / "duplicate-term-map.json"
+    record_path.write_text(raw_record, encoding="utf-8")
+
+    assert FileJobRecordStore(jobs_root).load() == []
+    assert (jobs_root / "corrupt" / record_path.name).read_text() == raw_record
+
+
 def test_record_store_quarantines_a_symlink_as_regular_record_bytes(tmp_path: Path):
     jobs_root = tmp_path / "jobs"
     jobs_root.mkdir()

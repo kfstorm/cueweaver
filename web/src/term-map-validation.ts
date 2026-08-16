@@ -1,3 +1,5 @@
+import { UNICODE_CASEFOLD_DATA } from "./unicode-casefold-data";
+
 export const MAX_TERM_MAP_BYTES = 1024 * 1024;
 export const MAX_TERM_MAP_UPLOAD_BYTES = MAX_TERM_MAP_BYTES;
 
@@ -89,38 +91,20 @@ function invalidTermMapContent(error: string): TermMapContentValidation {
   return { content: null, entryCount: 0, rawByteLength: 0, byteLength: 0, error };
 }
 
-const CASEFOLD_EXCEPTIONS: ReadonlyMap<number, string> = new Map([
-  [0x00b5, "\u03bc"],
-  [0x00df, "ss"],
-  [0x0149, "\u02bcn"],
-  [0x017f, "s"],
-  [0x01f0, "j\u030c"],
-  [0x0345, "\u03b9"],
-  [0x0390, "\u03b9\u0308\u0301"],
-  [0x03b0, "\u03c5\u0308\u0301"],
-  [0x03c2, "\u03c3"],
-  [0x03d0, "\u03b2"],
-  [0x03d1, "\u03b8"],
-  [0x03d5, "\u03c6"],
-  [0x03d6, "\u03c0"],
-  [0x03f0, "\u03ba"],
-  [0x03f1, "\u03c1"],
-  [0x03f5, "\u03b5"],
-  [0xfb00, "ff"],
-  [0xfb01, "fi"],
-  [0xfb02, "fl"],
-  [0xfb03, "ffi"],
-  [0xfb04, "ffl"],
-  [0xfb05, "st"],
-  [0xfb06, "st"],
-]);
-
 function casefold(value: string): string {
   let folded = "";
   for (const character of value.toLowerCase()) {
-    folded += CASEFOLD_EXCEPTIONS.get(character.codePointAt(0)!) ?? character;
+    const codePoint = character.codePointAt(0)!;
+    const mapping = UNICODE_CASEFOLD_DATA[codePoint.toString(16).toUpperCase()];
+    folded += mapping === undefined ? character : foldCodePoints(mapping);
   }
   return folded;
+}
+
+function foldCodePoints(mapping: number | readonly number[]): string {
+  return typeof mapping === "number"
+    ? String.fromCodePoint(mapping)
+    : String.fromCodePoint(...mapping);
 }
 
 function hasUnpairedSurrogate(value: string): boolean {
