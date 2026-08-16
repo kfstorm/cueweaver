@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkstemp
@@ -61,47 +63,148 @@ class JobExecutionProgress:
     reused: bool
 
 
+@dataclass(frozen=True)
+class JobExecutionOutcome:
+    status: Literal["Completed", "Failed", "Interrupted"]
+    result: TranslateResult | None = None
+    error: ServiceError | None = None
+    preserve_failure: bool = False
+    terminal_persisted: bool = False
+
+
+class JobExecutionProgressPersistenceError(Exception):
+    """A progress callback failed while persisting lifecycle state."""
+
+
+class JobExecutionFinalizationError(Exception):
+    """The lifecycle owner could not persist a terminal execution outcome."""
+
+
+class _PublicationFailureError(Exception):
+    def __init__(self, error: ServiceError) -> None:
+        super().__init__(error.message)
+        self.error = error
+
+
 class JobExecution:
     """Run one Job's execution steps behind a synchronous interface."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         translator: Translator,
         output: OutputPublisher,
         *,
         extraction: Extraction | None = None,
+        publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        finalize: Callable[[JobExecutionOutcome], bool] | None = None,
     ) -> None:
         self._translator = translator
         self._output = output
         self._extraction = extraction
+        self._publication_guard = publication_guard or nullcontext
+        self._should_stop = should_stop or (lambda: False)
+        self._finalize = finalize
 
     def execute(
         self,
         execution_input: JobExecutionInput,
         *,
         on_progress: Callable[[JobExecutionProgress], bool] | None = None,
-    ) -> TranslateResult | None:
+    ) -> JobExecutionOutcome:
         subtitle_path = execution_input.subtitle_path
-        if execution_input.embedded is not None:
-            source = self._prepare_embedded_source(execution_input)
-            if source is None:
-                return None
-            if on_progress is not None and not on_progress(
-                JobExecutionProgress("Translating", source.subtitle, source.reused)
-            ):
-                return None
-            subtitle_path = source.subtitle.path
-        if subtitle_path is None:
-            raise ValueError("External Job execution requires a subtitle path")
-        return self._translate(execution_input, subtitle_path)
+        extracting = execution_input.embedded is not None
+        outcome: JobExecutionOutcome | None = None
+        publication_finalized = False
+
+        def finalize(outcome_to_persist: JobExecutionOutcome) -> bool:
+            nonlocal publication_finalized
+            if self._finalize is None:
+                return False
+            publication_finalized = self._finalize(outcome_to_persist)
+            return publication_finalized
+
+        try:
+            if execution_input.embedded is not None:
+                source = self._prepare_embedded_source(execution_input)
+                if source is None or (
+                    on_progress is not None
+                    and not on_progress(
+                        JobExecutionProgress(
+                            "Translating", source.subtitle, source.reused
+                        )
+                    )
+                ):
+                    outcome = _interrupted_outcome()
+                else:
+                    subtitle_path = source.subtitle.path
+                    extracting = False
+            if outcome is None:
+                if subtitle_path is None:
+                    raise ServiceError(
+                        "invalid_job_execution",
+                        "Job execution requires a subtitle path",
+                    )
+                result = self._translate(
+                    execution_input,
+                    subtitle_path,
+                    finalize=finalize,
+                )
+                outcome = JobExecutionOutcome(
+                    "Completed",
+                    result=result,
+                    terminal_persisted=publication_finalized,
+                )
+        except JobExecutionProgressPersistenceError:
+            raise
+        except JobExecutionFinalizationError:
+            raise
+        except _PublicationFailureError as error:
+            outcome = JobExecutionOutcome(
+                "Failed",
+                error=error.error,
+                preserve_failure=True,
+                terminal_persisted=publication_finalized,
+            )
+        except _ExecutionInterruptedError:
+            outcome = _interrupted_outcome()
+        except ServiceError as error:
+            outcome = self._outcome_for_error(error)
+        except Exception:
+            outcome = self._outcome_for_error(
+                ServiceError(
+                    "extraction_failed" if extracting else "translation_failed",
+                    "Extraction failed" if extracting else "Translation failed",
+                )
+            )
+        assert outcome is not None
+        return outcome
+
+    def _outcome_for_error(self, error: ServiceError) -> JobExecutionOutcome:
+        if self._should_stop():
+            return _interrupted_outcome()
+        return JobExecutionOutcome("Failed", error=error)
 
     def _translate(
-        self, execution_input: JobExecutionInput, subtitle_path: Path
+        self,
+        execution_input: JobExecutionInput,
+        subtitle_path: Path,
+        *,
+        finalize: Callable[[JobExecutionOutcome], bool],
     ) -> TranslateResult:
         term_map_path = _write_term_map(
             execution_input.work_directory, execution_input.term_map
         )
-        result = Translation(self._translator, self._output).translate(
+        result = Translation(
+            self._translator,
+            _PublicationOutputPublisher(
+                self._output,
+                self._publication_guard,
+                self._should_stop,
+                execution_input.work_directory,
+                finalize,
+            ),
+        ).translate(
             TranslateRequest(
                 subtitle_path=subtitle_path,
                 target_language_code=execution_input.target_language_code,
@@ -149,6 +252,81 @@ class JobExecution:
 class _PreparedEmbeddedSubtitle:
     subtitle: ExtractedEmbeddedSubtitle
     reused: bool
+
+
+class _ExecutionInterruptedError(Exception):
+    pass
+
+
+def _interrupted_outcome() -> JobExecutionOutcome:
+    return JobExecutionOutcome(
+        "Interrupted",
+        error=ServiceError(
+            "job_interrupted", "Job was interrupted when CueWeaver stopped"
+        ),
+    )
+
+
+class _PublicationOutputPublisher:
+    def __init__(
+        self,
+        publisher: OutputPublisher,
+        publication_guard: Callable[[], AbstractContextManager[None]],
+        should_stop: Callable[[], bool],
+        work_directory: Path,
+        finalize: Callable[[JobExecutionOutcome], bool],
+    ) -> None:
+        self._publisher = publisher
+        self._publication_guard = publication_guard
+        self._should_stop = should_stop
+        self._work_directory = work_directory
+        self._finalize = finalize
+
+    def publish(
+        self,
+        output_path: Path,
+        write: Callable[[Path], None],
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        with self._publication_guard():
+            if self._should_stop():
+                raise _ExecutionInterruptedError
+            try:
+                self._publisher.publish(output_path, write, overwrite=overwrite)
+            except ServiceError as error:
+                self._finalize_failure(error)
+                raise _PublicationFailureError(error) from error
+            except Exception as error:
+                failure = ServiceError(
+                    "output_write_failed", "Output could not be published"
+                )
+                self._finalize_failure(failure)
+                raise _PublicationFailureError(failure) from error
+            try:
+                shutil.rmtree(self._work_directory)
+            except OSError as error:
+                failure = ServiceError(
+                    "work_cleanup_failed",
+                    "Completed Job work data could not be cleaned up",
+                )
+                self._finalize_failure(failure)
+                raise _PublicationFailureError(failure) from error
+            self._finalize_success()
+
+    def _finalize_failure(self, error: ServiceError) -> None:
+        try:
+            self._finalize(
+                JobExecutionOutcome("Failed", error=error, preserve_failure=True)
+            )
+        except Exception as finalization_error:
+            raise JobExecutionFinalizationError from finalization_error
+
+    def _finalize_success(self) -> None:
+        try:
+            self._finalize(JobExecutionOutcome("Completed"))
+        except Exception as finalization_error:
+            raise JobExecutionFinalizationError from finalization_error
 
 
 def _write_term_map(
@@ -260,6 +438,9 @@ __all__ = [
     "EmbeddedExecutionInput",
     "ExtractedEmbeddedSubtitle",
     "JobExecution",
+    "JobExecutionFinalizationError",
     "JobExecutionInput",
+    "JobExecutionOutcome",
     "JobExecutionProgress",
+    "JobExecutionProgressPersistenceError",
 ]

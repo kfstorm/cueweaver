@@ -112,6 +112,20 @@ class FalsyRecordStore:
         del self.records[job_id]
 
 
+class InterruptedWriteFailureStore(FileJobRecordStore):
+    def __init__(self, jobs_root: Path, error: Exception, *, once: bool = False):
+        super().__init__(jobs_root)
+        self.error = error
+        self.once = once
+        self.failed = False
+
+    def write(self, job_id: str, record: dict[str, object]) -> None:
+        if record.get("status") == "Interrupted" and (not self.once or not self.failed):
+            self.failed = True
+            raise self.error
+        super().write(job_id, record)
+
+
 def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -760,6 +774,15 @@ def wait_for_status_from_jobs(
             return body
         time.sleep(0.01)
     pytest.fail(f"Job did not reach {expected}")
+
+
+def finish_shutdown(
+    jobs: Jobs, job_id: str, release: threading.Event
+) -> dict[str, object]:
+    jobs.close()
+    release.set()
+    jobs._worker.join(timeout=5)
+    return jobs.get(job_id)
 
 
 def create_queued_job(tmp_path: Path):
@@ -2322,6 +2345,43 @@ def test_worker_survives_a_persistence_failure_and_processes_next_job(
     assert completed["status"] == "Completed"
 
 
+@pytest.mark.parametrize(
+    "write_failure",
+    [OSError("terminal record unavailable"), RuntimeError("store down")],
+)
+def test_terminal_persistence_failure_is_classified_as_worker_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_failure: Exception
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
+    original_write = Jobs._write_record
+    first_id: str | None = None
+
+    def fail_completed_write(jobs, job_id, record):
+        if job_id == first_id and record["status"] in {"Completed", "Failed"}:
+            raise write_failure
+        original_write(jobs, job_id, record)
+
+    monkeypatch.setattr(Jobs, "_write_record", fail_completed_write)
+    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    first_id = str(first["id"])
+    assert started.wait(timeout=5)
+    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+    release.set()
+
+    failed = wait_for_status_from_jobs(jobs, first_id, "Failed")
+    completed = wait_for_status_from_jobs(jobs, str(second["id"]), "Completed")
+
+    assert failed["error"] == {
+        "code": "job_worker_failed",
+        "message": "Job execution could not be persisted",
+    }
+    assert completed["status"] == "Completed"
+    jobs.close()
+
+
 def test_cleanup_failure_does_not_claim_job_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3041,15 +3101,7 @@ def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     started = threading.Event()
     release = threading.Event()
 
-    class BlockingTranslator(FakeTranslator):
-        def translate(
-            self, source: Path, target_language: str, **kwargs: object
-        ) -> bytes:
-            started.set()
-            release.wait(timeout=5)
-            return super().translate(source, target_language, **kwargs)
-
-    jobs = Jobs(BlockingTranslator(), media_root, work_root)
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
     jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
     assert started.wait(timeout=5)
 
@@ -3063,16 +3115,198 @@ def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     jobs._worker.join(timeout=5)
 
 
-def test_shutdown_after_publish_persists_completed_job(
+def test_shutdown_marks_blocked_translation_interrupted_at_safe_point(
     tmp_path: Path,
 ):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    started = threading.Event()
+    release = threading.Event()
+
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    deadline = time.monotonic() + 5
-    while not (media_root / "Movie.zh.srt").exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert started.wait(timeout=5)
+
+    interrupted = finish_shutdown(jobs, str(queued["id"]), release)
+    assert interrupted["status"] == "Interrupted"
+    assert interrupted["error"] == {
+        "code": "job_interrupted",
+        "message": "Job was interrupted when CueWeaver stopped",
+    }
+    assert not (media_root / "Movie.zh.srt").exists()
+
+
+def test_shutdown_marks_failed_blocked_translation_interrupted(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    jobs = Jobs(
+        FakeTranslator(
+            started=started,
+            release=release,
+            error=RuntimeError("translation failed after stop"),
+        ),
+        media_root,
+        work_root,
+    )
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
+        "Interrupted"
+    )
+
+
+def test_shutdown_marks_blocked_extraction_interrupted_before_translation(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    extractor = MediaExtractorFixture(
+        [{"index": 3, "codec_name": "subrip"}],
+        started=started,
+        release=release,
+    )
+    translator = FakeTranslator()
+    jobs = Jobs(
+        translator,
+        media_root,
+        work_root,
+        extraction=Extraction(extractor, AtomicOutputPublisher()),
+    )
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            None,
+            "zh",
+            stream_index=3,
+            source_format="srt",
+        )
+    )
+    assert started.wait(timeout=5)
+
+    interrupted = finish_shutdown(jobs, str(queued["id"]), release)
+    assert interrupted["status"] == "Interrupted"
+    assert translator.sources == []
+    assert not (media_root / "Movie.zh.srt").exists()
+
+
+def test_shutdown_recovers_after_interrupted_record_write_failure(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    store = InterruptedWriteFailureStore(
+        work_root / "jobs", OSError("record unavailable"), once=True
+    )
+    jobs = Jobs(
+        FakeTranslator(started=started, release=release),
+        media_root,
+        work_root,
+        record_store=store,
+    )
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
+    assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
+        "Interrupted"
+    )
+    persisted = json.loads(
+        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
+    )
+    assert persisted["status"] == "Translating"
+
+    restarted = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
+    assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
+    restarted.close()
+
+
+def test_non_oserror_interrupted_persistence_failure_is_worker_failure(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    store = InterruptedWriteFailureStore(
+        work_root / "jobs", RuntimeError("record store unavailable")
+    )
+    jobs = Jobs(
+        FakeTranslator(started=started, release=release),
+        media_root,
+        work_root,
+        record_store=store,
+    )
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert started.wait(timeout=5)
+
     jobs.close()
+    release.set()
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+
+    assert failed["error"] == {
+        "code": "job_worker_failed",
+        "message": "Job execution could not be persisted",
+    }
+
+
+def test_shutdown_after_publish_persists_completed_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    published = threading.Event()
+    release = threading.Event()
+    close_attempted = threading.Event()
+
+    class BlockingPublisher(AtomicOutputPublisher):
+        def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
+            super().publish(output_path, write, overwrite=overwrite)
+            published.set()
+            release.wait(timeout=5)
+
+    class InstrumentedLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.observe_acquire = False
+
+        def acquire(self, *args, **kwargs) -> bool:
+            if self.observe_acquire:
+                close_attempted.set()
+            return self._lock.acquire(*args, **kwargs)
+
+        def release(self) -> None:
+            self._lock.release()
+
+        def __enter__(self) -> "InstrumentedLock":
+            self.acquire()
+            return self
+
+        def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+            self.release()
+
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.AtomicOutputPublisher", BlockingPublisher
+    )
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    lifecycle_lock = InstrumentedLock()
+    jobs._lifecycle_lock = lifecycle_lock
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    assert published.wait(timeout=5)
+    lifecycle_lock.observe_acquire = True
+
+    def close_jobs() -> None:
+        jobs.close()
+
+    close_thread = threading.Thread(target=close_jobs)
+    close_thread.start()
+    assert close_attempted.wait(timeout=5)
+    assert close_thread.is_alive()
+
+    release.set()
+    close_thread.join(timeout=5)
+    assert not close_thread.is_alive()
     record = json.loads(
         (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
     )

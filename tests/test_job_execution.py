@@ -2,8 +2,6 @@ import hashlib
 from pathlib import Path
 from unittest.mock import Mock, call
 
-import pytest
-
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
 from cueweaver.application.jobs.execution import (
@@ -86,6 +84,17 @@ def embedded_input(
     )
 
 
+def external_input(tmp_path: Path) -> JobExecutionInput:
+    subtitle = tmp_path / "Movie.en.srt"
+    subtitle.write_bytes(SRT)
+    return JobExecutionInput(
+        subtitle_path=subtitle,
+        target_language_code="zh-Hans",
+        output_path=tmp_path / "Movie.zh-Hans.srt",
+        work_directory=tmp_path / "jobs" / "job-1",
+    )
+
+
 def embedded_marker(digest: str) -> dict[str, object]:
     return {
         "status": "Completed",
@@ -111,9 +120,11 @@ def test_job_execution_runs_external_subtitle_without_a_worker(tmp_path: Path):
         )
     )
 
-    assert result.output_path == output
-    assert result.target_language_code == "zh-Hans"
-    assert result.format == "srt"
+    assert result.status == "Completed"
+    assert result.result is not None
+    assert result.result.output_path == output
+    assert result.result.target_language_code == "zh-Hans"
+    assert result.result.format == "srt"
     assert output.read_bytes() == SRT
     assert translator.calls == [
         {
@@ -151,7 +162,7 @@ def test_job_execution_extracts_embedded_subtitle_and_reports_progress(
         )[-1],
     )
 
-    assert result is not None
+    assert result.status == "Completed"
     assert events == ["progress", "translation"]
     assert progress[0].phase == "Translating"
     assert progress[0].reused is False
@@ -248,22 +259,121 @@ def test_job_execution_passes_term_map_and_translation_options(tmp_path: Path):
     assert translator.calls[0]["subtitle_terminology_filter_enabled"] is False
 
 
-def test_job_execution_preserves_translation_failure_as_service_error(
+def test_job_execution_returns_structured_translation_failure(
     tmp_path: Path,
 ):
     subtitle = tmp_path / "Movie.en.srt"
     subtitle.write_bytes(SRT)
 
-    with pytest.raises(ServiceError) as error:
-        JobExecution(
-            TranslatorFixture(error=RuntimeError("boom")), OutputFixture()
-        ).execute(
-            JobExecutionInput(
-                subtitle_path=subtitle,
-                target_language_code="zh-Hans",
-                output_path=tmp_path / "Movie.zh-Hans.srt",
-                work_directory=tmp_path / "jobs" / "job-1",
-            )
+    outcome = JobExecution(
+        TranslatorFixture(error=RuntimeError("boom")), OutputFixture()
+    ).execute(
+        JobExecutionInput(
+            subtitle_path=subtitle,
+            target_language_code="zh-Hans",
+            output_path=tmp_path / "Movie.zh-Hans.srt",
+            work_directory=tmp_path / "jobs" / "job-1",
         )
+    )
 
-    assert error.value.error_code == "translation_failed"
+    assert outcome.status == "Failed"
+    assert outcome.error is not None
+    assert outcome.error.error_code == "translation_failed"
+
+
+def test_job_execution_returns_publication_failure(tmp_path: Path):
+    class FailingOutput:
+        def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
+            raise ServiceError("output_write_failed", "Output cannot be written")
+
+    outcome = JobExecution(TranslatorFixture(), FailingOutput()).execute(
+        external_input(tmp_path)
+    )
+
+    assert outcome.status == "Failed"
+    assert outcome.error is not None
+    assert outcome.error.error_code == "output_write_failed"
+
+
+def test_job_execution_returns_extraction_failure_without_translation(tmp_path: Path):
+    media = tmp_path / "Media.mkv"
+    media.write_bytes(b"media")
+    extractor = embedded_extractor()
+    extractor.configure_mock(
+        **{"extract_subtitle.side_effect": RuntimeError("extract failed")}
+    )
+    translator = TranslatorFixture()
+
+    outcome = JobExecution(
+        translator,
+        OutputFixture(),
+        extraction=Extraction(extractor, OutputFixture()),
+    ).execute(embedded_input(media, tmp_path / "jobs" / "job-1"))
+
+    assert outcome.status == "Failed"
+    assert outcome.error is not None
+    assert outcome.error.error_code == "extraction_failed"
+    assert translator.calls == []
+
+
+def test_job_execution_returns_interrupted_before_publication(tmp_path: Path):
+    execution_input = external_input(tmp_path)
+    output = execution_input.output_path
+
+    outcome = JobExecution(
+        TranslatorFixture(), OutputFixture(), should_stop=lambda: True
+    ).execute(execution_input)
+
+    assert outcome.status == "Interrupted"
+    assert outcome.error is not None
+    assert outcome.error.error_code == "job_interrupted"
+    assert not output.exists()
+
+
+def test_job_execution_publishes_before_cleaning_work_directory(
+    tmp_path: Path, monkeypatch
+):
+    events: list[str] = []
+
+    class RecordingOutput(OutputFixture):
+        def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
+            events.append("publish")
+            super().publish(output_path, write, overwrite=overwrite)
+
+    def record_cleanup(path: Path) -> None:
+        events.append("cleanup")
+        path.rmdir()
+
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.execution.shutil.rmtree", record_cleanup
+    )
+
+    def record_terminal(_outcome) -> bool:
+        events.append("terminal")
+        return True
+
+    outcome = JobExecution(
+        TranslatorFixture(),
+        RecordingOutput(),
+        finalize=record_terminal,
+    ).execute(external_input(tmp_path))
+
+    assert outcome.status == "Completed"
+    assert outcome.terminal_persisted is True
+    assert events == ["publish", "cleanup", "terminal"]
+
+
+def test_job_execution_returns_cleanup_failure(tmp_path: Path, monkeypatch):
+    def fail_cleanup(_path: Path) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(
+        "cueweaver.application.jobs.execution.shutil.rmtree", fail_cleanup
+    )
+    outcome = JobExecution(
+        translator=TranslatorFixture(), output=OutputFixture()
+    ).execute(external_input(tmp_path))
+
+    assert outcome.status == "Failed"
+    assert outcome.error is not None
+    assert outcome.error.error_code == "work_cleanup_failed"
