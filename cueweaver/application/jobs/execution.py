@@ -16,9 +16,9 @@ from typing import Literal
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ..errors import ServiceError
 from ..extraction import Extraction, ExtractRequest
+from ..output import OutputPublicationError, OutputPublisher
 from ..term_maps import validate_term_map_content
 from ..translation import (
-    OutputPublisher,
     TranslateRequest,
     TranslateResult,
     Translation,
@@ -195,30 +195,65 @@ class JobExecution:
         term_map_path = _write_term_map(
             execution_input.work_directory, execution_input.term_map
         )
-        result = Translation(
-            self._translator,
-            _PublicationOutputPublisher(
+        try:
+            result = Translation(
+                self._translator,
                 self._output,
-                self._publication_guard,
-                self._should_stop,
-                execution_input.work_directory,
-                finalize,
-            ),
-        ).translate(
-            TranslateRequest(
-                subtitle_path=subtitle_path,
-                target_language_code=execution_input.target_language_code,
-                output_path=execution_input.output_path,
-                work_directory=execution_input.work_directory,
-                term_map_path=term_map_path,
-                dynamic_terminology_enabled=execution_input.dynamic_terminology_enabled,
-                subtitle_terminology_filter_enabled=(
-                    execution_input.subtitle_terminology_filter_enabled
-                ),
-                overwrite=execution_input.overwrite,
+                publication_guard=self._publication_guard,
+                before_publication=self._check_publication_allowed,
+            ).translate(
+                TranslateRequest(
+                    subtitle_path=subtitle_path,
+                    target_language_code=execution_input.target_language_code,
+                    output_path=execution_input.output_path,
+                    work_directory=execution_input.work_directory,
+                    term_map_path=term_map_path,
+                    dynamic_terminology_enabled=execution_input.dynamic_terminology_enabled,
+                    subtitle_terminology_filter_enabled=(
+                        execution_input.subtitle_terminology_filter_enabled
+                    ),
+                    overwrite=execution_input.overwrite,
+                )
             )
-        )
-        return result
+        except OutputPublicationError as error:
+            with self._publication_guard():
+                self._finalize_failure(finalize, error)
+            raise _PublicationFailureError(error) from error
+
+        with self._publication_guard():
+            try:
+                shutil.rmtree(execution_input.work_directory)
+            except OSError as error:
+                failure = ServiceError(
+                    "work_cleanup_failed",
+                    "Completed Job work data could not be cleaned up",
+                )
+                self._finalize_failure(finalize, failure)
+                raise _PublicationFailureError(failure) from error
+            self._finalize_success(finalize)
+            return result
+
+    def _check_publication_allowed(self) -> None:
+        if self._should_stop():
+            raise _ExecutionInterruptedError
+
+    @staticmethod
+    def _finalize_failure(
+        finalize: Callable[[JobExecutionOutcome], bool], error: ServiceError
+    ) -> None:
+        try:
+            finalize(JobExecutionOutcome("Failed", error=error, preserve_failure=True))
+        except Exception as finalization_error:
+            raise JobExecutionFinalizationError from finalization_error
+
+    @staticmethod
+    def _finalize_success(
+        finalize: Callable[[JobExecutionOutcome], bool],
+    ) -> None:
+        try:
+            finalize(JobExecutionOutcome("Completed"))
+        except Exception as finalization_error:
+            raise JobExecutionFinalizationError from finalization_error
 
     def _prepare_embedded_source(
         self, execution_input: JobExecutionInput
@@ -265,68 +300,6 @@ def _interrupted_outcome() -> JobExecutionOutcome:
             "job_interrupted", "Job was interrupted when CueWeaver stopped"
         ),
     )
-
-
-class _PublicationOutputPublisher:
-    def __init__(
-        self,
-        publisher: OutputPublisher,
-        publication_guard: Callable[[], AbstractContextManager[None]],
-        should_stop: Callable[[], bool],
-        work_directory: Path,
-        finalize: Callable[[JobExecutionOutcome], bool],
-    ) -> None:
-        self._publisher = publisher
-        self._publication_guard = publication_guard
-        self._should_stop = should_stop
-        self._work_directory = work_directory
-        self._finalize = finalize
-
-    def publish(
-        self,
-        output_path: Path,
-        write: Callable[[Path], None],
-        *,
-        overwrite: bool = False,
-    ) -> None:
-        with self._publication_guard():
-            if self._should_stop():
-                raise _ExecutionInterruptedError
-            try:
-                self._publisher.publish(output_path, write, overwrite=overwrite)
-            except ServiceError as error:
-                self._finalize_failure(error)
-                raise _PublicationFailureError(error) from error
-            except Exception as error:
-                failure = ServiceError(
-                    "output_write_failed", "Output could not be published"
-                )
-                self._finalize_failure(failure)
-                raise _PublicationFailureError(failure) from error
-            try:
-                shutil.rmtree(self._work_directory)
-            except OSError as error:
-                failure = ServiceError(
-                    "work_cleanup_failed",
-                    "Completed Job work data could not be cleaned up",
-                )
-                self._finalize_failure(failure)
-                raise _PublicationFailureError(failure) from error
-            self._finalize_success()
-
-    def _finalize_failure(self, error: ServiceError) -> None:
-        try:
-            self._finalize(
-                JobExecutionOutcome("Failed", error=error, preserve_failure=True)
-            )
-        except Exception as finalization_error:
-            raise JobExecutionFinalizationError from finalization_error
-
-    def _finalize_success(self) -> None:
-        try:
-            self._finalize(JobExecutionOutcome("Completed"))
-        except Exception as finalization_error:
-            raise JobExecutionFinalizationError from finalization_error
 
 
 def _write_term_map(
