@@ -1,0 +1,99 @@
+{
+  "maxCanonicalBytes": 1048576,
+  "maxRawContentBytes": 1048576,
+  "cases": [
+    {
+      "name": "valid-basic",
+      "text": "{\"Source\":\"Target\"}",
+      "valid": true
+    },
+    {
+      "name": "empty-object",
+      "text": "{}",
+      "valid": false
+    },
+    {
+      "name": "empty-source",
+      "text": "{\"\":\"Target\"}",
+      "valid": false
+    },
+    {
+      "name": "empty-target",
+      "text": "{\"Source\":\"\"}",
+      "valid": false
+    },
+    {
+      "name": "duplicate-keys",
+      "text": "{\"Source\":\"one\",\"Source\":\"two\"}",
+      "valid": false
+    },
+    {
+      "name": "unicode-sharp-s-folding",
+      "text": "{\"Straße\":\"one\",\"STRASSE\":\"two\"}",
+      "valid": false
+    },
+    {
+      "name": "unicode-long-s-folding",
+      "text": "{\"ſource\":\"one\",\"source\":\"two\"}",
+      "valid": false
+    },
+    {
+      "name": "unicode-combining-folding",
+      "text": "{\"ǰ\":\"one\",\"ǰ\":\"two\"}",
+      "valid": false
+    },
+    {
+      "name": "malformed-json",
+      "text": "{\"Source\":",
+      "valid": false
+    },
+    {
+      "name": "unpaired-surrogate",
+      "text": "{\"Source\":\"\\ud800\"}",
+      "valid": false
+    },
+    {
+      "name": "paired-surrogate",
+      "text": "{\"Source\":\"\\ud83d\\ude00\"}",
+      "valid": true
+    },
+    {
+      "name": "canonical-at-limit",
+      "generated": {
+        "targetLength": 1048563,
+        "rawPadding": 0
+      },
+      "valid": true
+    },
+    {
+      "name": "canonical-over-limit",
+      "generated": {
+        "targetLength": 1048564,
+        "rawPadding": 0
+      },
+      "valid": false,
+      "canonicalValid": false,
+      "rawValid": false
+    },
+    {
+      "name": "raw-at-limit",
+      "generated": {
+        "targetLength": 1048500,
+        "rawPadding": 63
+      },
+      "valid": true,
+      "canonicalValid": true,
+      "rawValid": true
+    },
+    {
+      "name": "raw-over-limit",
+      "generated": {
+        "targetLength": 1048500,
+        "rawPadding": 64
+      },
+      "valid": false,
+      "canonicalValid": true,
+      "rawValid": false
+    }
+  ]
+}

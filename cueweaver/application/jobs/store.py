@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ..errors import ServiceError
+from ..term_maps import reject_duplicate_json_pairs
 from .model import JobRecord, migrate_record, valid_job_id
 
 CORRUPT_DIRECTORY = "corrupt"
@@ -171,8 +172,8 @@ def _classify_record(
     if raw_record is None or record_path.is_symlink():
         return "corrupt", None, False, raw_record, None
     try:
-        parsed = json.loads(raw_record)
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        parsed = json.loads(raw_record, object_pairs_hook=reject_duplicate_json_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
         return "corrupt", None, False, raw_record, None
     if not isinstance(parsed, dict):
         return "corrupt", None, False, raw_record, None

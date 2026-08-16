@@ -1,8 +1,10 @@
 export const MAX_TERM_MAP_BYTES = 1024 * 1024;
+export const MAX_TERM_MAP_UPLOAD_BYTES = MAX_TERM_MAP_BYTES;
 
 export interface TermMapContentValidation {
   content: Record<string, string> | null;
   entryCount: number;
+  rawByteLength: number;
   byteLength: number;
   error: string | null;
 }
@@ -35,6 +37,9 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     if (!source) {
       return invalidTermMapContent("Source keys must be non-empty strings.");
     }
+    if (hasUnpairedSurrogate(source)) {
+      return invalidTermMapContent("Term map must contain valid Unicode strings.");
+    }
     const foldedSource = casefold(source);
     if (foldedSources.has(foldedSource)) {
       return invalidTermMapContent(
@@ -52,6 +57,9 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     if (typeof target !== "string" || !target) {
       return invalidTermMapContent("Target values must be non-empty strings.");
     }
+    if (hasUnpairedSurrogate(target)) {
+      return invalidTermMapContent("Term map must contain valid Unicode strings.");
+    }
     Object.defineProperty(content, source, {
       configurable: true,
       enumerable: true,
@@ -60,15 +68,25 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
     });
   }
 
-  const byteLength = new TextEncoder().encode(text).byteLength;
+  const rawByteLength = new TextEncoder().encode(text).byteLength;
+  if (rawByteLength > MAX_TERM_MAP_UPLOAD_BYTES) {
+    return invalidTermMapContent("Term map must be at most 1 MiB.");
+  }
+  const byteLength = new TextEncoder().encode(JSON.stringify(content)).byteLength;
   if (byteLength > MAX_TERM_MAP_BYTES) {
     return invalidTermMapContent("Term map must be at most 1 MiB.");
   }
-  return { content, entryCount: entries.length, byteLength, error: null };
+  return {
+    content,
+    entryCount: entries.length,
+    rawByteLength,
+    byteLength,
+    error: null,
+  };
 }
 
 function invalidTermMapContent(error: string): TermMapContentValidation {
-  return { content: null, entryCount: 0, byteLength: 0, error };
+  return { content: null, entryCount: 0, rawByteLength: 0, byteLength: 0, error };
 }
 
 const CASEFOLD_EXCEPTIONS: ReadonlyMap<number, string> = new Map([
@@ -103,6 +121,22 @@ function casefold(value: string): string {
     folded += CASEFOLD_EXCEPTIONS.get(character.codePointAt(0)!) ?? character;
   }
   return folded;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return true;
+  }
+  return false;
 }
 
 function readTopLevelObjectKeys(text: string): string[] {

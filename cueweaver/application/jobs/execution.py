@@ -14,6 +14,7 @@ from typing import Literal
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ..errors import ServiceError
 from ..extraction import Extraction, ExtractRequest
+from ..term_maps import validate_term_map_content
 from ..translation import (
     OutputPublisher,
     TranslateRequest,
@@ -155,11 +156,10 @@ def _write_term_map(
 ) -> Path | None:
     if term_map is None:
         return None
+    content = validate_term_map_content(dict(term_map))
     work_directory.mkdir(parents=True, exist_ok=True)
     term_map_path = work_directory / "term-map.json"
-    term_map_path.write_text(
-        json.dumps(dict(term_map), ensure_ascii=False), encoding="utf-8"
-    )
+    term_map_path.write_text(json.dumps(content, ensure_ascii=False), encoding="utf-8")
     return term_map_path
 
 

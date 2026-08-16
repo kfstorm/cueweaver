@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { validateTermMapContent } from "./term-map-validation";
 
-export { MAX_TERM_MAP_BYTES, validateTermMapContent } from "./term-map-validation";
+export {
+  MAX_TERM_MAP_BYTES,
+  MAX_TERM_MAP_UPLOAD_BYTES,
+  validateTermMapContent,
+} from "./term-map-validation";
 export type { TermMapContentValidation } from "./term-map-validation";
 
 export interface TermMapSummary {
