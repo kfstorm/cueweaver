@@ -35,7 +35,7 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
     source.write_text(
         "1\n00:00:00,000 --> 00:00:01,000\nJon arrives.\n", encoding="utf-8"
     )
-    work_directory = tmp_path / "work"
+    work_directory = tmp_path / "work" / "translation"
     captured: dict[str, object] = {}
 
     class Project:
@@ -93,7 +93,7 @@ def test_translation_uses_the_explicit_work_directory_and_filters_term_map(
         "project_file": True,
     }
     assert captured["terminology_map"] == {"Jon": "琼恩"}
-    assert list(work_directory.glob("translation/*/source.srt"))
+    assert list(work_directory.glob("*/source.srt"))
 
 
 @pytest.mark.parametrize(

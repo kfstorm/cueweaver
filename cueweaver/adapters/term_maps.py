@@ -21,6 +21,7 @@ from ..application.term_maps import (
     reject_duplicate_json_pairs,
     validate_term_map_content,
 )
+from ..work import WorkRoot
 
 try:
     import fcntl
@@ -31,8 +32,12 @@ except ImportError:  # pragma: no cover - the supported runtime is POSIX
 class FileTermMapStore:
     """Store Term map content and its index below the configured Work root."""
 
-    def __init__(self, work_root: Path) -> None:
-        self._directory = Path(work_root) / "term-maps"
+    def __init__(self, work_root: Path | WorkRoot) -> None:
+        self._directory = (
+            work_root.term_maps_directory
+            if isinstance(work_root, WorkRoot)
+            else Path(work_root) / "term-maps"
+        )
         self._index_path = self._directory / "index.json"
         self._lock_path = self._directory / ".lock"
         self._thread_lock = threading.RLock()

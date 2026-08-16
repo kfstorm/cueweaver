@@ -6,6 +6,7 @@ from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
+from ..work import WorkRoot
 from .browsing import MediaBrowser
 from .discovery import Discovery
 from .extraction import Extraction
@@ -31,7 +32,8 @@ class CueWeaverApplication:
         configured_translator = (
             PySubtransTranslator() if translator is None else translator
         )
-        self.term_maps = TermMaps(FileTermMapStore(work_root or Path.cwd()))
+        configured_work_root = WorkRoot(work_root or Path.cwd())
+        self.term_maps = TermMaps(FileTermMapStore(configured_work_root))
         if work_root is not None and media_root is not None:
             self.jobs = Jobs(
                 configured_translator,

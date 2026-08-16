@@ -8,9 +8,9 @@ from binascii import Error as Base64Error
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
+from ...work import is_safe_job_identifier
 from ..errors import ServiceError
 from ..term_maps import validate_term_map_content
 
@@ -172,15 +172,7 @@ def copy_job_record(record: Mapping[str, object]) -> JobRecord:
 
 
 def valid_job_id(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and value not in {".", ".."}
-        and "\\" not in value
-        and "\x00" not in value
-        and not Path(value).is_absolute()
-        and Path(value).name == value
-    )
+    return is_safe_job_identifier(value)
 
 
 def _valid_strict_record_metadata(record: JobRecord) -> bool:

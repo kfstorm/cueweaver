@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -14,6 +13,7 @@ from .application.translation import Translator
 from .http import create_app
 from .http.app import http_error_handler
 from .translation import PySubtransTranslator
+from .work import WorkRoot
 
 MEDIA_ROOT_ENV = "CUEWEAVER_MEDIA_ROOT"
 WORK_ROOT_ENV = "CUEWEAVER_WORK_ROOT"
@@ -68,7 +68,7 @@ def _create_api_app(
     media_root = _require_absolute(media_root, "Media root")
     work_root = _require_absolute(work_root, "Work root")
     _validate_media_root(media_root)
-    _prepare_work_root(work_root)
+    WorkRoot(work_root).prepare()
 
     application = CueWeaverApplication(
         translator, work_root=work_root, media_root=media_root
@@ -159,30 +159,6 @@ def _validate_media_root(media_root: Path) -> None:
             pass
     except OSError as error:
         raise ValueError("Media root must be a readable directory") from error
-
-
-def _prepare_work_root(work_root: Path) -> None:
-    try:
-        work_root.mkdir(parents=True, exist_ok=True)
-        if not work_root.is_dir():
-            raise OSError
-        with tempfile.TemporaryDirectory(
-            prefix=".cueweaver-check-", dir=work_root
-        ) as raw:
-            probe_directory = Path(raw)
-            source = probe_directory / "source"
-            destination = probe_directory / "destination"
-            source.write_bytes(b"ready")
-            if source.read_bytes() != b"ready":
-                raise OSError
-            destination.write_bytes(b"replace")
-            source.replace(destination)
-            if destination.read_bytes() != b"ready":
-                raise OSError
-    except OSError as error:
-        raise ValueError(
-            "Work root must support reading, writing, directory creation, and atomic replacement"
-        ) from error
 
 
 def _validate_static_root(static_root: Path) -> Path:
