@@ -39,6 +39,12 @@ _Avoid_: glossary
 The explicit per-request directory used for PySubtrans translation state.
 _Avoid_: job workspace
 
+**Work root**:
+The configured writable root owned by CueWeaver. It contains the observable
+`jobs/` and `term-maps/` directories; each Job owns one `jobs/<job-id>/` Work
+directory, including its assigned `translation/` directory.
+_Avoid_: temporary root
+
 **Job**:
 A durable product task that will orchestrate optional Extraction and
 Translation.

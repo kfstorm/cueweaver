@@ -17,6 +17,7 @@ from unicodedata import category
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
+from ...work import WorkRoot
 from ..errors import ServiceError
 from ..extraction import Extraction
 from ..media import require_readable_media
@@ -94,8 +95,8 @@ class Jobs:
         self._term_maps = term_maps
         self._extraction = extraction
         self._media_root = media_root.resolve()
-        self._work_root = work_root.resolve()
-        self._jobs_root = self._work_root / "jobs"
+        self._work = WorkRoot(work_root)
+        self._jobs_root = self._work.jobs_directory
         self._record_store = (
             record_store
             if record_store is not None
@@ -764,6 +765,7 @@ class Jobs:
                     target_language_code=str(request["target_language_code"]),
                     output_path=self._media_root / str(request["output_path"]),
                     work_directory=work_directory,
+                    translation_directory=self._translation_directory(job_id),
                     term_map=term_map,
                     dynamic_terminology_enabled=bool(
                         request.get("dynamic_terminology_enabled", True)
@@ -998,28 +1000,25 @@ class Jobs:
             )
 
     def _job_work_directory(self, job_id: str) -> Path:
-        if not job_id or Path(job_id).name != job_id or job_id in {".", ".."}:
-            raise ServiceError("invalid_job_id", "Job ID is invalid")
-        self._ensure_jobs_root()
-        work_directory = self._jobs_root / job_id
-        if work_directory.is_symlink():
-            raise ServiceError(
-                "invalid_work_directory",
-                "Job Work directory must not be a symbolic link",
-            )
         try:
-            resolved = work_directory.resolve()
-        except OSError as error:
-            raise ServiceError(
-                "invalid_work_directory",
-                "Job Work directory cannot be resolved",
-            ) from error
-        if not resolved.is_relative_to(self._work_root):
-            raise ServiceError(
-                "invalid_work_directory",
-                "Job Work directory must remain inside the Work root",
+            return self._work.job_directory(job_id)
+        except ValueError as error:
+            message = str(error)
+            code = (
+                "invalid_job_id"
+                if message == "Job ID is invalid"
+                else "invalid_work_directory"
             )
-        return work_directory
+            raise ServiceError(
+                code,
+                message,
+            ) from error
+
+    def _translation_directory(self, job_id: str) -> Path:
+        try:
+            return self._work.ensure_translation_directory(job_id)
+        except ValueError as error:
+            raise ServiceError("invalid_work_directory", str(error)) from error
 
 
 def _source_format(value: str | None) -> str:

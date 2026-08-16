@@ -21,6 +21,7 @@ from ..application.term_maps import (
     reject_duplicate_json_pairs,
     validate_term_map_content,
 )
+from ..work import WorkRoot
 
 try:
     import fcntl
@@ -31,8 +32,11 @@ except ImportError:  # pragma: no cover - the supported runtime is POSIX
 class FileTermMapStore:
     """Store Term map content and its index below the configured Work root."""
 
-    def __init__(self, work_root: Path) -> None:
-        self._directory = Path(work_root) / "term-maps"
+    def __init__(self, work_root: WorkRoot) -> None:
+        if not isinstance(work_root, WorkRoot):
+            raise TypeError("FileTermMapStore requires a WorkRoot")
+        self._work_root = work_root
+        self._directory = work_root.term_maps_directory
         self._index_path = self._directory / "index.json"
         self._lock_path = self._directory / ".lock"
         self._thread_lock = threading.RLock()
@@ -177,7 +181,13 @@ class FileTermMapStore:
     def _locked(self) -> Iterator[None]:
         with self._thread_lock:
             try:
-                self._directory.mkdir(parents=True, exist_ok=True)
+                try:
+                    self._directory = self._work_root.ensure_term_maps_directory()
+                except ValueError as error:
+                    raise ServiceError(
+                        "term_maps_unavailable",
+                        "Term map storage cannot be opened",
+                    ) from error
                 lock_file = self._lock_path.open("a+")
             except OSError as error:
                 raise ServiceError(

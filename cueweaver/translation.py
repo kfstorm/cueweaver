@@ -198,7 +198,6 @@ def _prepare_working_source(
         ).encode("utf-8")
     translation_directory = (
         Path(work_directory).expanduser().resolve()
-        / "translation"
         / (hashlib.sha256(key_material).hexdigest()[:16])
     )
     translation_directory.mkdir(parents=True, exist_ok=True)

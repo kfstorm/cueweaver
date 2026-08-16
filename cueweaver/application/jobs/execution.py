@@ -42,6 +42,7 @@ class JobExecutionInput:
     target_language_code: str
     output_path: Path
     work_directory: Path
+    translation_directory: Path | None = None
     term_map: Mapping[str, str] | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
@@ -211,7 +212,10 @@ class JobExecution:
                 subtitle_path=subtitle_path,
                 target_language_code=execution_input.target_language_code,
                 output_path=execution_input.output_path,
-                work_directory=execution_input.work_directory,
+                work_directory=(
+                    execution_input.translation_directory
+                    or execution_input.work_directory
+                ),
                 term_map_path=term_map_path,
                 dynamic_terminology_enabled=execution_input.dynamic_terminology_enabled,
                 subtitle_terminology_filter_enabled=(
