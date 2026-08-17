@@ -1,5 +1,6 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Event
 
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
@@ -150,22 +151,35 @@ def test_directory_term_map_writes_are_serialized_last_successful_write_wins(
     first = create_term_map(client, "First")
     second = create_term_map(client, "Second")
 
-    def bind(term_map_id: object) -> tuple[int, str]:
+    ready = Barrier(2)
+    first_write_done = Event()
+
+    def bind(term_map_id: object, final: bool) -> list[int]:
         with make_client(tmp_path) as concurrent_client:
-            response = directory_request(
+            first_response = directory_request(
                 concurrent_client, "PUT", "Series", term_map_id=term_map_id
             )
-            return response.status_code, response.json()["local"]["id"]
+            ready.wait()
+            if final:
+                final_response = directory_request(
+                    concurrent_client, "PUT", "Series", term_map_id=first["id"]
+                )
+                first_write_done.set()
+            else:
+                first_write_done.wait()
+                final_response = directory_request(
+                    concurrent_client, "PUT", "Series", term_map_id=second["id"]
+                )
+            return [first_response.status_code, final_response.status_code]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
-            executor.submit(bind, term_map_id)
-            for term_map_id in (first["id"], second["id"])
+            executor.submit(bind, first["id"], True),
+            executor.submit(bind, second["id"], False),
         ]
-        completed = [future.result() for future in as_completed(futures)]
+        statuses = [future.result() for future in futures]
 
-    assert [status for status, _term_map_id in completed] == [200, 200]
+    assert statuses == [[200, 200], [200, 200]]
     assert (
-        directory_request(client, "GET", "Series").json()["local"]["id"]
-        == completed[-1][1]
+        directory_request(client, "GET", "Series").json()["local"]["id"] == second["id"]
     )
