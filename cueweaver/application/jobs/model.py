@@ -96,6 +96,7 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
             "subtitle_path",
             "stream_index",
             "target_language_code",
+            "term_map_mode",
             "output_path",
             "source_format",
         )
@@ -280,6 +281,7 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
             )
         )
         and _valid_term_map_snapshot(term_map)
+        and _valid_term_map_selection(request, term_map)
     )
 
 
@@ -300,6 +302,17 @@ def _valid_term_map_snapshot(term_map: object) -> bool:
     except (TypeError, ServiceError):
         return False
     return True
+
+
+def _valid_term_map_selection(request: dict[str, object], term_map: object) -> bool:
+    mode = request.get("term_map_mode")
+    if mode is None:
+        return True
+    if mode == "none":
+        return term_map is None
+    if mode == "selected":
+        return term_map is not None
+    return mode == "follow"
 
 
 def valid_request(request: dict[str, object]) -> bool:
@@ -414,6 +427,9 @@ def normalize_record(record: JobRecord) -> None:
     request = record["request"]
     assert isinstance(request, dict)
     request.setdefault("term_map", None)
+    request.setdefault(
+        "term_map_mode", "selected" if request["term_map"] is not None else "none"
+    )
     request.setdefault("dynamic_terminology_enabled", True)
     request.setdefault("subtitle_terminology_filter_enabled", True)
     request.setdefault("output_suffix", str(request["target_language_code"]))

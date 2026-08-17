@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cueweaver.adapters.output import AtomicOutputPublisher
+from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
 from cueweaver.application.jobs import CreateJobRequest, FileJobRecordStore, Jobs
@@ -263,6 +264,7 @@ def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid
             "request": {
                 **legacy["request"],
                 "term_map": None,
+                "term_map_mode": "none",
                 "dynamic_terminology_enabled": True,
                 "subtitle_terminology_filter_enabled": True,
                 "output_suffix": "zh-Hans",
@@ -302,6 +304,28 @@ def test_record_store_migrates_a_legacy_record_with_a_noncanonical_filename(
     assert [record["id"] for record in records] == ["actual-id"]
     assert (jobs_root / "actual-id.json").is_file()
     assert not (jobs_root / "legacy-name.json").exists()
+
+
+def test_record_store_migrates_a_legacy_term_map_snapshot_to_selected_mode(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    legacy = persisted_job_record("legacy-selected")
+    request = legacy["request"]
+    assert isinstance(request, dict)
+    request["term_map"] = {
+        "id": "map-1",
+        "name": "Characters",
+        "content": {"Captain": "队长"},
+    }
+    (jobs_root / "legacy-selected.json").write_text(
+        json.dumps(legacy), encoding="utf-8"
+    )
+
+    records = FileJobRecordStore(jobs_root).load()
+
+    assert records[0]["request"]["term_map_mode"] == "selected"
 
 
 def test_record_store_keeps_last_value_for_unrelated_duplicate_job_fields(
@@ -618,7 +642,9 @@ def test_new_job_records_include_schema_version_one(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
 
     assert queued["schema_version"] == 1
     assert (
@@ -653,8 +679,54 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": target,
+            "term_map_mode": "follow",
+            "term_map_id": None,
         },
     )
+
+
+def job_body(**overrides: object) -> dict[str, object]:
+    return {
+        "media_path": "Movie.mkv",
+        "subtitle_path": "Movie.en.srt",
+        "target_language_code": "zh-Hans",
+        "term_map_mode": "follow",
+        "term_map_id": None,
+        **overrides,
+    }
+
+
+def create_and_bind_term_map(
+    client: TestClient, name: str, path: str, content: dict[str, str]
+) -> dict[str, object]:
+    term_map = client.post(
+        "/api/term-maps", json={"name": name, "content": content}
+    ).json()
+    assert (
+        client.put(
+            "/api/term-maps/directory",
+            json={"path": path, "term_map_id": term_map["id"]},
+        ).status_code
+        == 200
+    )
+    return term_map
+
+
+def create_completed_external_job(
+    jobs: Jobs, target_language: str = "zh"
+) -> tuple[dict[str, object], dict[str, object]]:
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", target_language, "none")
+    )
+    return queued, wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+
+
+def start_blocked_translation(
+    jobs: Jobs, started: threading.Event
+) -> dict[str, object]:
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
+    assert started.wait(timeout=5)
+    return queued
 
 
 def create_term_map_job(client: TestClient):
@@ -668,16 +740,168 @@ def create_term_map_job(client: TestClient):
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh-Hans",
+            "term_map_mode": "selected",
             "term_map_id": term_map["id"],
         },
     ).json()
     return term_map, queued
 
 
+def test_job_term_map_mode_resolves_the_media_parent_directory(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    series = media_root / "Series"
+    series.mkdir()
+    (series / "Episode.mkv").write_bytes(b"media")
+    (series / "Episode.en.srt").write_bytes(SRT)
+    season = series / "Season 1"
+    season.mkdir()
+    (season / "Episode.mkv").write_bytes(b"media")
+    (season / "Episode.en.srt").write_bytes(SRT)
+
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        term_map = create_and_bind_term_map(
+            client, "Characters", "Series", {"Captain": "队长"}
+        )
+
+        queued = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Series/Episode.mkv",
+                "subtitle_path": "Series/Episode.en.srt",
+                "target_language_code": "zh-Hans",
+                "term_map_mode": "follow",
+                "term_map_id": None,
+            },
+        )
+
+        assert queued.status_code == 200
+        assert queued.json()["request"]["term_map_mode"] == "follow"
+        assert queued.json()["request"]["term_map"] == {
+            "id": term_map["id"],
+            "name": "Characters",
+        }
+        child_map = create_and_bind_term_map(
+            client, "Season terms", "Series/Season 1", {"Captain": "舰长"}
+        )
+        child_job = client.post(
+            "/api/jobs",
+            json={
+                "media_path": "Series/Season 1/Episode.mkv",
+                "subtitle_path": "Series/Season 1/Episode.en.srt",
+                "target_language_code": "ja",
+                "term_map_mode": "follow",
+            },
+        )
+
+        assert child_job.status_code == 200
+        assert child_job.json()["request"]["term_map"] == {
+            "id": child_map["id"],
+            "name": "Season terms",
+        }
+
+
+def test_follow_job_snapshot_survives_restart(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        term_map = create_and_bind_term_map(
+            client, "Characters", "", {"Captain": "队长"}
+        )
+        queued = create_job(client).json()
+        completed = wait_for_status(client, queued["id"], "Completed")
+        assert completed["request"]["term_map_mode"] == "follow"
+        assert completed["request"]["term_map"] == {
+            "id": term_map["id"],
+            "name": "Characters",
+        }
+
+    with make_client(media_root, work_root, FakeTranslator()) as restarted:
+        recovered = restarted.get(f"/api/jobs/{queued['id']}")
+
+        assert recovered.status_code == 200
+        assert recovered.json()["request"]["term_map_mode"] == "follow"
+        assert recovered.json()["request"]["term_map"] == {
+            "id": term_map["id"],
+            "name": "Characters",
+        }
+
+
+def test_none_job_mode_is_accepted_without_a_term_map(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs",
+            json=job_body(term_map_mode="none"),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["request"]["term_map_mode"] == "none"
+        assert response.json()["request"]["term_map"] is None
+
+
+def test_follow_resolution_failure_does_not_queue_a_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+
+    def fail_resolution(_state: DirectoryTermMaps, _directory: str):
+        raise ServiceError(
+            "directory_term_maps_unavailable",
+            "Directory Term map metadata cannot be read",
+        )
+
+    monkeypatch.setattr(DirectoryTermMaps, "get", fail_resolution)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs",
+            json=job_body(),
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_code"] == "directory_term_maps_unavailable"
+        assert client.get("/api/jobs").json()["active_jobs"] == []
+
+
+@pytest.mark.parametrize(
+    ("mode", "term_map_id"),
+    [("follow", "map-1"), ("none", "map-1"), ("selected", None)],
+)
+def test_job_term_map_mode_rejects_invalid_combinations_at_request_schema(
+    tmp_path: Path, mode: str, term_map_id: str | None
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs",
+            json=job_body(term_map_mode=mode, term_map_id=term_map_id),
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_code"] == "invalid_request"
+        assert response.json()["field"] == "term_map_id"
+        assert client.get("/api/jobs").json()["active_jobs"] == []
+
+
+def test_job_term_map_mode_is_required_by_http_schema(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs",
+            json={**job_body(), "term_map_mode": None},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_code"] == "invalid_request"
+
+
 def create_failed_external_job(tmp_path: Path, translator: FakeTranslator):
     media_root, work_root, media, subtitle = make_roots(tmp_path)
     jobs = Jobs(translator, media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     return media_root, work_root, media, subtitle, jobs, queued
 
@@ -692,6 +916,7 @@ def create_failed_embedded_job(tmp_path: Path, translator: FakeTranslator):
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -788,7 +1013,7 @@ def finish_shutdown(
 def create_queued_job(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     return media_root, work_root, jobs, queued
 
 
@@ -798,9 +1023,9 @@ def create_blocked_jobs(tmp_path: Path):
     started = threading.Event()
     translator = FakeTranslator(started=started, release=release)
     jobs = Jobs(translator, media_root, work_root)
-    running = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    running = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     assert started.wait(timeout=5)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none"))
     return jobs, translator, running, queued, release, subtitle
 
 
@@ -811,7 +1036,9 @@ def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
     store = FalsyRecordStore()
     jobs = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
     jobs.delete(str(queued["id"]))
 
@@ -835,6 +1062,7 @@ def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: 
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh-Hans",
+            "term_map_mode": "follow",
             "term_map": None,
             "dynamic_terminology_enabled": True,
             "subtitle_terminology_filter_enabled": True,
@@ -919,7 +1147,9 @@ def test_retry_adds_a_new_attempt_to_status_history(tmp_path: Path):
     translator = FakeTranslator(error=RuntimeError("boom"))
     jobs = Jobs(translator, media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     failed = jobs.get(str(queued["id"]))
     failed_finished_at = failed["status_history"][2]["finished_at"]
@@ -1117,7 +1347,9 @@ def test_failed_external_job_retries_in_place_and_reuses_work_directory(
     translator.error = RuntimeError("boom")
     jobs = Jobs(translator, media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     work_directory = work_root / "jobs" / str(queued["id"])
     checkpoint_marker = work_directory / "checkpoint-marker"
@@ -1434,6 +1666,7 @@ def test_embedded_extraction_failure_can_be_retried_successfully(
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -1479,6 +1712,7 @@ def test_embedded_retry_reuses_checkpoint_and_output_policy(
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             output_conflict_policy=output_conflict_policy,
             stream_index=3,
             source_format="srt",
@@ -1521,7 +1755,9 @@ def test_retry_source_validation_keeps_failed_job_terminal_and_updates_error(
     media_root, work_root, _media, subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(error=RuntimeError("boom")), media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     subtitle.unlink()
 
@@ -1545,7 +1781,9 @@ def test_retry_revalidates_media_and_external_subtitle_paths(tmp_path: Path):
     media_root, work_root, media, subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(error=RuntimeError("boom")), media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     media.unlink()
 
@@ -1591,7 +1829,9 @@ def test_completed_job_rejects_retry_with_a_structured_conflict(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans"))
+    queued = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+    )
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
 
     with pytest.raises(ServiceError) as raised:
@@ -1636,7 +1876,7 @@ def test_cancel_queued_job_persists_history_and_allows_terminal_delete(
 
     jobs.delete(str(queued["id"]))
     assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
-    follow_up = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ko"))
+    follow_up = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ko", "none"))
     release.set()
     wait_for_status_from_jobs(jobs, str(running["id"]), "Completed")
     wait_for_status_from_jobs(jobs, str(follow_up["id"]), "Completed")
@@ -1648,8 +1888,7 @@ def test_cancel_queued_job_persists_history_and_allows_terminal_delete(
 def test_cancel_rejects_non_queued_jobs(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    queued, completed = create_completed_external_job(jobs)
 
     with pytest.raises(ServiceError) as raised:
         jobs.cancel(str(queued["id"]))
@@ -1797,6 +2036,7 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format=source_format,
         )
@@ -1887,6 +2127,7 @@ def test_embedded_phase_persistence_failure_marks_worker_failed(
             media.name,
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -1925,6 +2166,7 @@ def test_embedded_extraction_failure_does_not_translate_or_publish(
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format=source_format,
         )
@@ -1954,6 +2196,8 @@ def test_http_accepts_embedded_stream_without_an_extraction_path(tmp_path: Path)
                 "stream_index": 3,
                 "source_format": "srt",
                 "target_language_code": "zh-Hans",
+                "term_map_mode": "follow",
+                "term_map_id": None,
             },
         )
 
@@ -1988,6 +2232,7 @@ def test_embedded_job_redacts_absolute_error_paths(tmp_path: Path):
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -2012,12 +2257,7 @@ def test_job_rejects_missing_term_map_before_queueing(tmp_path: Path):
     with make_client(media_root, work_root, FakeTranslator()) as client:
         response = client.post(
             "/api/jobs",
-            json={
-                "media_path": "Movie.mkv",
-                "subtitle_path": "Movie.en.srt",
-                "target_language_code": "zh-Hans",
-                "term_map_id": "missing-map",
-            },
+            json=job_body(term_map_mode="selected", term_map_id="missing-map"),
         )
 
         assert response.status_code == 400
@@ -2045,6 +2285,7 @@ def test_job_list_separates_active_jobs_and_redacts_term_map_content(tmp_path: P
                 "media_path": "Movie.mkv",
                 "subtitle_path": "Movie.en.srt",
                 "target_language_code": "zh-Hans",
+                "term_map_mode": "selected",
                 "term_map_id": term_map["id"],
             },
         ).json()
@@ -2134,6 +2375,8 @@ def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
                 "media_path": "Movie.mkv",
                 "subtitle_path": "Movie.en.srt",
                 "target_language_code": "zh-Hans",
+                "term_map_mode": "follow",
+                "term_map_id": None,
                 "dynamic_terminology_enabled": False,
                 "subtitle_terminology_filter_enabled": False,
             },
@@ -2180,6 +2423,7 @@ def test_running_and_queued_jobs_use_term_map_snapshots_after_rename_and_delete(
                 "media_path": "Movie.mkv",
                 "subtitle_path": "Movie.en.srt",
                 "target_language_code": "zh-Hans",
+                "term_map_mode": "selected",
                 "term_map_id": running_term_map["id"],
             },
         ).json()
@@ -2194,6 +2438,7 @@ def test_running_and_queued_jobs_use_term_map_snapshots_after_rename_and_delete(
                 "media_path": "Movie.mkv",
                 "subtitle_path": "Movie.en.srt",
                 "target_language_code": "ja",
+                "term_map_mode": "selected",
                 "term_map_id": queued_term_map["id"],
             },
         ).json()
@@ -2365,10 +2610,10 @@ def test_terminal_persistence_failure_is_classified_as_worker_failure(
         original_write(jobs, job_id, record)
 
     monkeypatch.setattr(Jobs, "_write_record", fail_completed_write)
-    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     first_id = str(first["id"])
     assert started.wait(timeout=5)
-    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja"))
+    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none"))
     release.set()
 
     failed = wait_for_status_from_jobs(jobs, first_id, "Failed")
@@ -2415,7 +2660,7 @@ def test_delete_terminal_job_removes_history_and_work_without_touching_media(
         error=RuntimeError("boom") if terminal_status == "Failed" else None
     )
     jobs = Jobs(translator, media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     terminal = wait_for_status_from_jobs(jobs, str(queued["id"]), terminal_status)
     work_directory = work_root / "jobs" / str(queued["id"])
     work_directory.mkdir(exist_ok=True)
@@ -2443,7 +2688,7 @@ def test_delete_terminal_job_removes_history_and_work_without_touching_media(
 def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path):
     media_root, work_root, media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(error=RuntimeError("boom")), media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     jobs.close()
     record_path = work_root / "jobs" / f"{queued['id']}.json"
@@ -2505,6 +2750,7 @@ def test_delete_rejects_extracting_jobs(tmp_path: Path):
             "Movie.mkv",
             None,
             "zh",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -2526,8 +2772,7 @@ def test_delete_cleanup_failure_keeps_record_and_preserves_published_output(
 ):
     media_root, work_root, media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
+    queued, completed = create_completed_external_job(jobs)
     work_directory = work_root / "jobs" / str(queued["id"])
     work_directory.mkdir(exist_ok=True)
     output = media_root / str(completed["request"]["output_path"])
@@ -2588,11 +2833,15 @@ def test_clear_completed_is_deterministic_and_retains_partial_failures(
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     translator = FakeTranslator(error=RuntimeError("boom"))
     jobs = Jobs(translator, media_root, work_root)
-    failed = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "failed"))
+    failed = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "failed", "none")
+    )
     wait_for_status_from_jobs(jobs, str(failed["id"]), "Failed")
     translator.error = None
-    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "first"))
-    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "second"))
+    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "first", "none"))
+    second = jobs.create(
+        CreateJobRequest("Movie.mkv", "Movie.en.srt", "second", "none")
+    )
     wait_for_status_from_jobs(jobs, str(first["id"]), "Completed")
     wait_for_status_from_jobs(jobs, str(second["id"]), "Completed")
     for job in (first, second):
@@ -2700,7 +2949,9 @@ def test_job_validation_rejects_before_queueing(
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     client = make_client(media_root, work_root, translator)
 
-    response = client.post("/api/jobs", json=body)
+    response = client.post(
+        "/api/jobs", json={"term_map_mode": "follow", "term_map_id": None, **body}
+    )
 
     assert response.status_code == 400
     assert response.json()["error_code"] == expected_code
@@ -2729,7 +2980,7 @@ def test_retry_recomputes_append_number_from_original_output_name(tmp_path: Path
     translator = FakeTranslator(error=RuntimeError("boom"))
     jobs = Jobs(translator, media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     assert failed["request"]["output_path"] == "Movie.zh.2.srt"
     original_output.unlink()
@@ -2758,6 +3009,7 @@ def test_retry_preserves_overwrite_output_policy_and_atomic_replacement(
             "Movie.mkv",
             "Movie.en.srt",
             "zh",
+            "none",
             output_conflict_policy="overwrite",
         )
     )
@@ -2816,6 +3068,8 @@ def test_job_rejects_unsafe_output_suffix(tmp_path: Path, suffix: str):
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh",
+            "term_map_mode": "follow",
+            "term_map_id": None,
             "output_suffix": suffix,
         },
     )
@@ -2836,6 +3090,8 @@ def test_job_overwrite_replaces_output_after_success(tmp_path: Path):
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh",
+            "term_map_mode": "follow",
+            "term_map_id": None,
             "output_conflict_policy": "overwrite",
         },
     ).json()
@@ -2859,6 +3115,8 @@ def test_job_overwrite_preserves_existing_output_when_translation_fails(tmp_path
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh",
+            "term_map_mode": "follow",
+            "term_map_id": None,
             "output_conflict_policy": "overwrite",
         },
     ).json()
@@ -2878,6 +3136,8 @@ def test_job_accepts_external_subtitle_without_language_suffix(tmp_path: Path):
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.srt",
             "target_language_code": "zh",
+            "term_map_mode": "follow",
+            "term_map_id": None,
         },
     )
 
@@ -2898,6 +3158,7 @@ def test_restart_recovers_every_active_job_without_requeueing(
         "name": "Characters",
         "content": {"Captain": "队长"},
     }
+    record["request"]["term_map_mode"] = "selected"
     record["finished_at"] = None
     record_path.write_text(json.dumps(record), encoding="utf-8")
     work_directory = work_root / "jobs" / queued["id"]
@@ -3042,6 +3303,7 @@ def test_restart_retains_extracted_source_for_an_interrupted_embedded_job(
             "Movie.mkv",
             None,
             "zh-Hans",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -3102,7 +3364,7 @@ def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     release = threading.Event()
 
     jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
-    jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     assert started.wait(timeout=5)
 
     closed = threading.Event()
@@ -3123,8 +3385,7 @@ def test_shutdown_marks_blocked_translation_interrupted_at_safe_point(
     release = threading.Event()
 
     jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    assert started.wait(timeout=5)
+    queued = start_blocked_translation(jobs, started)
 
     interrupted = finish_shutdown(jobs, str(queued["id"]), release)
     assert interrupted["status"] == "Interrupted"
@@ -3150,8 +3411,7 @@ def test_shutdown_marks_failed_blocked_translation_interrupted(
         media_root,
         work_root,
     )
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    assert started.wait(timeout=5)
+    queued = start_blocked_translation(jobs, started)
 
     assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
         "Interrupted"
@@ -3181,6 +3441,7 @@ def test_shutdown_marks_blocked_extraction_interrupted_before_translation(
             "Movie.mkv",
             None,
             "zh",
+            "none",
             stream_index=3,
             source_format="srt",
         )
@@ -3208,8 +3469,7 @@ def test_shutdown_recovers_after_interrupted_record_write_failure(
         work_root,
         record_store=store,
     )
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
-    assert started.wait(timeout=5)
+    queued = start_blocked_translation(jobs, started)
 
     assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
         "Interrupted"
@@ -3239,7 +3499,7 @@ def test_non_oserror_interrupted_persistence_failure_is_worker_failure(
         work_root,
         record_store=store,
     )
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     assert started.wait(timeout=5)
 
     jobs.close()
@@ -3292,7 +3552,7 @@ def test_shutdown_after_publish_persists_completed_job(
     jobs = Jobs(FakeTranslator(), media_root, work_root)
     lifecycle_lock = InstrumentedLock()
     jobs._lifecycle_lock = lifecycle_lock
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh"))
+    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     assert published.wait(timeout=5)
     lifecycle_lock.observe_acquire = True
 

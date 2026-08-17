@@ -3,7 +3,7 @@
 from typing import Literal, Protocol
 
 from fastapi import FastAPI, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from ..application.jobs import CreateJobRequest
 from ..application.jobs.model import project_job_detail
@@ -16,11 +16,24 @@ class CreateJobBody(BaseModel):
     target_language_code: str = Field(min_length=1)
     output_suffix: str | None = None
     output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
-    term_map_id: str | None = None
+    term_map_mode: Literal["follow", "selected", "none"]
+    term_map_id: str | None = Field(default=None, min_length=1, validate_default=True)
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
     stream_index: int | None = Field(default=None, strict=True, ge=0)
     source_format: str | None = Field(default=None, min_length=1)
+
+    @field_validator("term_map_id")
+    @classmethod
+    def validate_term_map_id(
+        cls, value: str | None, info: ValidationInfo
+    ) -> str | None:
+        mode = info.data.get("term_map_mode")
+        if mode in {"follow", "none"} and value is not None:
+            raise ValueError("Term map ID must be null for follow or none mode")
+        if mode == "selected" and value is None:
+            raise ValueError("Selected mode requires a Term map ID")
+        return value
 
 
 class JobsOperation(Protocol):
@@ -59,6 +72,7 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
                     media_path=body.media_path,
                     subtitle_path=body.subtitle_path,
                     target_language_code=body.target_language_code,
+                    term_map_mode=body.term_map_mode,
                     term_map_id=body.term_map_id,
                     dynamic_terminology_enabled=body.dynamic_terminology_enabled,
                     subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,

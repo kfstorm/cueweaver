@@ -60,6 +60,7 @@ class CueWeaverApplication:
                 work_root,
                 self.term_maps,
                 self.extraction,
+                self.directory_term_maps,
             )
 
 

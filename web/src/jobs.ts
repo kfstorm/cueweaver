@@ -38,6 +38,7 @@ export interface Job {
     subtitle_path?: string;
     stream_index?: number;
     target_language_code: string;
+    term_map_mode: TermMapMode;
     term_map: {
       id: string;
       name: string;
@@ -64,6 +65,8 @@ export interface JobListPage {
   history_jobs: Job[];
   next_cursor: string | null;
 }
+
+export type TermMapMode = "follow" | "selected" | "none";
 
 export type JobListData = JobListPage;
 
@@ -302,6 +305,7 @@ export function useCreateJob() {
       media_path: string;
       subtitle_path?: string;
       target_language_code: string;
+      term_map_mode: TermMapMode;
       term_map_id: string | null;
       dynamic_terminology_enabled: boolean;
       subtitle_terminology_filter_enabled: boolean;
