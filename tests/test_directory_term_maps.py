@@ -1,11 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Barrier, Event
+from threading import Event
 
+import pytest
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
 
+from cueweaver.adapters.directory_term_maps import FileDirectoryTermMapStore
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
+from cueweaver.application.errors import ServiceError
 from cueweaver.application.term_maps import TermMapDetail
 
 
@@ -100,18 +103,17 @@ def test_directory_term_map_rejects_a_work_term_maps_symlink(tmp_path: Path):
     outside.mkdir()
     (work_root / "term-maps").symlink_to(outside, target_is_directory=True)
 
-    client = make_client(tmp_path)
-
-    response = directory_request(client, "GET")
-
-    assert response.status_code == 400
-    assert response.json()["error_code"] == "directory_term_maps_unavailable"
+    with pytest.raises(ServiceError, match="Term map storage cannot be opened"):
+        make_client(tmp_path)
     assert not (outside / "directory-bindings.json").exists()
 
 
 def test_directory_term_map_get_uses_one_bindings_snapshot(tmp_path: Path):
     class SnapshotStore:
+        calls = 0
+
         def snapshot_bindings(self) -> dict[str, str]:
+            self.calls += 1
             return {"": "root", "Series": "series"}
 
         def bind(self, *_args: object, **_kwargs: object) -> None:
@@ -132,8 +134,9 @@ def test_directory_term_map_get_uses_one_bindings_snapshot(tmp_path: Path):
         def get(self, term_map_id: str) -> TermMapDetail:
             return details[term_map_id]
 
+    store = SnapshotStore()
     state = DirectoryTermMaps(
-        SnapshotStore(),
+        store,
         Resolver(),
         tmp_path / "media",
     ).get("Series/Season 1")
@@ -142,6 +145,7 @@ def test_directory_term_map_get_uses_one_bindings_snapshot(tmp_path: Path):
     assert state.effective is not None
     assert state.effective.id == "series"
     assert state.source_directory == "Series"
+    assert store.calls == 1
 
 
 def test_directory_term_map_rejects_unsafe_missing_and_unknown_values(tmp_path: Path):
@@ -198,42 +202,39 @@ def test_directory_term_map_resolution_is_independent_of_target_language(
 
 
 def test_directory_term_map_writes_are_serialized_last_successful_write_wins(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ):
     client = make_client(tmp_path)
     (tmp_path / "media" / "Series").mkdir(parents=True)
     first = create_term_map(client, "First")
     second = create_term_map(client, "Second")
 
-    ready = Barrier(2)
+    second_started = Event()
     first_write_done = Event()
+    original_bind = FileDirectoryTermMapStore.bind
 
-    def bind(term_map_id: object, final: bool) -> list[int]:
+    def blocking_bind(store: object, directory: str, term_map_id: str, validate=None):
+        if term_map_id == first["id"]:
+            assert second_started.wait(timeout=5)
+            result = original_bind(store, directory, term_map_id, validate)
+            first_write_done.set()
+            return result
+        second_started.set()
+        assert first_write_done.wait(timeout=5)
+        return original_bind(store, directory, term_map_id, validate)
+
+    monkeypatch.setattr(FileDirectoryTermMapStore, "bind", blocking_bind)
+
+    def bind(term_map_id: object) -> int:
         with make_client(tmp_path) as concurrent_client:
-            first_response = directory_request(
+            return directory_request(
                 concurrent_client, "PUT", "Series", term_map_id=term_map_id
-            )
-            ready.wait()
-            if final:
-                final_response = directory_request(
-                    concurrent_client, "PUT", "Series", term_map_id=first["id"]
-                )
-                first_write_done.set()
-            else:
-                first_write_done.wait()
-                final_response = directory_request(
-                    concurrent_client, "PUT", "Series", term_map_id=second["id"]
-                )
-            return [first_response.status_code, final_response.status_code]
+            ).status_code
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(bind, first["id"], True),
-            executor.submit(bind, second["id"], False),
-        ]
-        statuses = [future.result() for future in futures]
+        statuses = list(executor.map(bind, (first["id"], second["id"])))
 
-    assert statuses == [[200, 200], [200, 200]]
+    assert statuses == [200, 200]
     assert (
         directory_request(client, "GET", "Series").json()["local"]["id"] == second["id"]
     )

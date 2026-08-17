@@ -47,6 +47,7 @@ class CueWeaverApplication:
             directory_bindings=directory_term_map_store,
             lock=storage_lock,
         )
+        term_map_store.recover_pending_deletions()
         self.term_maps = TermMaps(term_map_store)
         if media_root is not None:
             self.directory_term_maps = DirectoryTermMaps(

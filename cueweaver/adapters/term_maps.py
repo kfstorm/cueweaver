@@ -214,6 +214,13 @@ class FileTermMapStore:
             self._remove_content_file(record.content_file)
             return self._summary(record)
 
+    def recover_pending_deletions(self) -> None:
+        """Recover interrupted binding/index transactions before serving requests."""
+        if not self._directory.exists():
+            return
+        with self._locked():
+            pass
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
         try:

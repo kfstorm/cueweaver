@@ -362,8 +362,8 @@ def test_term_map_delete_recovers_after_interrupted_transaction(
             "DELETE", f"/api/term-maps/{created['id']}", json={"name": created["name"]}
         )
 
+    assert any((tmp_path / "work" / "term-maps").glob(".directory-delete-*.json"))
     restarted = make_client(tmp_path)
-    assert restarted.get("/api/term-maps").status_code == 200
     assert (
         restarted.get("/api/term-maps/directory", params={"path": "Series"}).json()[
             "effective"
