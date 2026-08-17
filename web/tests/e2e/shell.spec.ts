@@ -327,17 +327,41 @@ test("Translate manages the current Directory Term map binding", async ({ page }
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
+  const childTermMap = {
+    id: "map-directory-child",
+    name: "Season terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
   const replacementTermMap = {
     id: "map-directory-replacement",
     name: "Replacement terms",
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
-  let state = {
-    directory: "",
-    local: null as typeof termMap | null,
-    effective: null as typeof termMap | null,
-    source_directory: null as string | null,
+  const directoryStates = new Map<string, { local: typeof termMap | null }>();
+  const canonicalDirectory = (path: string) =>
+    path === "alias" ? "Series" : path === "alias/Season 1" ? "Series/Season 1" : path;
+  const readDirectoryState = (directory: string) => {
+    const local = directoryStates.get(directory)?.local ?? null;
+    if (local !== null) {
+      return {
+        directory,
+        local,
+        effective: local,
+        source_directory: directory,
+      };
+    }
+    const parent = directory.includes("/")
+      ? directory.slice(0, directory.lastIndexOf("/"))
+      : null;
+    const inherited = parent === null ? null : readDirectoryState(parent);
+    return {
+      directory,
+      local: null,
+      effective: inherited?.effective ?? null,
+      source_directory: inherited?.source_directory ?? null,
+    };
   };
   await page.route("**/api/media/browse", async (route) => {
     const path = (JSON.parse(route.request().postData() ?? "{}").path ?? "") as string;
@@ -357,52 +381,40 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ term_maps: [termMap, replacementTermMap] }),
+      body: JSON.stringify({ term_maps: [termMap, childTermMap, replacementTermMap] }),
     }),
   );
   await page.route("**/api/term-maps/directory**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).searchParams.get("path") ?? "";
     if (request.method() === "GET") {
-      const directory =
-        path === "alias"
-          ? "Series"
-          : path === "alias/Season 1"
-            ? "Series/Season 1"
-            : path;
-      const inherited = directory === "Series/Season 1" && state.local;
+      const directory = canonicalDirectory(path);
       await route.fulfill({
         contentType: "application/json",
-        body: JSON.stringify(
-          directory === "Series/Season 1"
-            ? {
-                directory,
-                local: null,
-                effective: inherited,
-                source_directory: inherited ? "Series" : null,
-              }
-            : { ...state, directory },
-        ),
+        body: JSON.stringify(readDirectoryState(directory)),
       });
       return;
     }
     if (request.method() === "PUT") {
-      const body = JSON.parse(request.postData() ?? "{}") as { term_map_id: string };
-      const selected =
-        body.term_map_id === replacementTermMap.id ? replacementTermMap : termMap;
-      state = {
-        ...state,
-        directory: "Series",
-        local: selected,
-        effective: selected,
-        source_directory: "Series",
+      const body = JSON.parse(request.postData() ?? "{}") as {
+        path: string;
+        term_map_id: string;
       };
+      const selected =
+        body.term_map_id === childTermMap.id
+          ? childTermMap
+          : body.term_map_id === replacementTermMap.id
+            ? replacementTermMap
+            : termMap;
+      directoryStates.set(canonicalDirectory(body.path), { local: selected });
     } else if (request.method() === "DELETE") {
-      state = { ...state, local: null, effective: null, source_directory: null };
+      const body = JSON.parse(request.postData() ?? "{}") as { path: string };
+      directoryStates.delete(canonicalDirectory(body.path));
     }
+    const body = JSON.parse(request.postData() ?? "{}") as { path: string };
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify(state),
+      body: JSON.stringify(readDirectoryState(canonicalDirectory(body.path))),
     });
   });
   const expectEffectiveTermMap = async (name: string) => {
@@ -428,6 +440,11 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   ).toBeVisible();
   await page.getByRole("button", { name: "Open Season 1" }).click();
   await expectEffectiveTermMap("Series terms");
+  await page
+    .getByRole("combobox", { name: "Directory Term map" })
+    .selectOption(childTermMap.id);
+  await page.getByRole("button", { name: "Bind Term map" }).click();
+  await expectEffectiveTermMap("Season terms");
   await page.getByRole("button", { name: "alias", exact: true }).click();
   await page
     .getByRole("combobox", { name: "Directory Term map" })
@@ -435,7 +452,7 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await page.getByRole("button", { name: "Replace local binding" }).click();
   await expectEffectiveTermMap("Replacement terms");
   await page.getByRole("button", { name: "Open Season 1" }).click();
-  await expectEffectiveTermMap("Replacement terms");
+  await expectEffectiveTermMap("Season terms");
   await page.getByRole("button", { name: "alias", exact: true }).click();
   await page.getByRole("button", { name: "Remove local binding" }).click();
   await expect(page.getByText("No default")).toBeVisible();
@@ -550,6 +567,101 @@ test("Translate keeps one-off Term map choices scoped to each submission", async
     term_map_id: termMap.id,
   });
   expect(submissions[1]).toMatchObject({ term_map_mode: "none", term_map_id: null });
+});
+
+test("Translate clears a one-off Term map choice when changing directories", async ({
+  page,
+}) => {
+  await stubProductStatus(page);
+  const termMap = {
+    id: "map-directory-default",
+    name: "Directory terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  await page.route("**/api/media/browse", async (route) => {
+    const path = (JSON.parse(route.request().postData() ?? "{}").path ?? "") as string;
+    const entries =
+      path === ""
+        ? [
+            { kind: "media", name: "Example.mkv", path: "Example.mkv" },
+            { kind: "directory", name: "Other", path: "Other" },
+          ]
+        : [{ kind: "media", name: "Other.mkv", path: "Other/Other.mkv" }];
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ path, entries }),
+    });
+  });
+  await page.route("**/api/media/discover", async (route) => {
+    const path = (JSON.parse(route.request().postData() ?? "{}").path ?? "") as string;
+    const subtitlePath = path === "Example.mkv" ? "Example.en.srt" : "Other.en.srt";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        path,
+        candidates: [
+          {
+            kind: "external",
+            path: subtitlePath,
+            format: "srt",
+            tags: { language: "en", title: "" },
+          },
+        ],
+        unsupported_candidates: [],
+      }),
+    });
+  });
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: [termMap] }),
+    }),
+  );
+  await page.route("**/api/term-maps/directory**", async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        directory: path,
+        local: null,
+        effective: path === "" ? termMap : null,
+        source_directory: path === "" ? "" : null,
+      }),
+    });
+  });
+  const submissions = await stubJobCreation(page);
+
+  await page.goto("/translate");
+  await page.getByRole("button", { name: "Select Example.mkv" }).click();
+  await page
+    .getByRole("button", { name: "Select external subtitle en (Example.en.srt)" })
+    .click();
+  await page.getByLabel("Target language code").fill("zh-Hans");
+  await page.locator("#term-map-select").selectOption(termMap.id);
+  await expect(page.locator("#term-map-select")).toHaveValue(termMap.id);
+
+  await page.getByRole("button", { name: "Media", exact: true }).click();
+  await page.getByRole("button", { name: "Open Other" }).click();
+  await expect(page.locator("#term-map-select")).toHaveValue("__directory_default__");
+
+  await page.getByRole("button", { name: "Select Other.mkv" }).click();
+  await page
+    .getByRole("button", { name: "Select external subtitle en (Other.en.srt)" })
+    .click();
+  const targetLanguage = page.getByLabel("Target language code");
+  if (await targetLanguage.count()) {
+    await targetLanguage.fill("zh-Hans");
+  } else {
+    await page.getByLabel("Common target language").selectOption("zh-Hans");
+  }
+  await page.getByRole("button", { name: "Start translation" }).click();
+  await expect.poll(() => submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({
+    media_path: "Other/Other.mkv",
+    term_map_mode: "follow",
+    term_map_id: null,
+  });
 });
 
 test.describe("Job history layouts", () => {

@@ -866,7 +866,7 @@ def test_follow_resolution_failure_does_not_queue_a_job(
     ("mode", "term_map_id"),
     [("follow", "map-1"), ("none", "map-1"), ("selected", None)],
 )
-def test_job_term_map_mode_rejects_invalid_combinations(
+def test_job_term_map_mode_rejects_invalid_combinations_at_request_schema(
     tmp_path: Path, mode: str, term_map_id: str | None
 ):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
@@ -878,7 +878,8 @@ def test_job_term_map_mode_rejects_invalid_combinations(
         )
 
         assert response.status_code == 400
-        assert response.json()["error_code"] == "invalid_term_map_mode"
+        assert response.json()["error_code"] == "invalid_request"
+        assert response.json()["field"] == "term_map_id"
         assert client.get("/api/jobs").json()["active_jobs"] == []
 
 
