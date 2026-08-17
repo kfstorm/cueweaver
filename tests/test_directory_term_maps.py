@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -150,28 +150,22 @@ def test_directory_term_map_writes_are_serialized_last_successful_write_wins(
     first = create_term_map(client, "First")
     second = create_term_map(client, "Second")
 
-    def bind(term_map_id: object) -> int:
+    def bind(term_map_id: object) -> tuple[int, str]:
         with make_client(tmp_path) as concurrent_client:
-            return directory_request(
+            response = directory_request(
                 concurrent_client, "PUT", "Series", term_map_id=term_map_id
-            ).status_code
+            )
+            return response.status_code, response.json()["local"]["id"]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(bind, (first["id"], second["id"])))
+        futures = [
+            executor.submit(bind, term_map_id)
+            for term_map_id in (first["id"], second["id"])
+        ]
+        completed = [future.result() for future in as_completed(futures)]
 
-    assert statuses == [200, 200]
-    assert directory_request(client, "GET", "Series").json()["local"]["id"] in {
-        first["id"],
-        second["id"],
-    }
+    assert [status for status, _term_map_id in completed] == [200, 200]
     assert (
-        directory_request(client, "PUT", "Series", term_map_id=first["id"]).status_code
-        == 200
-    )
-    assert (
-        directory_request(client, "PUT", "Series", term_map_id=second["id"]).status_code
-        == 200
-    )
-    assert (
-        directory_request(client, "GET", "Series").json()["local"]["id"] == second["id"]
+        directory_request(client, "GET", "Series").json()["local"]["id"]
+        == completed[-1][1]
     )
