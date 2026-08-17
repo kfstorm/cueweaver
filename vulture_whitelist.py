@@ -21,6 +21,9 @@ post_term_map_item_not_found
 rename_term_map
 replace_term_map
 delete_term_map
+get_directory_term_map
+bind_directory_term_map
+remove_directory_term_map
 product_status
 api_not_found_handler
 product_not_found

@@ -1623,7 +1623,28 @@ describe("product shell", () => {
         }
         return jsonResponse({ ...summary, content });
       });
-    renderTermMapsWithFetch(fetchMock);
+    const { queryClient } = renderTermMapsWithFetch(fetchMock);
+    queryClient.setQueryDefaults(["directory-term-map"], { staleTime: 30_000 });
+    const directoryPaths = ["Series", "Series/Season 1"];
+    const setFreshDirectoryCaches = () => {
+      for (const directory of directoryPaths) {
+        queryClient.setQueryData(["directory-term-map", directory], {
+          directory,
+          local: initial,
+          effective: initial,
+          source_directory: "Series",
+        });
+      }
+    };
+    const directoryCachesAreStale = () =>
+      directoryPaths.every(
+        (directory) =>
+          queryClient
+            .getQueryCache()
+            .find({ queryKey: ["directory-term-map", directory] })
+            ?.isStale() === true,
+      );
+    setFreshDirectoryCaches();
 
     fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
     fireEvent.change(await screen.findByLabelText("New Term map name"), {
@@ -1633,11 +1654,14 @@ describe("product shell", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "People" })).toBeInTheDocument(),
     );
+    expect(directoryCachesAreStale()).toBe(true);
+    setFreshDirectoryCaches();
     fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
       target: { value: '{"Captain":"队长"}' },
     });
     fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
     await waitFor(() => expect(screen.getByText(/1 entries/)).toBeInTheDocument());
+    expect(directoryCachesAreStale()).toBe(true);
     fireEvent.change(screen.getByLabelText("Confirm Term map name"), {
       target: { value: "People" },
     });

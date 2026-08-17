@@ -19,6 +19,13 @@ export interface TermMapDetail extends TermMapSummary {
   content: Record<string, string>;
 }
 
+export interface DirectoryTermMapState {
+  directory: string;
+  local: TermMapSummary | null;
+  effective: TermMapSummary | null;
+  source_directory: string | null;
+}
+
 interface TermMapListResponse {
   term_maps: TermMapSummary[];
 }
@@ -47,6 +54,7 @@ function refreshTermMapQueries(
 ) {
   void queryClient.invalidateQueries({ queryKey: ["term-maps"] });
   void queryClient.invalidateQueries({ queryKey: ["term-maps", id] });
+  void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -71,6 +79,54 @@ export function useTermMap(id: string | null) {
     enabled: id !== null,
     queryFn: async () =>
       readResponse<TermMapDetail>(await fetch(`/api/term-maps/${id}`)),
+  });
+}
+
+export function useDirectoryTermMap(path: string) {
+  return useQuery({
+    queryKey: ["directory-term-map", path],
+    queryFn: async () =>
+      readResponse<DirectoryTermMapState>(
+        await fetch(`/api/term-maps/directory?path=${encodeURIComponent(path)}`),
+      ),
+  });
+}
+
+export function useBindDirectoryTermMap() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ path, termMapId }: { path: string; termMapId: string }) =>
+      readResponse<DirectoryTermMapState>(
+        await fetch("/api/term-maps/directory", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path, term_map_id: termMapId }),
+        }),
+      ),
+    onSuccess: (state, variables) => {
+      queryClient.setQueryData(["directory-term-map", state.directory], state);
+      queryClient.setQueryData(["directory-term-map", variables.path], state);
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
+    },
+  });
+}
+
+export function useRemoveDirectoryTermMap() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (path: string) =>
+      readResponse<DirectoryTermMapState>(
+        await fetch("/api/term-maps/directory", {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path }),
+        }),
+      ),
+    onSuccess: (state, path) => {
+      queryClient.setQueryData(["directory-term-map", state.directory], state);
+      queryClient.setQueryData(["directory-term-map", path], state);
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
+    },
   });
 }
 
@@ -128,6 +184,7 @@ export function useDeleteTermMap() {
       requestTermMap(id, "DELETE", JSON.stringify({ name })),
     onSuccess: (_, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["term-maps"] });
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
       queryClient.removeQueries({ queryKey: ["term-maps", variables.id] });
     },
   });

@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..application.directory_term_maps import DirectoryTermMaps
 from ..application.errors import ServiceError
 from ..application.term_maps import TermMaps
 from .browse import BrowseOperation, register_browse
@@ -21,6 +22,7 @@ from .term_maps import register_term_maps
 BUSINESS_ROUTES = frozenset(
     {
         "/api/term-maps",
+        "/api/term-maps/directory",
         "/api/media/browse",
         "/api/media/discover",
         "/api/jobs",
@@ -34,6 +36,9 @@ class Application(Protocol):
 
     @property
     def term_maps(self) -> TermMaps: ...
+
+    @property
+    def directory_term_maps(self) -> DirectoryTermMaps: ...
 
     @property
     def browsing(self) -> BrowseOperation | None: ...

@@ -6,13 +6,13 @@ import builtins
 import json
 import os
 import tempfile
-import threading
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 from ..application.errors import ServiceError
 from ..application.term_maps import (
@@ -22,24 +22,34 @@ from ..application.term_maps import (
     validate_term_map_content,
 )
 from ..work import WorkRoot
+from .locking import DurableFileLock
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - the supported runtime is POSIX
-    fcntl = None  # type: ignore[assignment]
+
+class DirectoryTermMapCleanup(Protocol):
+    def remove_term_map_locked(self, term_map_id: str) -> dict[str, str]: ...
+
+    def snapshot_bindings_locked(self) -> dict[str, str]: ...
+
+    def replace_bindings_locked(self, bindings: dict[str, str]) -> None: ...
 
 
 class FileTermMapStore:
     """Store Term map content and its index below the configured Work root."""
 
-    def __init__(self, work_root: WorkRoot) -> None:
+    def __init__(
+        self,
+        work_root: WorkRoot,
+        directory_bindings: DirectoryTermMapCleanup | None = None,
+        *,
+        lock: DurableFileLock | None = None,
+    ) -> None:
         if not isinstance(work_root, WorkRoot):
             raise TypeError("FileTermMapStore requires a WorkRoot")
         self._work_root = work_root
         self._directory = work_root.term_maps_directory
         self._index_path = self._directory / "index.json"
-        self._lock_path = self._directory / ".lock"
-        self._thread_lock = threading.RLock()
+        self._lock = lock or DurableFileLock(self._directory / ".lock")
+        self._directory_bindings = directory_bindings
 
     def list(self) -> list[TermMapSummary]:
         with self._locked():
@@ -173,34 +183,61 @@ class FileTermMapStore:
                     "Enter the current Term map name to confirm deletion",
                     field="name",
                 )
-            self._write_index([item for item in records if item.id != term_map_id])
+            bindings_before: dict[str, str] = {}
+            journal_path: Path | None = None
+            index_committed = False
+            if self._directory_bindings is not None:
+                bindings_before = self._directory_bindings.snapshot_bindings_locked()
+                journal_path = self._delete_journal_path(term_map_id)
+                self._write_json(
+                    journal_path,
+                    {
+                        "records": [item.to_json() for item in records],
+                        "bindings": bindings_before,
+                    },
+                )
+            try:
+                if self._directory_bindings is not None:
+                    self._directory_bindings.remove_term_map_locked(term_map_id)
+                self._write_index([item for item in records if item.id != term_map_id])
+                index_committed = True
+                if journal_path is not None:
+                    self._remove_delete_journal(journal_path)
+            except ServiceError:
+                if self._directory_bindings is not None:
+                    self._directory_bindings.replace_bindings_locked(bindings_before)
+                if index_committed:
+                    self._write_index(records)
+                if journal_path is not None:
+                    self._remove_delete_journal(journal_path)
+                raise
             self._remove_content_file(record.content_file)
             return self._summary(record)
 
+    def recover_pending_deletions(self) -> None:
+        """Recover interrupted binding/index transactions before serving requests."""
+        if not self._directory.exists():
+            return
+        with self._locked():
+            pass
+
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        with self._thread_lock:
-            try:
-                try:
-                    self._directory = self._work_root.ensure_term_maps_directory()
-                except ValueError as error:
-                    raise ServiceError(
-                        "term_maps_unavailable",
-                        "Term map storage cannot be opened",
-                    ) from error
-                lock_file = self._lock_path.open("a+")
-            except OSError as error:
-                raise ServiceError(
-                    "term_maps_unavailable", "Term map storage cannot be opened"
-                ) from error
-            try:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            self._directory = self._work_root.ensure_term_maps_directory()
+        except ValueError as error:
+            raise ServiceError(
+                "term_maps_unavailable",
+                "Term map storage cannot be opened",
+            ) from error
+        try:
+            with self._lock.locked(self._directory):
+                self._recover_delete_journals()
                 yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                lock_file.close()
+        except OSError as error:
+            raise ServiceError(
+                "term_maps_unavailable", "Term map storage cannot be opened"
+            ) from error
 
     def _read_index(self) -> builtins.list[_TermMapRecord]:
         if self._index_path.exists():
@@ -232,7 +269,14 @@ class FileTermMapStore:
     def _remove_orphans(self, records: builtins.list[_TermMapRecord]) -> None:
         referenced = {record.content_file for record in records}
         for path in self._directory.iterdir():
-            if path.name == self._index_path.name or path.name in referenced:
+            if (
+                path.name
+                in {
+                    self._index_path.name,
+                    "directory-bindings.json",
+                }
+                or path.name in referenced
+            ):
                 continue
             if (
                 path.suffix == ".json"
@@ -241,6 +285,53 @@ class FileTermMapStore:
             ):
                 with suppress(OSError):
                     path.unlink(missing_ok=True)
+
+    def _delete_journal_path(self, term_map_id: str) -> Path:
+        return self._directory / f".directory-delete-{term_map_id}.json"
+
+    def _recover_delete_journals(self) -> None:
+        if self._directory_bindings is None:
+            return
+        for journal_path in self._directory.glob(".directory-delete-*.json"):
+            self._recover_delete_journal(journal_path)
+
+    def _recover_delete_journal(self, journal_path: Path) -> None:
+        try:
+            payload = json.loads(journal_path.read_text(encoding="utf-8"))
+            records_payload = payload["records"]
+            bindings = payload["bindings"]
+            if not isinstance(records_payload, list) or not isinstance(bindings, dict):
+                raise ValueError
+            records = [_TermMapRecord.from_json(item) for item in records_payload]
+            if any(
+                not isinstance(key, str) or not isinstance(value, str) or not value
+                for key, value in bindings.items()
+            ):
+                raise ValueError
+            assert self._directory_bindings is not None
+            self._directory_bindings.replace_bindings_locked(bindings)
+            self._write_index(records)
+            self._remove_delete_journal(journal_path)
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as error:
+            raise ServiceError(
+                "term_maps_unavailable", "Term map deletion recovery failed"
+            ) from error
+
+    @staticmethod
+    def _remove_delete_journal(path: Path) -> None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            raise ServiceError(
+                "term_map_write_failed", "Term map deletion cannot be finalized"
+            ) from error
 
     @staticmethod
     def _find(
@@ -264,25 +355,31 @@ class FileTermMapStore:
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
-        temporary_path: Path | None = None
-        try:
-            descriptor, temporary_name = tempfile.mkstemp(
-                dir=path.parent, prefix=f".{path.name}."
-            )
-            temporary_path = Path(temporary_name)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-                json.dump(payload, output, ensure_ascii=False, separators=(",", ":"))
-                output.flush()
-                os.fsync(output.fileno())
-            temporary_path.replace(path)
-            temporary_path = None
-        except (OSError, TypeError, ValueError) as error:
-            raise ServiceError(
-                "term_map_write_failed", "Term map cannot be saved"
-            ) from error
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+        atomic_write_json(
+            path, payload, "term_map_write_failed", "Term map cannot be saved"
+        )
+
+
+def atomic_write_json(
+    path: Path, payload: object, error_code: str, message: str
+) -> None:
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}."
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(payload, output, ensure_ascii=False, separators=(",", ":"))
+            output.flush()
+            os.fsync(output.fileno())
+        temporary_path.replace(path)
+        temporary_path = None
+    except (OSError, TypeError, ValueError) as error:
+        raise ServiceError(error_code, message) from error
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _utc_timestamp() -> str:

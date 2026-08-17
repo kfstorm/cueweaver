@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
+from ..application.directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
 from ..application.errors import ServiceError
 from ..application.term_maps import (
     MAX_TERM_MAP_REQUEST_BYTES,
@@ -22,6 +24,15 @@ from ..application.term_maps import (
 class TermMapsApplication(Protocol):
     @property
     def term_maps(self) -> TermMaps: ...
+
+    @property
+    def directory_term_maps(self) -> DirectoryTermMaps: ...
+
+
+class DirectoryTermMapBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    path: str = ""
+    term_map_id: str | None = None
 
 
 class JsonPairs(list[tuple[object, object]]):
@@ -39,6 +50,26 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
         return {
             "term_maps": [summary_body(item) for item in application.term_maps.list()]
         }
+
+    @app.get("/api/term-maps/directory")
+    def get_directory_term_map(
+        path: str = Query(default=""),
+    ) -> dict[str, object]:
+        return directory_state_body(application.directory_term_maps.get(path))
+
+    @app.put("/api/term-maps/directory")
+    def bind_directory_term_map(body: DirectoryTermMapBody) -> dict[str, object]:
+        if body.term_map_id is None:
+            raise ServiceError(
+                "term_map_required", "A Term map is required", field="term_map_id"
+            )
+        return directory_state_body(
+            application.directory_term_maps.bind(body.path, body.term_map_id)
+        )
+
+    @app.delete("/api/term-maps/directory")
+    def remove_directory_term_map(body: DirectoryTermMapBody) -> dict[str, object]:
+        return directory_state_body(application.directory_term_maps.remove(body.path))
 
     @app.get("/api/term-maps/{term_map_id}")
     def get_term_map(term_map_id: str) -> dict[str, object]:
@@ -224,3 +255,14 @@ def summary_body(summary: TermMapSummary) -> dict[str, object]:
 
 def detail_body(detail: TermMapDetail) -> dict[str, object]:
     return {**summary_body(detail), "content": dict(detail.content)}
+
+
+def directory_state_body(state: DirectoryTermMapState) -> dict[str, object]:
+    return {
+        "directory": state.directory,
+        "local": summary_body(state.local) if state.local is not None else None,
+        "effective": (
+            summary_body(state.effective) if state.effective is not None else None
+        ),
+        "source_directory": state.source_directory,
+    }
