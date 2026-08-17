@@ -30,12 +30,16 @@ async function stubMedia(page: Page) {
   );
 }
 
-async function stubJobs(page: Page) {
+async function stubJobs(page: Page, historyJobs = [jobRecord("density-job")]) {
   const job = jobRecord("density-job");
   await page.route("**/api/jobs**", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ active_jobs: [], history_jobs: [job], next_cursor: null }),
+      body: JSON.stringify({
+        active_jobs: [],
+        history_jobs: historyJobs,
+        next_cursor: null,
+      }),
     }),
   );
   await page.route("**/api/jobs/density-job*", (route) =>
@@ -43,20 +47,21 @@ async function stubJobs(page: Page) {
   );
 }
 
-async function stubTermMaps(page: Page) {
+async function stubTermMaps(
+  page: Page,
+  termMaps = [
+    {
+      id: "density-map",
+      name: "Characters",
+      entry_count: 2,
+      updated_at: "2026-08-13T12:00:00Z",
+    },
+  ],
+) {
   await page.route("**/api/term-maps**", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({
-        term_maps: [
-          {
-            id: "density-map",
-            name: "Characters",
-            entry_count: 2,
-            updated_at: "2026-08-13T12:00:00Z",
-          },
-        ],
-      }),
+      body: JSON.stringify({ term_maps: termMaps }),
     }),
   );
 }
@@ -95,6 +100,17 @@ for (const viewport of viewports) {
         minHeight: viewport.name === "mobile" ? "44px" : "36px",
       })),
     );
+
+    const filterStyles = await page
+      .locator(".media-filter .form-control")
+      .evaluate((input) => {
+        const styles = getComputedStyle(input);
+        return { fontSize: styles.fontSize, minHeight: styles.minHeight };
+      });
+    expect(filterStyles).toEqual({
+      fontSize: viewport.name === "mobile" ? "16px" : "14px",
+      minHeight: viewport.name === "mobile" ? "44px" : "36px",
+    });
 
     const helpStyles = await page
       .locator(".field-help:visible")
@@ -151,6 +167,11 @@ for (const viewport of viewports) {
       return headingBox.top - actions.bottom;
     });
     expect(jobsGap).toBeLessThanOrEqual(64);
+    expect(
+      await page
+        .locator(".job-list-state")
+        .evaluate((state) => getComputedStyle(state).minHeight),
+    ).toBe("0px");
 
     await stubTermMaps(page);
     await page.goto("/term-maps");
@@ -162,5 +183,38 @@ for (const viewport of viewports) {
       return itemBox.top - headingBox.bottom;
     });
     expect(termMapGap).toBeLessThanOrEqual(64);
+    expect(
+      await page
+        .locator(".term-map-list-state")
+        .evaluate((state) => getComputedStyle(state).minHeight),
+    ).toBe("0px");
+  });
+
+  test(`${viewport.name} Jobs and Term maps retain visible empty-state footprints`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await stubStatus(page);
+    await stubJobs(page, []);
+    await page.goto("/jobs");
+    await expect(
+      page.getByRole("heading", { name: "No Jobs yet", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page
+        .locator(".job-list-state")
+        .evaluate((state) => getComputedStyle(state).minHeight),
+    ).toBe("88px");
+
+    await stubTermMaps(page, []);
+    await page.goto("/term-maps");
+    await expect(
+      page.getByRole("heading", { name: "No Term maps yet", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page
+        .locator(".term-map-list-state")
+        .evaluate((state) => getComputedStyle(state).minHeight),
+    ).toBe("190px");
   });
 }

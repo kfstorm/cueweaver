@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const stylesheet = readFileSync("src/styles.css", "utf8");
+const buttonPrimitive = readFileSync("src/components/ui/button.tsx", "utf8");
 const rootBlock = stylesheet.match(/:root\s*\{[\s\S]*?\n\}/u)?.[0] ?? "";
 const pageStyles = stylesheet.replace(rootBlock, "");
 
@@ -14,6 +15,12 @@ describe("CSS density tokens", () => {
 
     expect(declarations.length).toBeGreaterThan(0);
     expect(declarations.every((value) => value.startsWith("var(--font-"))).toBe(true);
+  });
+
+  it("keeps the Button primitive on the control typography token", () => {
+    expect(buttonPrimitive).toContain("text-[length:var(--font-control)]");
+    expect(buttonPrimitive).toContain("leading-5");
+    expect(buttonPrimitive).not.toMatch(/\btext-(?:xs|sm|base|lg|xl)\b/u);
   });
 
   it("does not use negative margins for readable UI content", () => {

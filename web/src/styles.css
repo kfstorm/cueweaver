@@ -462,13 +462,6 @@ a {
 
 .media-filter input {
   width: 100%;
-  height: 36px;
-  border: 1px solid #dce1e9;
-  border-radius: 6px;
-  padding: 0 10px;
-  color: #273043;
-  font: inherit;
-  font-size: var(--font-control);
 }
 
 .media-results {
@@ -1732,6 +1725,7 @@ summary:focus-visible {
 
   .form-control,
   .select-control {
+    min-height: 44px;
     font-size: var(--font-control-mobile);
   }
 
@@ -1741,13 +1735,8 @@ summary:focus-visible {
   }
 
   .breadcrumb-button,
-  .media-filter input,
   .media-entry {
     min-height: 44px;
-  }
-
-  .media-filter input {
-    height: 44px;
   }
 
   .media-entry {

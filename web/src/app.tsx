@@ -826,7 +826,7 @@ function MediaBrowser({
       </div>
       <label className="media-filter">
         <span>Filter this directory</span>
-        <input
+        <Input
           type="search"
           value={filter}
           onChange={(event) => onFilterChange(event.target.value)}
