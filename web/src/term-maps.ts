@@ -54,6 +54,7 @@ function refreshTermMapQueries(
 ) {
   void queryClient.invalidateQueries({ queryKey: ["term-maps"] });
   void queryClient.invalidateQueries({ queryKey: ["term-maps", id] });
+  void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
