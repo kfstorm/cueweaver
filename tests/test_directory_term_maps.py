@@ -5,6 +5,9 @@ from threading import Barrier, Event
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
 
+from cueweaver.application.directory_term_maps import DirectoryTermMaps
+from cueweaver.application.term_maps import TermMapDetail
+
 
 def create_term_map(client: TestClient, name: str = "Characters") -> dict[str, object]:
     response = client.post(
@@ -88,6 +91,57 @@ def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
         "effective": None,
         "source_directory": None,
     }
+
+
+def test_directory_term_map_rejects_a_work_term_maps_symlink(tmp_path: Path):
+    work_root = tmp_path / "work"
+    outside = tmp_path / "outside"
+    work_root.mkdir()
+    outside.mkdir()
+    (work_root / "term-maps").symlink_to(outside, target_is_directory=True)
+
+    client = make_client(tmp_path)
+
+    response = directory_request(client, "GET")
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "directory_term_maps_unavailable"
+    assert not (outside / "directory-bindings.json").exists()
+
+
+def test_directory_term_map_get_uses_one_bindings_snapshot(tmp_path: Path):
+    class SnapshotStore:
+        def snapshot_bindings(self) -> dict[str, str]:
+            return {"": "root", "Series": "series"}
+
+        def bind(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("not used")
+
+        def remove(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("not used")
+
+    details = {
+        item.id: item
+        for item in (
+            TermMapDetail("root", "Root", 1, "2026-08-17T00:00:00Z", {}),
+            TermMapDetail("series", "Series", 1, "2026-08-17T00:00:00Z", {}),
+        )
+    }
+
+    class Resolver:
+        def get(self, term_map_id: str) -> TermMapDetail:
+            return details[term_map_id]
+
+    state = DirectoryTermMaps(
+        SnapshotStore(),
+        Resolver(),
+        tmp_path / "media",
+    ).get("Series/Season 1")
+
+    assert state.local is None
+    assert state.effective is not None
+    assert state.effective.id == "series"
+    assert state.source_directory == "Series"
 
 
 def test_directory_term_map_rejects_unsafe_missing_and_unknown_values(tmp_path: Path):

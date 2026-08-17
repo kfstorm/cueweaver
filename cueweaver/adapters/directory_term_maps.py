@@ -21,13 +21,14 @@ class FileDirectoryTermMapStore(DirectoryTermMapStore):
     ) -> None:
         if not isinstance(work_root, WorkRoot):
             raise TypeError("FileDirectoryTermMapStore requires a WorkRoot")
+        self._work_root = work_root
         self._directory = work_root.term_maps_directory
         self._path = self._directory / "directory-bindings.json"
         self._lock = lock or DurableFileLock(self._directory / ".lock")
 
-    def get_binding(self, directory: str) -> str | None:
+    def snapshot_bindings(self) -> dict[str, str]:
         with self._locked():
-            return self._read().get(directory)
+            return self._read()
 
     def bind(
         self,
@@ -98,6 +99,13 @@ class FileDirectoryTermMapStore(DirectoryTermMapStore):
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
+        try:
+            self._directory = self._work_root.ensure_term_maps_directory()
+        except ValueError as error:
+            raise ServiceError(
+                "directory_term_maps_unavailable",
+                "Directory Term map storage cannot be opened",
+            ) from error
         try:
             with self._lock.locked(self._directory):
                 yield

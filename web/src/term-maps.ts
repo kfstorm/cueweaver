@@ -105,6 +105,7 @@ export function useBindDirectoryTermMap() {
     onSuccess: (state, variables) => {
       queryClient.setQueryData(["directory-term-map", state.directory], state);
       queryClient.setQueryData(["directory-term-map", variables.path], state);
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
     },
   });
 }
@@ -123,6 +124,7 @@ export function useRemoveDirectoryTermMap() {
     onSuccess: (state, path) => {
       queryClient.setQueryData(["directory-term-map", state.directory], state);
       queryClient.setQueryData(["directory-term-map", path], state);
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
     },
   });
 }

@@ -20,7 +20,7 @@ class DirectoryTermMapState:
 
 
 class DirectoryTermMapStore(Protocol):
-    def get_binding(self, directory: str) -> str | None: ...
+    def snapshot_bindings(self) -> dict[str, str]: ...
 
     def bind(
         self,
@@ -47,8 +47,9 @@ class DirectoryTermMaps:
 
     def get(self, directory: str) -> DirectoryTermMapState:
         canonical = self._canonical_directory(directory)
-        local_id = self._store.get_binding(canonical)
-        effective_id, source = self._effective_binding(canonical)
+        bindings = self._store.snapshot_bindings()
+        local_id = bindings.get(canonical)
+        effective_id, source = self._effective_binding(canonical, bindings)
         return DirectoryTermMapState(
             directory=canonical,
             local=self._summary(local_id),
@@ -66,12 +67,14 @@ class DirectoryTermMaps:
         self._store.remove(canonical)
         return self.get(canonical)
 
-    def _effective_binding(self, directory: str) -> tuple[str | None, str | None]:
+    def _effective_binding(
+        self, directory: str, bindings: dict[str, str]
+    ) -> tuple[str | None, str | None]:
         path = Path(directory)
         candidates = (path, *path.parents)
         for candidate in candidates:
             key = "" if str(candidate) == "." else candidate.as_posix()
-            term_map_id = self._store.get_binding(key)
+            term_map_id = bindings.get(key)
             if term_map_id is not None:
                 return term_map_id, key
         return None, None

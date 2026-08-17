@@ -308,6 +308,12 @@ test("Translate manages the current Directory Term map binding", async ({ page }
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
+  const replacementTermMap = {
+    id: "map-directory-replacement",
+    name: "Replacement terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
   let state = {
     directory: "",
     local: null as typeof termMap | null,
@@ -321,32 +327,55 @@ test("Translate manages the current Directory Term map binding", async ({ page }
       body: JSON.stringify({
         path,
         entries:
-          path === "" ? [{ kind: "directory", name: "Series", path: "alias" }] : [],
+          path === ""
+            ? [{ kind: "directory", name: "Series", path: "alias" }]
+            : path === "alias"
+              ? [{ kind: "directory", name: "Season 1", path: "alias/Season 1" }]
+              : [],
       }),
     });
   });
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ term_maps: [termMap] }),
+      body: JSON.stringify({ term_maps: [termMap, replacementTermMap] }),
     }),
   );
   await page.route("**/api/term-maps/directory**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).searchParams.get("path") ?? "";
     if (request.method() === "GET") {
+      const directory =
+        path === "alias"
+          ? "Series"
+          : path === "alias/Season 1"
+            ? "Series/Season 1"
+            : path;
+      const inherited = directory === "Series/Season 1" && state.local;
       await route.fulfill({
         contentType: "application/json",
-        body: JSON.stringify({ ...state, directory: path === "alias" ? "Series" : "" }),
+        body: JSON.stringify(
+          directory === "Series/Season 1"
+            ? {
+                directory,
+                local: null,
+                effective: inherited,
+                source_directory: inherited ? "Series" : null,
+              }
+            : { ...state, directory },
+        ),
       });
       return;
     }
     if (request.method() === "PUT") {
+      const body = JSON.parse(request.postData() ?? "{}") as { term_map_id: string };
+      const selected =
+        body.term_map_id === replacementTermMap.id ? replacementTermMap : termMap;
       state = {
         ...state,
         directory: "Series",
-        local: termMap,
-        effective: termMap,
+        local: selected,
+        effective: selected,
         source_directory: "Series",
       };
     } else if (request.method() === "DELETE") {
@@ -357,6 +386,15 @@ test("Translate manages the current Directory Term map binding", async ({ page }
       body: JSON.stringify(state),
     });
   });
+  const expectEffectiveTermMap = async (name: string) => {
+    await expect(
+      page
+        .getByRole("region", { name: "Directory Term map" })
+        .locator(".directory-term-map-state dd")
+        .filter({ hasText: name })
+        .first(),
+    ).toBeVisible();
+  };
 
   await page.goto("/translate");
   await page.getByRole("button", { name: "Open Series" }).click();
@@ -365,16 +403,21 @@ test("Translate manages the current Directory Term map binding", async ({ page }
     .getByRole("combobox", { name: "Directory Term map" })
     .selectOption(termMap.id);
   await page.getByRole("button", { name: "Bind Term map" }).click();
-  await expect(
-    page
-      .getByRole("region", { name: "Directory Term map" })
-      .locator(".directory-term-map-state dd")
-      .filter({ hasText: "Series terms" })
-      .first(),
-  ).toBeVisible();
+  await expectEffectiveTermMap("Series terms");
   await expect(
     page.getByRole("button", { name: "Remove local binding" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Open Season 1" }).click();
+  await expectEffectiveTermMap("Series terms");
+  await page.getByRole("button", { name: "alias", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Directory Term map" })
+    .selectOption(replacementTermMap.id);
+  await page.getByRole("button", { name: "Replace local binding" }).click();
+  await expectEffectiveTermMap("Replacement terms");
+  await page.getByRole("button", { name: "Open Season 1" }).click();
+  await expectEffectiveTermMap("Replacement terms");
+  await page.getByRole("button", { name: "alias", exact: true }).click();
   await page.getByRole("button", { name: "Remove local binding" }).click();
   await expect(page.getByText("No default")).toBeVisible();
 });

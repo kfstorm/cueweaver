@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
 
+from cueweaver.adapters.directory_term_maps import FileDirectoryTermMapStore
 from cueweaver.adapters.term_maps import FileTermMapStore
 from cueweaver.application.errors import ServiceError
 
@@ -306,6 +307,71 @@ def test_term_map_delete_index_failure_keeps_old_content(
 
     assert response.json()["error_code"] == "term_map_write_failed"
     assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
+
+
+@pytest.mark.parametrize("failure_point", ["journal", "bindings", "index"])
+def test_term_map_delete_recovers_after_interrupted_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+):
+    client = make_client(tmp_path)
+    (tmp_path / "media" / "Series").mkdir()
+    created = create_term_map(client)
+    assert (
+        client.put(
+            "/api/term-maps/directory",
+            json={"path": "Series", "term_map_id": created["id"]},
+        ).status_code
+        == 200
+    )
+
+    if failure_point == "journal":
+
+        def fail_remove(store: object, term_map_id: str) -> dict[str, str]:
+            raise RuntimeError("crash after journal")
+
+        monkeypatch.setattr(
+            FileDirectoryTermMapStore, "remove_term_map_locked", fail_remove
+        )
+    elif failure_point == "bindings":
+        original_write = FileDirectoryTermMapStore._write
+        failed = False
+
+        def fail_bindings(store: object, bindings: dict[str, str]) -> None:
+            nonlocal failed
+            original_write(store, bindings)
+            if not failed:
+                failed = True
+                raise RuntimeError("crash after bindings")
+
+        monkeypatch.setattr(FileDirectoryTermMapStore, "_write", fail_bindings)
+    else:
+        original_write_index = FileTermMapStore._write_index
+        failed = False
+
+        def fail_index(store: object, records: list[object]) -> None:
+            nonlocal failed
+            original_write_index(store, records)
+            if not failed:
+                failed = True
+                raise RuntimeError("crash after index")
+
+        monkeypatch.setattr(FileTermMapStore, "_write_index", fail_index)
+
+    with pytest.raises(RuntimeError):
+        client.request(
+            "DELETE", f"/api/term-maps/{created['id']}", json={"name": created["name"]}
+        )
+
+    restarted = make_client(tmp_path)
+    assert restarted.get("/api/term-maps").status_code == 200
+    assert (
+        restarted.get("/api/term-maps/directory", params={"path": "Series"}).json()[
+            "effective"
+        ]["id"]
+        == created["id"]
+    )
+    assert restarted.get(f"/api/term-maps/{created['id']}").status_code == 200
+    assert not any((tmp_path / "work" / "term-maps").glob(".directory-delete-*.json"))
 
 
 def test_term_map_rename_and_replacement_concurrently_preserve_both_changes(
