@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from ..adapters.directory_term_maps import FileDirectoryTermMapStore
+from ..adapters.locking import DurableFileLock
 from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.term_maps import FileTermMapStore
@@ -35,9 +36,16 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         configured_work_root = WorkRoot(work_root or Path.cwd())
-        directory_term_map_store = FileDirectoryTermMapStore(configured_work_root)
+        storage_lock = DurableFileLock(
+            configured_work_root.term_maps_directory / ".lock"
+        )
+        directory_term_map_store = FileDirectoryTermMapStore(
+            configured_work_root, lock=storage_lock
+        )
         term_map_store = FileTermMapStore(
-            configured_work_root, directory_bindings=directory_term_map_store
+            configured_work_root,
+            directory_bindings=directory_term_map_store,
+            lock=storage_lock,
         )
         self.term_maps = TermMaps(term_map_store)
         if media_root is not None:

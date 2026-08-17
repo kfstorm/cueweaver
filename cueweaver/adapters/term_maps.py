@@ -6,7 +6,6 @@ import builtins
 import json
 import os
 import tempfile
-import threading
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
@@ -23,11 +22,7 @@ from ..application.term_maps import (
     validate_term_map_content,
 )
 from ..work import WorkRoot
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - the supported runtime is POSIX
-    fcntl = None  # type: ignore[assignment]
+from .locking import DurableFileLock
 
 
 class DirectoryTermMapCleanup(Protocol):
@@ -45,14 +40,15 @@ class FileTermMapStore:
         self,
         work_root: WorkRoot,
         directory_bindings: DirectoryTermMapCleanup | None = None,
+        *,
+        lock: DurableFileLock | None = None,
     ) -> None:
         if not isinstance(work_root, WorkRoot):
             raise TypeError("FileTermMapStore requires a WorkRoot")
         self._work_root = work_root
         self._directory = work_root.term_maps_directory
         self._index_path = self._directory / "index.json"
-        self._lock_path = self._directory / ".lock"
-        self._thread_lock = threading.RLock()
+        self._lock = lock or DurableFileLock(self._directory / ".lock")
         self._directory_bindings = directory_bindings
 
     def list(self) -> list[TermMapSummary]:
@@ -220,29 +216,21 @@ class FileTermMapStore:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        with self._thread_lock:
-            try:
-                try:
-                    self._directory = self._work_root.ensure_term_maps_directory()
-                except ValueError as error:
-                    raise ServiceError(
-                        "term_maps_unavailable",
-                        "Term map storage cannot be opened",
-                    ) from error
-                lock_file = self._lock_path.open("a+")
-            except OSError as error:
-                raise ServiceError(
-                    "term_maps_unavailable", "Term map storage cannot be opened"
-                ) from error
-            try:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            self._directory = self._work_root.ensure_term_maps_directory()
+        except ValueError as error:
+            raise ServiceError(
+                "term_maps_unavailable",
+                "Term map storage cannot be opened",
+            ) from error
+        try:
+            with self._lock.locked(self._directory):
                 self._recover_delete_journals()
                 yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                lock_file.close()
+        except OSError as error:
+            raise ServiceError(
+                "term_maps_unavailable", "Term map storage cannot be opened"
+            ) from error
 
     def _read_index(self) -> builtins.list[_TermMapRecord]:
         if self._index_path.exists():

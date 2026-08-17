@@ -3,38 +3,41 @@
 from __future__ import annotations
 
 import json
-import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from ..application.directory_term_maps import DirectoryTermMapStore
 from ..application.errors import ServiceError
 from ..work import WorkRoot
+from .locking import DurableFileLock
 from .term_maps import atomic_write_json
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - the supported runtime is POSIX
-    fcntl = None  # type: ignore[assignment]
 
 
 class FileDirectoryTermMapStore(DirectoryTermMapStore):
     """Store canonical Media-relative directory bindings below Work root."""
 
-    def __init__(self, work_root: WorkRoot) -> None:
+    def __init__(
+        self, work_root: WorkRoot, lock: DurableFileLock | None = None
+    ) -> None:
         if not isinstance(work_root, WorkRoot):
             raise TypeError("FileDirectoryTermMapStore requires a WorkRoot")
         self._directory = work_root.term_maps_directory
         self._path = self._directory / "directory-bindings.json"
-        self._lock_path = self._directory / ".lock"
-        self._thread_lock = threading.RLock()
+        self._lock = lock or DurableFileLock(self._directory / ".lock")
 
     def get_binding(self, directory: str) -> str | None:
         with self._locked():
             return self._read().get(directory)
 
-    def bind(self, directory: str, term_map_id: str) -> None:
+    def bind(
+        self,
+        directory: str,
+        term_map_id: str,
+        validate: Callable[[str], object] | None = None,
+    ) -> None:
         with self._locked():
+            if validate is not None:
+                validate(term_map_id)
             bindings = self._read()
             bindings[directory] = term_map_id
             self._write(bindings)
@@ -95,23 +98,14 @@ class FileDirectoryTermMapStore(DirectoryTermMapStore):
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        with self._thread_lock:
-            try:
-                self._directory.mkdir(parents=True, exist_ok=True)
-                lock_file = self._lock_path.open("a+")
-            except OSError as error:
-                raise ServiceError(
-                    "directory_term_maps_unavailable",
-                    "Directory Term map storage cannot be opened",
-                ) from error
-            try:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            with self._lock.locked(self._directory):
                 yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                lock_file.close()
+        except OSError as error:
+            raise ServiceError(
+                "directory_term_maps_unavailable",
+                "Directory Term map storage cannot be opened",
+            ) from error
 
 
 __all__ = ["FileDirectoryTermMapStore"]
