@@ -40,6 +40,25 @@ async function stubProductStatus(page: Page, providerReady = true) {
   );
 }
 
+async function stubJobCreation(page: Page): Promise<Array<Record<string, unknown>>> {
+  const submissions: Array<Record<string, unknown>> = [];
+  await page.route("**/api/jobs", async (route) => {
+    if (route.request().method() === "POST") {
+      submissions.push(JSON.parse(route.request().postData() ?? "{}"));
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(jobRecord(`job-term-map-${submissions.length}`, "Queued")),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ active_jobs: [], history_jobs: [], next_cursor: null }),
+    });
+  });
+  return submissions;
+}
+
 async function stubJobs(page: Page, jobs: Array<ReturnType<typeof jobRecord>>) {
   await registerJobListRoute(page, () => jobs);
   await page.route("**/api/jobs/*", async (route) => {
@@ -422,6 +441,117 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await expect(page.getByText("No default")).toBeVisible();
 });
 
+test("Translate submits the server-authoritative directory default", async ({
+  page,
+}) => {
+  await stubProductStatus(page);
+  const defaultTermMap = {
+    id: "map-follow",
+    name: "Series terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: [defaultTermMap] }),
+    }),
+  );
+  await page.route("**/api/term-maps/directory**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        directory: "",
+        local: null,
+        effective: defaultTermMap,
+        source_directory: "",
+      }),
+    }),
+  );
+  const submissions = await stubJobCreation(page);
+
+  await page.goto("/translate");
+  await page.getByRole("button", { name: "Select Example movie" }).click();
+  await page
+    .getByRole("button", {
+      name: /Select external subtitle en \(Example\.en\.srt\)/,
+    })
+    .click();
+  await page.getByLabel("Target language code").fill("zh-Hans");
+  await expect(page.locator("#term-map-select")).toHaveValue("__directory_default__");
+  await expect(page.locator("#term-map-select")).toContainText("Series terms");
+  await page.getByRole("button", { name: "Start translation" }).click();
+
+  await expect.poll(() => submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({
+    term_map_mode: "follow",
+    term_map_id: null,
+  });
+});
+
+test("Translate keeps one-off Term map choices scoped to each submission", async ({
+  page,
+}) => {
+  await stubProductStatus(page);
+  const termMap = {
+    id: "map-one-off",
+    name: "One-off terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: [termMap] }),
+    }),
+  );
+  await page.route("**/api/term-maps/directory**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        directory: "",
+        local: null,
+        effective: termMap,
+        source_directory: "",
+      }),
+    }),
+  );
+  const submissions = await stubJobCreation(page);
+
+  const submit = async (termMapValue: string) => {
+    await page.getByRole("button", { name: "Select Example movie" }).click();
+    await page
+      .getByRole("button", {
+        name: /Select external subtitle en \(Example\.en\.srt\)/,
+      })
+      .click();
+    const targetInput = page.getByLabel("Target language code");
+    if (await targetInput.count()) {
+      await targetInput.fill("zh-Hans");
+    } else {
+      await page.getByLabel("Common target language").selectOption("zh-Hans");
+    }
+    await page.locator("#term-map-select").selectOption(termMapValue);
+    const expectedSubmissionCount = submissions.length + 1;
+    await page.getByRole("button", { name: "Start translation" }).click();
+    await expect.poll(() => submissions.length).toBe(expectedSubmissionCount);
+  };
+
+  await page.goto("/translate");
+  await submit(termMap.id);
+  await expect(page.getByText("Translation queued")).toBeVisible();
+  await page.getByRole("button", { name: "Translate another" }).click();
+  await expect(page.locator("#term-map-select")).toHaveValue("__directory_default__");
+  await submit("");
+
+  expect(submissions).toHaveLength(2);
+  expect(submissions[0]).toMatchObject({
+    term_map_mode: "selected",
+    term_map_id: termMap.id,
+  });
+  expect(submissions[1]).toMatchObject({ term_map_mode: "none", term_map_id: null });
+});
+
 test.describe("Job history layouts", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
@@ -746,7 +876,12 @@ const submissionSources = [
       format: "srt",
       tags: { language: "en", title: "" },
     },
-    request: { media_path: "Example.mkv", subtitle_path: "Example.en.srt" },
+    request: {
+      media_path: "Example.mkv",
+      subtitle_path: "Example.en.srt",
+      term_map_mode: "follow",
+      term_map_id: null,
+    },
   },
   {
     label: "Embedded subtitle",
@@ -757,7 +892,13 @@ const submissionSources = [
       format: "srt",
       tags: { language: "zhs", title: "Chinese" },
     },
-    request: { media_path: "Example.mkv", stream_index: 3, source_format: "srt" },
+    request: {
+      media_path: "Example.mkv",
+      stream_index: 3,
+      source_format: "srt",
+      term_map_mode: "follow",
+      term_map_id: null,
+    },
   },
 ] as const;
 
@@ -861,6 +1002,7 @@ test.describe("subtitle submission", () => {
           target_language_code: "zh-Hans",
           output_suffix: "zh-Hans",
           output_conflict_policy: "append-number",
+          term_map_mode: "follow",
           term_map_id: null,
           dynamic_terminology_enabled: true,
           subtitle_terminology_filter_enabled: true,
@@ -997,6 +1139,8 @@ test.describe("real translation workflow", () => {
           media_path: "Example.mkv",
           subtitle_path: "Example.en.srt",
           target_language_code,
+          term_map_mode: "follow",
+          term_map_id: null,
         },
       });
 
@@ -1051,6 +1195,8 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-snapshot-blocker",
+      term_map_mode: "follow",
+      term_map_id: null,
     },
   });
   expect(snapshotBlocker.ok()).toBeTruthy();
@@ -1070,6 +1216,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-term-map",
+      term_map_mode: "selected",
       term_map_id: termMap.id,
     },
   });
@@ -1105,6 +1252,8 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
       stream_index: 1,
       source_format: "srt",
       target_language_code: "e2e-embedded",
+      term_map_mode: "follow",
+      term_map_id: null,
     },
   });
   expect(embedded.ok()).toBeTruthy();
@@ -1126,12 +1275,16 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
             media_path: "Example.mkv",
             subtitle_path: "Example.en.srt",
             target_language_code: targetLanguage,
+            term_map_mode: "follow",
+            term_map_id: null,
           }
         : {
             media_path: "Example.mkv",
             stream_index: 1,
             source_format: "srt",
             target_language_code: targetLanguage,
+            term_map_mode: "follow",
+            term_map_id: null,
           };
     const created = await page.request.post("/api/jobs", { data: request });
     expect(created.ok()).toBeTruthy();
@@ -1148,6 +1301,8 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     subtitle_path: "Example.en.srt",
     target_language_code: "e2e-number-one",
     output_suffix: "release-number",
+    term_map_mode: "follow",
+    term_map_id: null,
   };
   const firstNumbered = await page.request.post("/api/jobs", {
     data: numberedRequest,
@@ -1167,6 +1322,8 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     subtitle_path: "Example.en.srt",
     output_suffix: "release-overwrite",
     output_conflict_policy: "overwrite",
+    term_map_mode: "follow",
+    term_map_id: null,
   };
   const overwriteFirst = await page.request.post("/api/jobs", {
     data: { ...overwriteRequest, target_language_code: "e2e-overwrite-one" },
@@ -1185,6 +1342,8 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-fail-permanent",
+      term_map_mode: "follow",
+      term_map_id: null,
     },
   });
   expect(permanentFailure.ok()).toBeTruthy();
@@ -1198,6 +1357,8 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-interrupted-retry",
+      term_map_mode: "follow",
+      term_map_id: null,
     },
   });
   expect(restartJob.ok()).toBeTruthy();

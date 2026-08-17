@@ -18,6 +18,7 @@ from unicodedata import category
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ...work import WorkRoot
+from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
 from ..errors import ServiceError
 from ..extraction import Extraction
 from ..media import require_readable_media
@@ -65,6 +66,7 @@ class CreateJobRequest:
     media_path: str
     subtitle_path: str | None
     target_language_code: str
+    term_map_mode: Literal["follow", "selected", "none"]
     term_map_id: str | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
@@ -81,18 +83,20 @@ class TermMapResolver(Protocol):
 class Jobs:
     """Validate, persist, execute, and expose one serial stream of Jobs."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         translator: Translator,
         media_root: Path,
         work_root: Path,
         term_maps: TermMapResolver | None = None,
         extraction: Extraction | None = None,
+        directory_term_maps: DirectoryTermMaps | None = None,
         *,
         record_store: JobRecordStore | None = None,
     ) -> None:
         self._translator = translator
         self._term_maps = term_maps
+        self._directory_term_maps = directory_term_maps
         self._extraction = extraction
         self._media_root = media_root.resolve()
         self._work = WorkRoot(work_root)
@@ -133,13 +137,14 @@ class Jobs:
                     "Translation provider is unavailable; configure a provider and restart CueWeaver",
                 )
             media, subtitle, output, source_format = self._validate(request)
-            term_map = self._snapshot_term_map(request.term_map_id)
+            term_map = self._resolve_term_map(request, media)
             self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
             job_request: dict[str, object] = {
                 "media_path": str(media.relative_to(self._media_root)),
                 "target_language_code": request.target_language_code,
+                "term_map_mode": request.term_map_mode,
                 "term_map": term_map,
                 "dynamic_terminology_enabled": request.dynamic_terminology_enabled,
                 "subtitle_terminology_filter_enabled": request.subtitle_terminology_filter_enabled,
@@ -488,6 +493,40 @@ class Jobs:
             "name": detail.name,
             "content": dict(detail.content),
         }
+
+    def _resolve_term_map(
+        self, request: CreateJobRequest, media: Path
+    ) -> dict[str, object] | None:
+        mode = request.term_map_mode
+        if mode not in {"follow", "selected", "none"}:
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Term map mode must be follow, selected, or none",
+                field="term_map_mode",
+            )
+        if mode in {"follow", "none"}:
+            if request.term_map_id is not None:
+                raise ServiceError(
+                    "invalid_term_map_mode",
+                    "Term map ID must be null for follow or none mode",
+                    field="term_map_id",
+                )
+            if mode == "none" or self._directory_term_maps is None:
+                return None
+            parent = media.parent.relative_to(self._media_root)
+            directory = "" if str(parent) == "." else parent.as_posix()
+            state: DirectoryTermMapState = self._directory_term_maps.get(directory)
+            effective = state.effective
+            return self._snapshot_term_map(
+                effective.id if effective is not None else None
+            )
+        if not isinstance(request.term_map_id, str) or not request.term_map_id:
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Selected mode requires a Term map ID",
+                field="term_map_id",
+            )
+        return self._snapshot_term_map(request.term_map_id)
 
     def _record_with_queue_position(
         self, record: dict[str, object]

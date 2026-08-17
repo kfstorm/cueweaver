@@ -16,7 +16,8 @@ class CreateJobBody(BaseModel):
     target_language_code: str = Field(min_length=1)
     output_suffix: str | None = None
     output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
-    term_map_id: str | None = None
+    term_map_mode: Literal["follow", "selected", "none"]
+    term_map_id: str | None = Field(default=None, min_length=1)
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
     stream_index: int | None = Field(default=None, strict=True, ge=0)
@@ -59,6 +60,7 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
                     media_path=body.media_path,
                     subtitle_path=body.subtitle_path,
                     target_language_code=body.target_language_code,
+                    term_map_mode=body.term_map_mode,
                     term_map_id=body.term_map_id,
                     dynamic_terminology_enabled=body.dynamic_terminology_enabled,
                     subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,

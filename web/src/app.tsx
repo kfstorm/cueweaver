@@ -40,7 +40,7 @@ import {
 } from "./browse";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
 import { jobRecordAttention, useProductStatus } from "./status";
-import { useCreateJob, useJobs, useJobNotifications } from "./jobs";
+import { useCreateJob, useJobs, useJobNotifications, type TermMapMode } from "./jobs";
 import { JobNotificationRegion, JobsPage } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
@@ -61,6 +61,7 @@ const routes: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "Jobs", path: "/jobs", icon: BriefcaseIcon },
   { label: "Term maps", path: "/term-maps", icon: ListChecksIcon },
 ];
+const DIRECTORY_TERM_MAP_VALUE = "__directory_default__";
 
 function Navigation({ mobile = false }: { mobile?: boolean }) {
   return (
@@ -160,6 +161,7 @@ function Translate() {
     "append-number" | "overwrite"
   >("append-number");
   const suffixEdited = useRef(false);
+  const [termMapMode, setTermMapMode] = useState<TermMapMode>("follow");
   const [termMapId, setTermMapId] = useState<string | null>(null);
   const [directoryTermMapSelection, setDirectoryTermMapSelection] = useState<
     string | null
@@ -174,11 +176,14 @@ function Translate() {
   const selectedDirectoryTermMapId =
     directoryTermMapSelection ?? directoryTermMap.data?.local?.id ?? "";
   const selectedTermMapId =
+    termMapMode === "selected" &&
     termMapId !== null &&
     (termMaps.data === undefined ||
       termMaps.data.term_maps.some((termMap) => termMap.id === termMapId))
       ? termMapId
       : null;
+  const submissionTermMapMode: TermMapMode =
+    termMapMode === "selected" && selectedTermMapId === null ? "none" : termMapMode;
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
   const clearDiscovery = (previousMedia: string | null) => {
@@ -218,6 +223,8 @@ function Translate() {
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
+    setTermMapMode("follow");
+    setTermMapId(null);
     setDynamicTerminologyEnabled(true);
     setSubtitleTerminologyFilterEnabled(true);
     setOutputSuffix(targetLanguage);
@@ -241,6 +248,8 @@ function Translate() {
             filter={filter}
             onDirectoryChange={(path) => {
               setDirectory(path);
+              setTermMapMode("follow");
+              setTermMapId(null);
               setDirectoryTermMapSelection(null);
               setFilter("");
               clearMedia(selectedMedia);
@@ -346,11 +355,34 @@ function Translate() {
             <Select
               id="term-map-select"
               aria-label="Term map"
-              value={selectedTermMapId ?? ""}
-              onChange={(event) => setTermMapId(event.target.value || null)}
+              value={
+                termMapMode === "follow"
+                  ? DIRECTORY_TERM_MAP_VALUE
+                  : termMapMode === "selected"
+                    ? (selectedTermMapId ?? "")
+                    : ""
+              }
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === DIRECTORY_TERM_MAP_VALUE) {
+                  setTermMapMode("follow");
+                  setTermMapId(null);
+                } else if (value === "") {
+                  setTermMapMode("none");
+                  setTermMapId(null);
+                } else {
+                  setTermMapMode("selected");
+                  setTermMapId(value);
+                }
+              }}
               disabled={termMaps.isPending || termMaps.isError}
             >
-              <option value="">No Term map</option>
+              <option value={DIRECTORY_TERM_MAP_VALUE}>
+                {directoryTermMap.data?.effective
+                  ? `Use directory default (${directoryTermMap.data.effective.name})`
+                  : "Use directory default (none)"}
+              </option>
+              <option value="">No Term map for this Job</option>
               {(termMaps.data?.term_maps ?? []).map((termMap) => (
                 <option key={termMap.id} value={termMap.id}>
                   {termMap.name}
@@ -496,6 +528,7 @@ function Translate() {
                     target_language_code: targetLanguage,
                     output_suffix: outputSuffix,
                     output_conflict_policy: outputConflictPolicy,
+                    term_map_mode: submissionTermMapMode,
                     term_map_id: selectedTermMapId,
                     dynamic_terminology_enabled: dynamicTerminologyEnabled,
                     subtitle_terminology_filter_enabled:

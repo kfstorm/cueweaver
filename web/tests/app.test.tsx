@@ -170,6 +170,7 @@ function embeddedJob(id: string, status: "Failed" | "Interrupted", target = "zh-
       media_path: "Movie.mkv",
       stream_index: 3,
       target_language_code: target,
+      term_map_mode: "follow",
       term_map: null,
       dynamic_terminology_enabled: true,
       subtitle_terminology_filter_enabled: true,
@@ -288,6 +289,7 @@ async function expectQueuedJob(source: Record<string, unknown>) {
           target_language_code: "zh-Hans",
           output_suffix: "zh-Hans",
           output_conflict_policy: "append-number",
+          term_map_mode: "follow",
           term_map_id: null,
           dynamic_terminology_enabled: true,
           subtitle_terminology_filter_enabled: true,
@@ -314,6 +316,7 @@ async function expectQueuedJobRequest(
           target_language_code: targetLanguage,
           output_suffix: targetLanguage,
           output_conflict_policy: "append-number",
+          term_map_mode: termMapId === null ? "follow" : "selected",
           term_map_id: termMapId,
           dynamic_terminology_enabled: dynamicTerminologyEnabled,
           subtitle_terminology_filter_enabled: subtitleTerminologyFilterEnabled,
@@ -1954,6 +1957,7 @@ describe("product shell", () => {
             target_language_code: "zh-Hans",
             output_suffix: "zh-Hans",
             output_conflict_policy: "append-number",
+            term_map_mode: "follow",
             term_map_id: null,
             dynamic_terminology_enabled: true,
             subtitle_terminology_filter_enabled: true,
@@ -2082,7 +2086,7 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: "Choose another Media" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Term map")).toHaveValue("map-1");
+    expect(screen.getByLabelText("Term map")).toHaveValue("__directory_default__");
     expect(screen.getByLabelText("Dynamic terminology")).toBeChecked();
     expect(screen.getByLabelText("Subtitle terminology filtering")).toBeChecked();
   });
@@ -2198,7 +2202,9 @@ describe("product shell", () => {
     await selectExternalSubtitle();
     fireEvent.click(screen.getByText("Advanced settings"));
     const termMap = screen.getByLabelText("Term map");
-    expect(screen.getByRole("option", { name: "No Term map" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "No Term map for this Job" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Characters" })).toBeInTheDocument();
     fireEvent.change(termMap, { target: { value: "map-1" } });
     fireEvent.change(screen.getByLabelText("Target language code"), {
@@ -2207,6 +2213,65 @@ describe("product shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await expectQueuedJobRequest("zh-Hans", "map-1", true, true);
+  });
+
+  it("submits an explicit no-map choice for only the current Job", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      undefined,
+      undefined,
+      false,
+      [],
+      [CHARACTERS_TERM_MAP],
+    );
+
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Term map"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    await waitFor(() =>
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/jobs",
+        expect.objectContaining({
+          body: expect.stringContaining('"term_map_mode":"none"'),
+        }),
+      ),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jobs",
+      expect.objectContaining({
+        body: expect.stringContaining('"term_map_id":null'),
+      }),
+    );
+  });
+
+  it("resets a one-off Term map choice when changing directories", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      undefined,
+      undefined,
+      false,
+      [],
+      [CHARACTERS_TERM_MAP],
+    );
+
+    await screen.findByRole("option", { name: "Characters" });
+    const termMap = screen.getByLabelText("Term map");
+    await waitFor(() => expect(termMap).toBeEnabled());
+    fireEvent.change(termMap, {
+      target: { value: "map-1" },
+    });
+    expect(termMap).toHaveValue("map-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Open Series" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Term map")).toHaveValue("__directory_default__"),
+    );
   });
 
   it("clears a Term map selection after the refreshed list removes it", async () => {
@@ -2313,6 +2378,7 @@ describe("product shell", () => {
           target_language_code: "x-custom",
           output_suffix: "x-custom",
           output_conflict_policy: "append-number",
+          term_map_mode: "follow",
           term_map_id: null,
           dynamic_terminology_enabled: false,
           subtitle_terminology_filter_enabled: true,

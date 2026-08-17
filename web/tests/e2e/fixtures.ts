@@ -13,6 +13,7 @@ export function jobRecord(id: string, status: E2EJobStatus = "Completed") {
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "zh-Hans",
+      term_map_mode: "follow",
       term_map: null,
       dynamic_terminology_enabled: true,
       subtitle_terminology_filter_enabled: true,
