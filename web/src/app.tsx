@@ -30,7 +30,7 @@ import {
 } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
-import { Input, Textarea } from "./components/ui/input";
+import { Input, Select, Textarea } from "./components/ui/input";
 import {
   useMediaDirectory,
   useMediaDiscovery,
@@ -265,7 +265,7 @@ function Translate() {
           <p>Select an External or Embedded subtitle and enter the target language.</p>
           <label htmlFor="common-target-language">
             Common target language
-            <select
+            <Select
               id="common-target-language"
               value={commonTargetLanguage}
               onChange={(event) => {
@@ -287,7 +287,7 @@ function Translate() {
                   {label} — {code}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           {customTargetLanguage && (
             <label htmlFor="target-language-code" className="custom-language-field">
@@ -308,7 +308,7 @@ function Translate() {
           </span>
           <label className="term-map-field">
             Term map
-            <select
+            <Select
               id="term-map-select"
               aria-label="Term map"
               value={selectedTermMapId ?? ""}
@@ -321,7 +321,7 @@ function Translate() {
                   {termMap.name}
                 </option>
               ))}
-            </select>
+            </Select>
             {termMaps.isPending && (
               <span className="field-help" role="status">
                 Loading Term maps
@@ -826,7 +826,7 @@ function MediaBrowser({
       </div>
       <label className="media-filter">
         <span>Filter this directory</span>
-        <input
+        <Input
           type="search"
           value={filter}
           onChange={(event) => onFilterChange(event.target.value)}
@@ -1212,7 +1212,13 @@ function TermMapsPage() {
             </div>
             <span className="count-badge">{maps.data?.term_maps?.length ?? 0}</span>
           </div>
-          <div className="term-map-list-state">
+          <div
+            className={cn(
+              "term-map-list-state",
+              (maps.isPending || maps.isError || maps.data?.term_maps?.length === 0) &&
+                "has-state",
+            )}
+          >
             {maps.isPending && (
               <div className="inline-state" role="status">
                 <SpinnerGapIcon className="spin" /> Loading Term maps

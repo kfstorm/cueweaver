@@ -180,7 +180,12 @@ export function JobsPage() {
               </ul>
             </div>
           )}
-          <div className="job-list-state">
+          <div
+            className={cn(
+              "job-list-state",
+              (jobs.isPending || jobs.isError || allJobs.length === 0) && "has-state",
+            )}
+          >
             {jobs.isPending && (
               <div className="inline-state" role="status">
                 Loading Jobs
