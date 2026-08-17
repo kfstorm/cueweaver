@@ -90,7 +90,10 @@ when reused.
 For every UI change, verify the rendered result rather than relying on source
 inspection alone.
 
-- Check 1280x800 and 390x844 viewports with Playwright or agent-browser.
+- Use the repository's `agent-browser` skill and Agent Browser tool as the only
+  browser inspection path. Before running a browser command, load its current
+  workflow with `agent-browser skills get core`.
+- Check 1280x800 and 390x844 viewports with Agent Browser.
 - Check Translate, Jobs, and Term maps, including at least one populated and
   one empty/loading/error state affected by the change.
 - Inspect computed font size, line height, control height, gap, and margins for
@@ -99,6 +102,12 @@ inspection alone.
   focus ring, or unexplained blank vertical region.
 - Capture screenshots for meaningful layout changes and treat unexpected
   screenshot differences as a failure to investigate, not as noise.
+
+Do not use Playwright, Puppeteer, browser DevTools, generic browser automation,
+or HTTP/source inspection to inspect webpage content, rendered layout, browser
+state, screenshots, or computed styles. Existing automated E2E suites may still
+be run as regression checks, but their DOM assertions never replace Agent
+Browser inspection.
 
 ## Completion Check
 
