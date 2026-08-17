@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
+from ..adapters.directory_term_maps import FileDirectoryTermMapStore
 from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
 from ..work import WorkRoot
 from .browsing import MediaBrowser
+from .directory_term_maps import DirectoryTermMaps
 from .discovery import Discovery
 from .extraction import Extraction
 from .jobs import Jobs
@@ -33,7 +35,15 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         configured_work_root = WorkRoot(work_root or Path.cwd())
-        self.term_maps = TermMaps(FileTermMapStore(configured_work_root))
+        directory_term_map_store = FileDirectoryTermMapStore(configured_work_root)
+        term_map_store = FileTermMapStore(
+            configured_work_root, directory_bindings=directory_term_map_store
+        )
+        self.term_maps = TermMaps(term_map_store)
+        if media_root is not None:
+            self.directory_term_maps = DirectoryTermMaps(
+                directory_term_map_store, self.term_maps, media_root
+            )
         if work_root is not None and media_root is not None:
             self.jobs = Jobs(
                 configured_translator,

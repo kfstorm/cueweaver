@@ -46,7 +46,10 @@ import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
   useCreateTermMap,
   useDeleteTermMap,
+  useBindDirectoryTermMap,
+  useDirectoryTermMap,
   useRenameTermMap,
+  useRemoveDirectoryTermMap,
   useReplaceTermMap,
   useTermMap,
   useTermMaps,
@@ -158,10 +161,18 @@ function Translate() {
   >("append-number");
   const suffixEdited = useRef(false);
   const [termMapId, setTermMapId] = useState<string | null>(null);
+  const [directoryTermMapSelection, setDirectoryTermMapSelection] = useState<
+    string | null
+  >(null);
   const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useState(true);
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
     useState(true);
   const termMaps = useTermMaps();
+  const directoryTermMap = useDirectoryTermMap(directory);
+  const bindDirectoryTermMap = useBindDirectoryTermMap();
+  const removeDirectoryTermMap = useRemoveDirectoryTermMap();
+  const selectedDirectoryTermMapId =
+    directoryTermMapSelection ?? directoryTermMap.data?.local?.id ?? "";
   const selectedTermMapId =
     termMapId !== null &&
     (termMaps.data === undefined ||
@@ -230,6 +241,7 @@ function Translate() {
             filter={filter}
             onDirectoryChange={(path) => {
               setDirectory(path);
+              setDirectoryTermMapSelection(null);
               setFilter("");
               clearMedia(selectedMedia);
             }}
@@ -253,6 +265,29 @@ function Translate() {
               }}
             />
           )}
+          <DirectoryTermMapPanel
+            directory={directory}
+            termMaps={termMaps.data?.term_maps ?? []}
+            query={directoryTermMap}
+            selectedId={selectedDirectoryTermMapId}
+            onSelectedIdChange={setDirectoryTermMapSelection}
+            onBind={() => {
+              if (selectedDirectoryTermMapId) {
+                bindDirectoryTermMap.mutate({
+                  path: directory,
+                  termMapId: selectedDirectoryTermMapId,
+                });
+              }
+            }}
+            onRemove={() => removeDirectoryTermMap.mutate(directory)}
+            isBinding={bindDirectoryTermMap.isPending}
+            isRemoving={removeDirectoryTermMap.isPending}
+            error={
+              bindDirectoryTermMap.error?.message ??
+              removeDirectoryTermMap.error?.message ??
+              null
+            }
+          />
         </div>
       </section>
       <section
@@ -488,6 +523,117 @@ function Translate() {
         </p>
       )}
     </>
+  );
+}
+
+function DirectoryTermMapPanel({
+  directory,
+  termMaps,
+  query,
+  selectedId,
+  onSelectedIdChange,
+  onBind,
+  onRemove,
+  isBinding,
+  isRemoving,
+  error,
+}: {
+  directory: string;
+  termMaps: Array<{ id: string; name: string }>;
+  query: ReturnType<typeof useDirectoryTermMap>;
+  selectedId: string;
+  onSelectedIdChange: (value: string) => void;
+  onBind: () => void;
+  onRemove: () => void;
+  isBinding: boolean;
+  isRemoving: boolean;
+  error: string | null;
+}) {
+  const local = query.data?.local;
+  const effective = query.data?.effective;
+  return (
+    <section className="directory-term-map" aria-labelledby="directory-term-map-title">
+      <div className="directory-term-map-heading">
+        <div>
+          <h3 id="directory-term-map-title">Directory Term map</h3>
+          <p className="field-help">
+            {directory
+              ? `Current directory: ${directory}`
+              : "Current directory: Media root"}
+          </p>
+        </div>
+        {query.isPending && <span role="status">Loading binding...</span>}
+      </div>
+      {query.isError ? (
+        <p className="form-error" role="alert">
+          {query.error.message}
+        </p>
+      ) : (
+        <>
+          <dl className="directory-term-map-state">
+            <div>
+              <dt>Local binding</dt>
+              <dd>{local?.name ?? "None"}</dd>
+            </div>
+            <div>
+              <dt>Effective Term map</dt>
+              <dd>
+                {effective?.name ?? "No default"}
+                {effective && !local && query.data?.source_directory !== null && (
+                  <span className="field-help">
+                    {`Inherited from ${query.data?.source_directory || "Media root"}`}
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+          <div className="directory-term-map-controls">
+            <Select
+              aria-label="Directory Term map"
+              value={selectedId}
+              onChange={(event) => onSelectedIdChange(event.target.value)}
+              disabled={
+                query.isPending || termMaps.length === 0 || isBinding || isRemoving
+              }
+            >
+              <option value="">Choose a Term map</option>
+              {termMaps.map((termMap) => (
+                <option key={termMap.id} value={termMap.id}>
+                  Directory: {termMap.name}
+                </option>
+              ))}
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!selectedId || isBinding || isRemoving}
+              onClick={onBind}
+            >
+              {isBinding
+                ? "Binding..."
+                : local
+                  ? "Replace local binding"
+                  : "Bind Term map"}
+            </Button>
+            {local && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isBinding || isRemoving}
+                onClick={onRemove}
+              >
+                {isRemoving ? "Removing..." : "Remove local binding"}
+              </Button>
+            )}
+          </div>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

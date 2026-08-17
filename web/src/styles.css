@@ -336,6 +336,74 @@ a {
   width: min(100%, 320px);
 }
 
+.directory-term-map {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid #e4e7ec;
+}
+
+.directory-term-map-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.directory-term-map-heading h3 {
+  margin: 0;
+  color: #20293a;
+  font-size: var(--font-subheading);
+  line-height: 1.4;
+}
+
+.directory-term-map-heading .field-help {
+  margin-top: 6px;
+  font-size: var(--font-help);
+  line-height: 1.5;
+}
+
+.directory-term-map-state {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.directory-term-map-state > div {
+  min-width: 0;
+}
+
+.directory-term-map-state dt {
+  color: var(--text-subtle);
+  font-size: var(--font-help);
+  line-height: 1.5;
+}
+
+.directory-term-map-state dd {
+  margin: var(--space-1) 0 0;
+  color: #20293a;
+  font-size: var(--font-body);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.directory-term-map-state dd .field-help {
+  margin-top: 6px;
+}
+
+.directory-term-map-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.directory-term-map-controls .select-control {
+  width: min(100%, 280px);
+}
+
 .checkbox-field {
   display: flex;
   align-items: center;
@@ -1783,9 +1851,20 @@ summary:focus-visible {
   .output-conflict-policy label,
   .step-content > label .select-control,
   .term-map-field .select-control,
+  .directory-term-map-controls .select-control,
   .advanced-fields .select-control,
   .custom-language-field .form-control {
     min-height: 44px;
+  }
+
+  .directory-term-map-heading,
+  .directory-term-map-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .directory-term-map-controls > * {
+    width: 100%;
   }
 
   .output-name-stem {

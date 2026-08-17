@@ -301,6 +301,58 @@ test("Translate source and subtitle selection work with the keyboard", async ({
   await expect(subtitle).toHaveAttribute("aria-pressed", "true");
 });
 
+test("Translate manages the current Directory Term map binding", async ({ page }) => {
+  const termMap = {
+    id: "map-directory",
+    name: "Series terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  let state = {
+    directory: "",
+    local: null as typeof termMap | null,
+    effective: null as typeof termMap | null,
+    source_directory: null as string | null,
+  };
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: [termMap] }),
+    }),
+  );
+  await page.route("**/api/term-maps/directory**", async (route) => {
+    const request = route.request();
+    if (request.method() === "PUT") {
+      state = { ...state, local: termMap, effective: termMap, source_directory: "" };
+    } else if (request.method() === "DELETE") {
+      state = { ...state, local: null, effective: null, source_directory: null };
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(state),
+    });
+  });
+
+  await page.goto("/translate");
+  await expect(page.getByText("Effective Term map")).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Directory Term map" })
+    .selectOption(termMap.id);
+  await page.getByRole("button", { name: "Bind Term map" }).click();
+  await expect(
+    page
+      .getByRole("region", { name: "Directory Term map" })
+      .locator(".directory-term-map-state dd")
+      .filter({ hasText: "Series terms" })
+      .first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Remove local binding" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Remove local binding" }).click();
+  await expect(page.getByText("No default")).toBeVisible();
+});
+
 test.describe("Job history layouts", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
