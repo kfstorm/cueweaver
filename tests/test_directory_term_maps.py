@@ -13,6 +13,13 @@ def create_term_map(client: TestClient, name: str = "Characters") -> dict[str, o
     return response.json()
 
 
+def bind_series(client: TestClient, term_map_id: object) -> None:
+    assert (
+        directory_request(client, "PUT", "Series", term_map_id=term_map_id).status_code
+        == 200
+    )
+
+
 def directory_request(client: TestClient, method: str, path: str = "", **body: object):
     return client.request(
         method,
@@ -59,12 +66,7 @@ def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
     client = make_client(tmp_path)
     (tmp_path / "media" / "Series").mkdir(parents=True)
     term_map = create_term_map(client)
-    assert (
-        directory_request(
-            client, "PUT", "Series", term_map_id=term_map["id"]
-        ).status_code
-        == 200
-    )
+    bind_series(client, term_map["id"])
 
     restarted = make_client(tmp_path)
     assert (
@@ -120,6 +122,26 @@ def test_directory_term_map_uses_canonical_symlink_paths(tmp_path: Path):
     )
 
 
+def test_directory_term_map_resolution_is_independent_of_target_language(
+    tmp_path: Path,
+):
+    client = make_client(tmp_path)
+    (tmp_path / "media" / "Series").mkdir(parents=True)
+    term_map = create_term_map(client)
+    bind_series(client, term_map["id"])
+
+    english = client.get(
+        "/api/term-maps/directory",
+        params={"path": "Series", "target_language_code": "en"},
+    )
+    chinese = client.get(
+        "/api/term-maps/directory",
+        params={"path": "Series", "target_language_code": "zh-Hans"},
+    )
+
+    assert english.json() == chinese.json()
+
+
 def test_directory_term_map_writes_are_serialized_last_successful_write_wins(
     tmp_path: Path,
 ):
@@ -142,3 +164,14 @@ def test_directory_term_map_writes_are_serialized_last_successful_write_wins(
         first["id"],
         second["id"],
     }
+    assert (
+        directory_request(client, "PUT", "Series", term_map_id=first["id"]).status_code
+        == 200
+    )
+    assert (
+        directory_request(client, "PUT", "Series", term_map_id=second["id"]).status_code
+        == 200
+    )
+    assert (
+        directory_request(client, "GET", "Series").json()["local"]["id"] == second["id"]
+    )

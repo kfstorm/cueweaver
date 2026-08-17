@@ -314,6 +314,17 @@ test("Translate manages the current Directory Term map binding", async ({ page }
     effective: null as typeof termMap | null,
     source_directory: null as string | null,
   };
+  await page.route("**/api/media/browse", async (route) => {
+    const path = (JSON.parse(route.request().postData() ?? "{}").path ?? "") as string;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        path,
+        entries:
+          path === "" ? [{ kind: "directory", name: "Series", path: "alias" }] : [],
+      }),
+    });
+  });
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -322,8 +333,22 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   );
   await page.route("**/api/term-maps/directory**", async (route) => {
     const request = route.request();
+    const path = new URL(request.url()).searchParams.get("path") ?? "";
+    if (request.method() === "GET") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ ...state, directory: path === "alias" ? "Series" : "" }),
+      });
+      return;
+    }
     if (request.method() === "PUT") {
-      state = { ...state, local: termMap, effective: termMap, source_directory: "" };
+      state = {
+        ...state,
+        directory: "Series",
+        local: termMap,
+        effective: termMap,
+        source_directory: "Series",
+      };
     } else if (request.method() === "DELETE") {
       state = { ...state, local: null, effective: null, source_directory: null };
     }
@@ -334,6 +359,7 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   });
 
   await page.goto("/translate");
+  await page.getByRole("button", { name: "Open Series" }).click();
   await expect(page.getByText("Effective Term map")).toBeVisible();
   await page
     .getByRole("combobox", { name: "Directory Term map" })
