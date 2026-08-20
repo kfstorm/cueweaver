@@ -32,7 +32,7 @@ async function stubProductStatus(page: Page, providerReady = true) {
           : {
               ready: false,
               message:
-                "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
+                "Set PROVIDER and the matching provider environment variables, then restart CueWeaver.",
             },
         worker: { ready: true, mode: "single" },
       }),
@@ -1045,8 +1045,8 @@ test("unavailable provider is actionable and cannot submit", async ({ page }) =>
   await page.goto("/translate");
 
   await expect(
-    page.getByRole("status").filter({ hasText: "Configure a provider" }),
-  ).toContainText("Configure a provider in PySubtrans service settings");
+    page.getByRole("status").filter({ hasText: "Set PROVIDER" }),
+  ).toContainText("Set PROVIDER and the matching provider environment variables");
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });
 

@@ -19,7 +19,8 @@ MEDIA_ROOT_ENV = "CUEWEAVER_MEDIA_ROOT"
 WORK_ROOT_ENV = "CUEWEAVER_WORK_ROOT"
 STATIC_ROOT = Path(__file__).parent / "static"
 PROVIDER_MESSAGE = (
-    "Configure a provider in PySubtrans service settings, then restart CueWeaver."
+    "Set PROVIDER and the matching provider environment variables, then restart "
+    "CueWeaver."
 )
 
 

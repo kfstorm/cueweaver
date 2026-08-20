@@ -240,8 +240,8 @@ def test_unconfigured_provider_keeps_product_available_with_actionable_status(
     assert response.json()["translation_provider"] == {
         "ready": False,
         "message": (
-            "Configure a provider in PySubtrans service settings, then restart "
-            "CueWeaver."
+            "Set PROVIDER and the matching provider environment variables, then "
+            "restart CueWeaver."
         ),
     }
     assert response.json()["api"] == {"ready": True}
