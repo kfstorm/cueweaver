@@ -593,7 +593,7 @@ test("batch Translate creates independent Jobs in request order through the real
     "Second.mkv",
   ]);
   expect(jobs.every((job) => job.error === null)).toBe(true);
-  expect(new Date(jobs[0].started_at!).getTime()).toBeLessThan(
+  expect(new Date(jobs[0].finished_at!).getTime()).toBeLessThanOrEqual(
     new Date(jobs[1].started_at!).getTime(),
   );
 });
