@@ -3,16 +3,14 @@
 from typing import Literal, Protocol
 
 from fastapi import FastAPI, Query
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from ..application.jobs import CreateJobRequest
 from ..application.jobs.model import project_job_detail
 
 
-class CreateJobBody(BaseModel):
+class JobOptionsBody(BaseModel):
     model_config = {"extra": "forbid"}
-    media_path: str = Field(min_length=1)
-    subtitle_path: str | None = Field(default=None, min_length=1)
     target_language_code: str = Field(min_length=1)
     output_suffix: str | None = None
     output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
@@ -20,8 +18,6 @@ class CreateJobBody(BaseModel):
     term_map_id: str | None = Field(default=None, min_length=1, validate_default=True)
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
-    stream_index: int | None = Field(default=None, strict=True, ge=0)
-    source_format: str | None = Field(default=None, min_length=1)
 
     @field_validator("term_map_id")
     @classmethod
@@ -36,8 +32,40 @@ class CreateJobBody(BaseModel):
         return value
 
 
+class SubtitleSourceBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    media_path: str = Field(min_length=1)
+    subtitle_path: str | None = Field(default=None, min_length=1)
+    stream_index: int | None = Field(default=None, strict=True, ge=0)
+    source_format: str | None = Field(default=None, min_length=1)
+
+
+class CreateJobBody(JobOptionsBody, SubtitleSourceBody):
+    pass
+
+
+class CreateBatchItem(SubtitleSourceBody):
+    @model_validator(mode="after")
+    def validate_subtitle_source(self) -> "CreateBatchItem":
+        if (self.subtitle_path is None) == (self.stream_index is None):
+            raise ValueError("Exactly one subtitle source is required")
+        if self.stream_index is not None and self.source_format is None:
+            raise ValueError("Embedded subtitles require a source format")
+        if self.subtitle_path is not None and self.source_format is not None:
+            raise ValueError("External subtitles must not provide a source format")
+        return self
+
+
+class CreateBatchBody(JobOptionsBody):
+    items: list[CreateBatchItem] = Field(min_length=1)
+
+
 class JobsOperation(Protocol):
     def create(self, request: CreateJobRequest) -> dict[str, object]: ...
+
+    def create_batch(
+        self, requests: list[CreateJobRequest]
+    ) -> list[dict[str, object]]: ...
 
     def retry(self, job_id: str) -> dict[str, object]: ...
 
@@ -84,6 +112,27 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
             )
         )
 
+    @app.post("/api/jobs/batch")
+    def create_batch(body: CreateBatchBody) -> dict[str, object]:
+        requests = [
+            CreateJobRequest(
+                media_path=item.media_path,
+                subtitle_path=item.subtitle_path,
+                target_language_code=body.target_language_code,
+                term_map_mode=body.term_map_mode,
+                term_map_id=body.term_map_id,
+                dynamic_terminology_enabled=body.dynamic_terminology_enabled,
+                subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,
+                output_suffix=body.output_suffix,
+                output_conflict_policy=body.output_conflict_policy,
+                stream_index=item.stream_index,
+                source_format=item.source_format,
+            )
+            for item in body.items
+        ]
+        results = application.jobs.create_batch(requests)
+        return {"results": [_batch_result(result) for result in results]}
+
     @app.get("/api/jobs")
     def list_jobs(
         limit: int = Query(default=50, ge=1, le=100), cursor: str | None = None
@@ -118,3 +167,9 @@ def _project_detail(job: dict[str, object]) -> dict[str, object]:
     if not isinstance(queue_position, int) or isinstance(queue_position, bool):
         queue_position = None
     return project_job_detail(job, queue_position)
+
+
+def _batch_result(result: dict[str, object]) -> dict[str, object]:
+    if "error_code" in result:
+        return result
+    return _project_detail(result)

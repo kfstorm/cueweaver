@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 
 export interface MediaDirectoryEntry {
   name: string;
@@ -89,5 +89,16 @@ export function useMediaDiscovery(path: string | null) {
     enabled: path !== null,
     retry: false,
     gcTime: 0,
+  });
+}
+
+export function useMediaDiscoveries(paths: string[]) {
+  return useQueries({
+    queries: paths.map((path) => ({
+      queryKey: ["media-discovery", path],
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchDiscovery(path, signal),
+      retry: false,
+      gcTime: 0,
+    })),
   });
 }

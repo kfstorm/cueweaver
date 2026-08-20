@@ -192,6 +192,53 @@ class Jobs:
             self._pending.put(job_id)
             return self._record_with_queue_position(record)
 
+    def create_batch(self, requests: list[CreateJobRequest]) -> list[dict[str, object]]:
+        """Queue requests in order while isolating service-level item errors."""
+        if not requests:
+            raise ServiceError(
+                "invalid_request", "Batch must contain at least one item"
+            )
+        if self._closed.is_set():
+            raise ServiceError("worker_unavailable", "Job worker is shutting down")
+        if not self._translator.available:
+            raise ServiceError(
+                "provider_unavailable",
+                "Translation provider is unavailable; configure a provider and restart CueWeaver",
+            )
+        if any(
+            request.term_map_mode != requests[0].term_map_mode for request in requests
+        ):
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "All batch items must use one Term map mode",
+                field="term_map_mode",
+            )
+        parent_directories: set[str] = set()
+        for request in requests:
+            media = self._media_path(request.media_path, "invalid_media_path")
+            parent = media.parent.relative_to(self._media_root)
+            parent_directories.add("" if str(parent) == "." else parent.as_posix())
+        if len(parent_directories) > 1:
+            raise ServiceError(
+                "invalid_media_path",
+                "All batch items must share one parent directory",
+                field="items",
+            )
+
+        results: list[dict[str, object]] = []
+        for request in requests:
+            try:
+                results.append(self.create(request))
+            except ServiceError as error:  # noqa: PERF203
+                results.append(
+                    {
+                        "error_code": error.error_code,
+                        "message": error.message,
+                        **self._error_context(error.context),
+                    }
+                )
+        return results
+
     def retry(self, job_id: str) -> dict[str, object]:
         """Requeue a failed External subtitle Job without changing its identity."""
         with self._lifecycle_lock:

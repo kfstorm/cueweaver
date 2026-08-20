@@ -34,13 +34,20 @@ import { Input, Select, Textarea } from "./components/ui/input";
 import {
   useMediaDirectory,
   useMediaDiscovery,
+  useMediaDiscoveries,
   type MediaDirectoryEntry,
   type SubtitleCandidate,
   type UnsupportedSubtitleCandidate,
 } from "./browse";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
 import { jobRecordAttention, useProductStatus } from "./status";
-import { useCreateJob, useJobs, useJobNotifications, type TermMapMode } from "./jobs";
+import {
+  useCreateBatchJobs,
+  useCreateJob,
+  useJobs,
+  useJobNotifications,
+  type TermMapMode,
+} from "./jobs";
 import { JobNotificationRegion, JobsPage } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
@@ -141,11 +148,17 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 function Translate() {
   const queryClient = useQueryClient();
   const createJob = useCreateJob();
+  const createBatchJobs = useCreateBatchJobs();
   const navigate = useNavigate();
   const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedBatchMedia, setSelectedBatchMedia] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchSubtitles, setBatchSubtitles] = useState<Record<string, string>>({});
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
@@ -186,6 +199,8 @@ function Translate() {
     termMapMode === "selected" && selectedTermMapId === null ? "none" : termMapMode;
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
+  const batchPaths = [...selectedBatchMedia];
+  const batchDiscoveries = useMediaDiscoveries(batchPaths);
   const clearDiscovery = (previousMedia: string | null) => {
     if (previousMedia !== null) {
       void queryClient.cancelQueries({ queryKey: ["media-discovery", previousMedia] });
@@ -200,6 +215,22 @@ function Translate() {
   const selectedCandidate = discovery.data?.candidates.find(
     (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
   );
+  const batchItems = batchPaths.flatMap((path, index) => {
+    const result = batchDiscoveries[index]?.data;
+    const selected = result?.candidates.find(
+      (candidate, candidateIndex) =>
+        candidateKey(candidate, candidateIndex) === batchSubtitles[path],
+    );
+    if (!selected) return [];
+    return [
+      {
+        media_path: path,
+        ...(selected.kind === "external"
+          ? { subtitle_path: selected.path }
+          : { stream_index: selected.stream_index, source_format: selected.format }),
+      },
+    ];
+  });
   const outputFormat = selectedCandidate?.format ?? "srt";
   const outputParts = selectedMedia
     ? outputNameParts(selectedMedia, outputFormat)
@@ -210,8 +241,12 @@ function Translate() {
     if (!suffixEdited.current) setOutputSuffix(value);
   };
   const canSubmit =
-    selectedMedia !== null &&
-    ((selectedCandidate?.kind === "external" && selectedCandidate.path !== undefined) ||
+    (batchMode
+      ? batchPaths.length > 0 && batchItems.length === batchPaths.length
+      : selectedMedia !== null) &&
+    (batchMode ||
+      (selectedCandidate?.kind === "external" &&
+        selectedCandidate.path !== undefined) ||
       (selectedCandidate?.kind === "embedded" &&
         selectedCandidate.stream_index !== undefined &&
         selectedCandidate.format !== undefined)) &&
@@ -219,10 +254,15 @@ function Translate() {
     outputSuffixError === null &&
     status.data?.translation_provider.ready === true &&
     !createJob.isSuccess &&
-    !createJob.isPending;
+    !createBatchJobs.isSuccess &&
+    !createJob.isPending &&
+    !createBatchJobs.isPending;
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
+    setSelectedBatchMedia(new Set());
+    setBatchSubtitles({});
+    setBatchMode(false);
     setTermMapMode("follow");
     setTermMapId(null);
     setDynamicTerminologyEnabled(true);
@@ -243,6 +283,20 @@ function Translate() {
         <div className="step-index">01</div>
         <div className="step-content">
           <h2 id="source-title">Choose media</h2>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={batchMode}
+              onChange={(event) => {
+                setBatchMode(event.target.checked);
+                setSelectedMedia(null);
+                setSelectedSubtitle(null);
+                setSelectedBatchMedia(new Set());
+                setBatchSubtitles({});
+              }}
+            />
+            Batch mode
+          </label>
           <MediaBrowser
             directory={directory}
             filter={filter}
@@ -256,13 +310,48 @@ function Translate() {
             }}
             onFilterChange={setFilter}
             selectedMedia={selectedMedia}
+            selectedMediaPaths={selectedBatchMedia}
+            batchMode={batchMode}
             onMediaSelect={(path) => {
-              clearDiscovery(selectedMedia);
-              setSelectedMedia(path);
-              setSelectedSubtitle(null);
+              if (batchMode) {
+                setSelectedBatchMedia((current) => {
+                  const next = new Set(current);
+                  if (next.has(path)) next.delete(path);
+                  else next.add(path);
+                  return next;
+                });
+              } else {
+                clearDiscovery(selectedMedia);
+                setSelectedMedia(path);
+                setSelectedSubtitle(null);
+              }
             }}
             query={browser}
           />
+          {batchMode &&
+            batchPaths.map((path, index) => (
+              <SubtitleDiscovery
+                key={path}
+                mediaPath={path}
+                selected={batchSubtitles[path] ?? null}
+                onSelect={(value) =>
+                  setBatchSubtitles((current) => ({ ...current, [path]: value }))
+                }
+                query={batchDiscoveries[index]}
+                onClear={() => {
+                  setSelectedBatchMedia((current) => {
+                    const next = new Set(current);
+                    next.delete(path);
+                    return next;
+                  });
+                  setBatchSubtitles((current) => {
+                    const next = { ...current };
+                    delete next[path];
+                    return next;
+                  });
+                }}
+              />
+            ))}
           {selectedMedia && (
             <SubtitleDiscovery
               mediaPath={selectedMedia}
@@ -300,7 +389,10 @@ function Translate() {
         </div>
       </section>
       <section
-        className={cn("workflow-panel", selectedCandidate === undefined && "muted")}
+        className={cn(
+          "workflow-panel",
+          !batchMode && selectedCandidate === undefined && "muted",
+        )}
         aria-labelledby="configure-title"
       >
         <div className="step-index">02</div>
@@ -320,7 +412,9 @@ function Translate() {
                   updateTargetLanguage(value);
                 }
               }}
-              disabled={selectedCandidate === undefined}
+              disabled={
+                batchMode ? batchItems.length === 0 : selectedCandidate === undefined
+              }
             >
               <option value="" disabled>
                 Choose a language
@@ -343,7 +437,9 @@ function Translate() {
                 value={targetLanguage}
                 onChange={(event) => updateTargetLanguage(event.target.value)}
                 placeholder="zh-Hans"
-                disabled={selectedCandidate === undefined}
+                disabled={
+                  batchMode ? batchItems.length === 0 : selectedCandidate === undefined
+                }
               />
             </label>
           )}
@@ -493,7 +589,12 @@ function Translate() {
           )}
         </div>
       </section>
-      <div className={cn("submission-bar", createJob.isSuccess && "queued")}>
+      <div
+        className={cn(
+          "submission-bar",
+          (createJob.isSuccess || createBatchJobs.isSuccess) && "queued",
+        )}
+      >
         {createJob.isSuccess ? (
           <QueueSuccess
             job={createJob.data}
@@ -503,13 +604,47 @@ function Translate() {
             }}
             onTranslateAnother={resetTranslationWorkflow}
           />
+        ) : createBatchJobs.isSuccess ? (
+          <div role="status">
+            <strong>
+              {createBatchJobs.data.filter((result) => "id" in result).length} Jobs
+              queued.
+            </strong>
+            {createBatchJobs.data.some((result) => "error_code" in result) && (
+              <p>Some items could not be queued.</p>
+            )}
+            <Button type="button" variant="outline" onClick={resetTranslationWorkflow}>
+              Translate another
+            </Button>
+          </div>
         ) : (
           <>
             <ProviderState />
             <Button
               disabled={!canSubmit}
               onClick={() => {
-                if (
+                if (batchMode) {
+                  createBatchJobs.mutate(
+                    {
+                      items: batchItems,
+                      target_language_code: targetLanguage,
+                      output_suffix: outputSuffix,
+                      output_conflict_policy: outputConflictPolicy,
+                      term_map_mode: submissionTermMapMode,
+                      term_map_id: selectedTermMapId,
+                      dynamic_terminology_enabled: dynamicTerminologyEnabled,
+                      subtitle_terminology_filter_enabled:
+                        subtitleTerminologyFilterEnabled,
+                    },
+                    {
+                      onSuccess: () =>
+                        window.localStorage.setItem(
+                          "cueweaver.target-language",
+                          targetLanguage,
+                        ),
+                    },
+                  );
+                } else if (
                   selectedMedia &&
                   selectedCandidate &&
                   ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
@@ -545,7 +680,11 @@ function Translate() {
                 }
               }}
             >
-              {createJob.isPending ? "Queueing..." : "Start translation"}
+              {createJob.isPending || createBatchJobs.isPending
+                ? "Queueing..."
+                : batchMode
+                  ? "Queue selected translations"
+                  : "Start translation"}
             </Button>
           </>
         )}
@@ -553,6 +692,11 @@ function Translate() {
       {createJob.isError && (
         <p className="form-error" role="alert">
           {createJob.error.message}
+        </p>
+      )}
+      {createBatchJobs.isError && (
+        <p className="form-error" role="alert">
+          {createBatchJobs.error.message}
         </p>
       )}
     </>
@@ -958,6 +1102,8 @@ function MediaBrowser({
   onDirectoryChange,
   onFilterChange,
   selectedMedia,
+  selectedMediaPaths,
+  batchMode,
   onMediaSelect,
   query,
 }: {
@@ -966,6 +1112,8 @@ function MediaBrowser({
   onDirectoryChange: (path: string) => void;
   onFilterChange: (filter: string) => void;
   selectedMedia: string | null;
+  selectedMediaPaths: Set<string>;
+  batchMode: boolean;
   onMediaSelect: (path: string) => void;
   query: ReturnType<typeof useMediaDirectory>;
 }) {
@@ -1034,7 +1182,11 @@ function MediaBrowser({
             key={entry.path}
             entry={entry}
             onDirectoryChange={onDirectoryChange}
-            selected={selectedMedia === entry.path}
+            selected={
+              batchMode
+                ? selectedMediaPaths.has(entry.path)
+                : selectedMedia === entry.path
+            }
             onMediaSelect={onMediaSelect}
           />
         ))}

@@ -26,6 +26,7 @@ BUSINESS_ROUTES = frozenset(
         "/api/media/browse",
         "/api/media/discover",
         "/api/jobs",
+        "/api/jobs/batch",
     }
 )
 
