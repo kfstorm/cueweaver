@@ -623,6 +623,22 @@ a {
   background: #fbfcfe;
 }
 
+.batch-subtitle-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.batch-subtitle-controls label {
+  min-width: min(100%, 360px);
+  flex: 1;
+}
+
+.batch-subtitle-controls button {
+  flex: 0 0 auto;
+}
+
 .subtitle-heading {
   display: flex;
   align-items: flex-start;
@@ -1818,6 +1834,11 @@ summary:focus-visible {
   .subtitle-heading {
     flex-direction: column;
     gap: 6px;
+  }
+
+  .batch-subtitle-controls {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .submission-bar {

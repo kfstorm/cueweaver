@@ -2026,6 +2026,38 @@ describe("product shell", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("filters and manually resolves an ambiguous Embedded subtitle", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      AMBIGUOUS_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    await screen.findByText(
+      "Multiple subtitles found. Manual selection is not available in batch mode.",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve candidates" }));
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search subtitle candidates" }),
+      {
+        target: { value: "ass" },
+      },
+    );
+
+    const embedded = await screen.findByRole("button", {
+      name: "Select embedded subtitle stream 3 Metadata unavailable",
+    });
+    expect(
+      screen.queryByRole("button", { name: /Second\.en\.srt/ }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(embedded);
+    expect(embedded).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("submits selected unique Media as one ordered batch request", async () => {
     renderRoute(
       "/translate",
