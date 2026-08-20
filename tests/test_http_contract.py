@@ -164,6 +164,54 @@ def test_http_batch_preflight_rejects_invalid_term_map_without_calling_applicati
     assert response.json()["error_code"] == "invalid_request"
 
 
+def test_http_batch_surfaces_term_map_preflight_error_as_top_level_error():
+    class PreflightErrorJobs(JobsApplicationFixture):
+        def create_batch(self, _requests: list[object]) -> list[dict[str, object]]:
+            raise ServiceError(
+                "term_map_not_found", "Term map does not exist", id="missing"
+            )
+
+    response = TestClient(create_app(PreflightErrorJobs())).post(
+        "/api/jobs/batch",
+        json={
+            "items": [{"media_path": "one.mkv", "subtitle_path": "one.srt"}],
+            "target_language_code": "zh-Hans",
+            "term_map_mode": "selected",
+            "term_map_id": "missing",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "term_map_not_found",
+        "message": "Term map does not exist",
+        "id": "missing",
+    }
+
+
+def test_http_batch_unexpected_error_uses_top_level_internal_error_envelope():
+    class UnexpectedErrorJobs(JobsApplicationFixture):
+        def create_batch(self, _requests: list[object]) -> list[dict[str, object]]:
+            raise RuntimeError("unexpected")
+
+    response = TestClient(
+        create_app(UnexpectedErrorJobs()), raise_server_exceptions=False
+    ).post(
+        "/api/jobs/batch",
+        json={
+            "items": [{"media_path": "one.mkv", "subtitle_path": "one.srt"}],
+            "target_language_code": "zh-Hans",
+            "term_map_mode": "none",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "internal_error",
+        "message": "Operation failed",
+    }
+
+
 def test_http_retries_a_job_with_no_editable_request_body():
     application = JobsApplicationFixture()
     client = TestClient(create_app(application))

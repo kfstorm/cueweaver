@@ -19,7 +19,7 @@ from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ...work import WorkRoot
 from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
-from ..errors import ServiceError
+from ..errors import ServiceError, project_service_error
 from ..extraction import Extraction
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
@@ -225,19 +225,15 @@ class Jobs:
                 "All batch items must share one parent directory",
                 field="items",
             )
+        shared_media = self._media_path(requests[0].media_path, "invalid_media_path")
+        self._resolve_term_map(requests[0], shared_media)
 
         results: list[dict[str, object]] = []
         for request in requests:
             try:
                 results.append(self.create(request))
             except ServiceError as error:  # noqa: PERF203
-                results.append(
-                    {
-                        "error_code": error.error_code,
-                        "message": error.message,
-                        **self._error_context(error.context),
-                    }
-                )
+                results.append(project_service_error(error))
         return results
 
     def retry(self, job_id: str) -> dict[str, object]:

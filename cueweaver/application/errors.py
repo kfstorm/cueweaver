@@ -9,3 +9,15 @@ class ServiceError(Exception):
         self.error_code = error_code
         self.message = message
         self.context = context
+
+
+def project_service_error(error: ServiceError) -> dict[str, object]:
+    """Project a ServiceError into the shared public error body."""
+    return {
+        "error_code": error.error_code,
+        "message": error.message,
+        **{
+            key: str(value) if hasattr(value, "__fspath__") else value
+            for key, value in error.context.items()
+        },
+    }

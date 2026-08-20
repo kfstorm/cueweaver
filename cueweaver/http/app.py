@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.directory_term_maps import DirectoryTermMaps
-from ..application.errors import ServiceError
+from ..application.errors import ServiceError, project_service_error
 from ..application.term_maps import TermMaps
 from .browse import BrowseOperation, register_browse
 from .jobs import JobsOperation, register_jobs
@@ -129,12 +129,6 @@ async def http_error_handler(_request: Request, _error: Exception) -> JSONRespon
 
 
 def error_response(error: ServiceError) -> JSONResponse:
-    body: dict[str, object] = {"error_code": error.error_code, "message": error.message}
-    body.update(
-        {
-            key: str(value) if hasattr(value, "__fspath__") else value
-            for key, value in error.context.items()
-        }
-    )
+    body = project_service_error(error)
     status_code = 409 if error.error_code == "job_cancel_conflict" else 400
     return JSONResponse(status_code=status_code, content=body)

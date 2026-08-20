@@ -13,6 +13,7 @@ from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
 from cueweaver.application.jobs import CreateJobRequest, FileJobRecordStore, Jobs
+from cueweaver.application.term_maps import TermMapDetail
 from cueweaver.product import create_product_app
 
 SRT = b"1\n00:00:00,000 --> 00:00:01,000\nTranslated\n"
@@ -135,6 +136,28 @@ def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media.write_bytes(b"media")
     subtitle.write_bytes(SRT)
     return media_root, tmp_path / "work", media, subtitle
+
+
+def add_batch_media(media_root: Path) -> None:
+    for stem in ("Second", "Third"):
+        (media_root / f"{stem}.mkv").write_bytes(b"media")
+        (media_root / f"{stem}.en.srt").write_bytes(SRT)
+
+
+def make_batch_jobs(tmp_path: Path, monkeypatch, failure: Exception):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    add_batch_media(media_root)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    attempted: list[str] = []
+
+    def create(request: CreateJobRequest) -> dict[str, object]:
+        attempted.append(request.media_path)
+        if request.media_path == "Second.mkv":
+            raise failure
+        return {"id": request.media_path, "request": {"media_path": request.media_path}}
+
+    monkeypatch.setattr(jobs, "create", create)
+    return jobs, attempted
 
 
 def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, object]:
@@ -697,31 +720,98 @@ def job_body(**overrides: object) -> dict[str, object]:
 
 
 def test_batch_preflight_and_item_errors_preserve_order(tmp_path: Path, monkeypatch):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    (media_root / "Second.mkv").write_bytes(b"media")
-    (media_root / "Second.en.srt").write_bytes(SRT)
-    jobs = Jobs(FakeTranslator(), media_root, work_root)
-    attempted: list[str] = []
-
-    def create(request: CreateJobRequest) -> dict[str, object]:
-        attempted.append(request.media_path)
-        if request.media_path == "Second.mkv":
-            raise ServiceError("late_failure", "The item failed")
-        return {"id": "first", "request": {"media_path": request.media_path}}
-
-    monkeypatch.setattr(jobs, "create", create)
+    jobs, attempted = make_batch_jobs(
+        tmp_path, monkeypatch, ServiceError("late_failure", "The item failed")
+    )
     results = jobs.create_batch(
         [
             CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none"),
             CreateJobRequest("Second.mkv", "Second.en.srt", "zh-Hans", "none"),
+            CreateJobRequest("Third.mkv", "Third.en.srt", "zh-Hans", "none"),
         ]
     )
 
-    assert attempted == ["Movie.mkv", "Second.mkv"]
+    assert attempted == ["Movie.mkv", "Second.mkv", "Third.mkv"]
     assert results == [
-        {"id": "first", "request": {"media_path": "Movie.mkv"}},
+        {"id": "Movie.mkv", "request": {"media_path": "Movie.mkv"}},
         {"error_code": "late_failure", "message": "The item failed"},
+        {"id": "Third.mkv", "request": {"media_path": "Third.mkv"}},
     ]
+    jobs.close()
+
+
+def test_batch_preflight_rejects_missing_shared_term_map_before_creating_jobs(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+
+    class MissingTermMap:
+        def get(self, term_map_id: str) -> TermMapDetail:
+            raise ServiceError(
+                "term_map_not_found", "Term map does not exist", id=term_map_id
+            )
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root, term_maps=MissingTermMap())
+
+    with pytest.raises(ServiceError) as raised:
+        jobs.create_batch(
+            [
+                CreateJobRequest(
+                    "Movie.mkv",
+                    "Movie.en.srt",
+                    "zh-Hans",
+                    "selected",
+                    term_map_id="missing",
+                )
+            ]
+        )
+
+    assert raised.value.error_code == "term_map_not_found"
+    assert jobs.list_page()["active_jobs"] == []
+    assert jobs.list_page()["history_jobs"] == []
+    jobs.close()
+
+
+def test_batch_item_errors_use_the_single_job_error_shape(tmp_path: Path, monkeypatch):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    def create(_request: CreateJobRequest) -> dict[str, object]:
+        raise ServiceError(
+            "media_not_found",
+            "Media does not exist",
+            path=media_root / "Movie.mkv",
+            id="preserve-all-context",
+        )
+
+    monkeypatch.setattr(jobs, "create", create)
+
+    assert jobs.create_batch(
+        [CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")]
+    ) == [
+        {
+            "error_code": "media_not_found",
+            "message": "Media does not exist",
+            "path": str(media_root / "Movie.mkv"),
+            "id": "preserve-all-context",
+        }
+    ]
+    jobs.close()
+
+
+def test_batch_unexpected_exception_stops_later_items(tmp_path: Path, monkeypatch):
+    jobs, attempted = make_batch_jobs(tmp_path, monkeypatch, RuntimeError("unexpected"))
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        jobs.create_batch(
+            [
+                CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none"),
+                CreateJobRequest("Second.mkv", "Second.en.srt", "zh-Hans", "none"),
+                CreateJobRequest("Third.mkv", "Third.en.srt", "zh-Hans", "none"),
+            ]
+        )
+
+    assert attempted == ["Movie.mkv", "Second.mkv"]
     jobs.close()
 
 
