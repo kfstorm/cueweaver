@@ -619,10 +619,6 @@ class Jobs:
         self, request: CreateJobRequest
     ) -> tuple[Path, Path | None, Path, str]:
         self._validate_shared_options(request)
-        if not isinstance(request.media_path, str) or not request.media_path:
-            raise ServiceError(
-                "invalid_media_path", "Media path must be a non-empty string"
-            )
         media = self._media_path(request.media_path, "invalid_media_path")
         require_readable_media(media)
         if request.stream_index is not None:
@@ -790,7 +786,9 @@ class Jobs:
             )
         return external_format
 
-    def _media_path(self, value: str, error_code: str) -> Path:
+    def _media_path(self, value: object, error_code: str) -> Path:
+        if not isinstance(value, str) or not value:
+            raise ServiceError(error_code, "Media path must be a non-empty string")
         path = Path(value)
         if (
             "\\" in value

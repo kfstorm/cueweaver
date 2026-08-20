@@ -2521,6 +2521,9 @@ describe("product shell", () => {
 
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
     expect(screen.getByLabelText("Skip existing output (recommended)")).toBeChecked();
+    expect(
+      screen.getByText("If the output already exists, no Job will be created."),
+    ).toBeInTheDocument();
     expect(screen.queryByText("single-only")).not.toBeInTheDocument();
   });
 

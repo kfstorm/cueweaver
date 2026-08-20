@@ -3384,6 +3384,27 @@ def test_batch_isolates_invalid_subtitle_source_items(tmp_path: Path):
     assert isinstance(results[1].get("id"), str)
 
 
+@pytest.mark.parametrize("media_path", [None, 123, []])
+def test_batch_isolates_invalid_media_path_types(tmp_path: Path, media_path: object):
+    with two_media_batch_client(tmp_path, FakeTranslator()) as client:
+        response = post_batch(
+            client,
+            [
+                {"media_path": media_path, "subtitle_path": "Movie.en.srt"},
+                {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+            ],
+            target_language="invalid-media-type",
+        )
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert results[0] == {
+        "error_code": "invalid_media_path",
+        "message": "Media path must be a non-empty string",
+    }
+    assert isinstance(results[1].get("id"), str)
+
+
 def test_retry_recomputes_append_number_from_original_output_name(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     original_output = media_root / "Movie.zh.srt"

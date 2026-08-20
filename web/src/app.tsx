@@ -168,6 +168,9 @@ function OutputConflictPolicy({
   return (
     <fieldset className="output-conflict-policy">
       <legend>If the final name already exists</legend>
+      <p className="field-hint">
+        If the output already exists, no Job will be created.
+      </p>
       <label>
         <input
           type="radio"

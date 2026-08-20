@@ -1693,6 +1693,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     subtitle_path: "Example.en.srt",
     target_language_code: "e2e-number-one",
     output_suffix: "release-number",
+    output_conflict_policy: "append-number",
     term_map_mode: "follow",
     term_map_id: null,
   };
