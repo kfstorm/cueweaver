@@ -377,6 +377,13 @@ async function submitBatch() {
   fireEvent.click(screen.getByRole("button", { name: "Queue selected translations" }));
 }
 
+async function expectBatchResultsStatus(status: string) {
+  expect(
+    await screen.findByRole("heading", { name: "Batch results" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(status);
+}
+
 function expectJobSubmissionBlocked() {
   expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   expect(globalThis.fetch).not.toHaveBeenCalledWith(
@@ -404,7 +411,7 @@ async function expectQueuedJob(source: Record<string, unknown>) {
           ...source,
           target_language_code: "zh-Hans",
           output_suffix: "zh-Hans",
-          output_conflict_policy: "append-number",
+          output_conflict_policy: "skip",
           term_map_mode: "follow",
           term_map_id: null,
           dynamic_terminology_enabled: true,
@@ -431,7 +438,7 @@ async function expectQueuedJobRequest(
           subtitle_path: "Movie.en.srt",
           target_language_code: targetLanguage,
           output_suffix: targetLanguage,
-          output_conflict_policy: "append-number",
+          output_conflict_policy: "skip",
           term_map_mode: termMapId === null ? "follow" : "selected",
           term_map_id: termMapId,
           dynamic_terminology_enabled: dynamicTerminologyEnabled,
@@ -2369,7 +2376,7 @@ describe("product shell", () => {
             ],
             target_language_code: "zh-Hans",
             output_suffix: "zh-Hans",
-            output_conflict_policy: "append-number",
+            output_conflict_policy: "skip",
             term_map_mode: "follow",
             term_map_id: null,
             dynamic_terminology_enabled: true,
@@ -2408,10 +2415,7 @@ describe("product shell", () => {
     await selectBatchMedia();
     await submitBatch();
 
-    expect(
-      await screen.findByRole("heading", { name: "Batch results" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("1 Job queued · 1 error.");
+    await expectBatchResultsStatus("1 Job queued · 1 error.");
     const results = screen.getByLabelText("Batch submission results");
     expect(
       within(results)
@@ -2516,7 +2520,10 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
 
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
-    expect(screen.getByLabelText("Append a number (recommended)")).toBeChecked();
+    expect(screen.getByLabelText("Skip existing output (recommended)")).toBeChecked();
+    expect(
+      screen.getByText("If the output already exists, no Job will be created."),
+    ).toBeInTheDocument();
     expect(screen.queryByText("single-only")).not.toBeInTheDocument();
   });
 
@@ -2541,7 +2548,7 @@ describe("product shell", () => {
             subtitle_path: "Movie.en.srt",
             target_language_code: "zh-Hans",
             output_suffix: "zh-Hans",
-            output_conflict_policy: "append-number",
+            output_conflict_policy: "skip",
             term_map_mode: "follow",
             term_map_id: null,
             dynamic_terminology_enabled: true,
@@ -2603,6 +2610,72 @@ describe("product shell", () => {
     expect(await screen.findByRole("button", { name: "Queueing..." })).toBeDisabled();
     resolveCreate(jsonResponse({ id: "queued-1", status: "Queued" }));
     expect(await screen.findByText("Translation queued")).toBeInTheDocument();
+  });
+
+  it("shows a skipped result without opening a Job", async () => {
+    renderRoute("/translate");
+    await selectExternalSubtitleWithLanguage();
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const defaultImplementation = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, request) =>
+      input === "/api/jobs" && request?.method === "POST"
+        ? Promise.resolve(
+            jsonResponse({
+              status: "skipped",
+              media_path: "Movie.mkv",
+              output_path: "Movie.zh-Hans.srt",
+              reason: "Output path already exists",
+            }),
+          )
+        : defaultImplementation(input, request),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Output already exists" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/No Job was created/)).toBeInTheDocument();
+    expect(screen.getAllByText("Movie.zh-Hans.srt").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole("button", { name: "View Job" })).not.toBeInTheDocument();
+  });
+
+  it("shows skipped and queued items in ordered batch results", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    const fetchMock = mockBatchRequest({
+      results: [
+        {
+          status: "skipped",
+          media_path: "Movie.mkv",
+          output_path: "Movie.zh-Hans.srt",
+          reason: "Output path already exists",
+        },
+        { id: "job-2" },
+      ],
+    });
+
+    await selectBatchMedia();
+    await submitBatch();
+
+    await expectBatchResultsStatus("1 Job queued · 1 item skipped.");
+    const results = screen.getByLabelText("Batch submission results");
+    expect(
+      within(results).getByText("Skipped: Output path already exists"),
+    ).toBeInTheDocument();
+    expect(within(results).getByText("Queued as Job job-2")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/batch",
+      expect.objectContaining({
+        body: expect.stringContaining('"output_conflict_policy":"skip"'),
+      }),
+    );
   });
 
   it("shows queue details and opens the created Job", async () => {
@@ -2959,7 +3032,7 @@ describe("product shell", () => {
           subtitle_path: "Movie.en.srt",
           target_language_code: "x-custom",
           output_suffix: "x-custom",
-          output_conflict_policy: "append-number",
+          output_conflict_policy: "skip",
           term_map_mode: "follow",
           term_map_id: null,
           dynamic_terminology_enabled: false,
@@ -2969,7 +3042,7 @@ describe("product shell", () => {
     );
   });
 
-  it("disables submission when the Translation provider is unavailable", async () => {
+  it("allows Skip submission when the Translation provider is unavailable", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
@@ -2977,7 +3050,16 @@ describe("product shell", () => {
       target: { value: "zh-Hans" },
     });
 
-    expectJobSubmissionBlocked();
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
+    await waitFor(() =>
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/jobs",
+        expect.objectContaining({
+          body: expect.stringContaining('"output_conflict_policy":"skip"'),
+        }),
+      ),
+    );
   });
 
   it("keeps the real filename in the accessible Media name", async () => {

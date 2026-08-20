@@ -47,6 +47,7 @@ class JobExecutionInput:
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
     overwrite: bool = False
+    skip_if_exists: bool = False
     embedded: EmbeddedExecutionInput | None = None
 
 
@@ -126,6 +127,12 @@ class JobExecution:
             return publication_finalized
 
         try:
+            if execution_input.skip_if_exists and execution_input.output_path.exists():
+                raise ServiceError(
+                    "output_exists",
+                    "Output path already exists",
+                    path=execution_input.output_path,
+                )
             if execution_input.embedded is not None:
                 source = self._prepare_embedded_source(execution_input)
                 if source is None or (

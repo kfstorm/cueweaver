@@ -866,6 +866,17 @@ a {
   font-size: var(--font-small);
 }
 
+.batch-result-row small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+.batch-result-skipped {
+  border-color: #cfe5d7;
+  background: #fbfffc;
+}
+
 .batch-result-error {
   border-color: #f0caca;
   background: #fffafa;

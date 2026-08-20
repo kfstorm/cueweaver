@@ -59,6 +59,8 @@ MAX_HISTORY_PAGE_LIMIT = 100
 APPROVED_ERROR_CONTEXT_KEYS = frozenset(
     {"field", "media_path", "output_path", "path", "stream_index"}
 )
+OUTPUT_CONFLICT_POLICIES = frozenset({"append-number", "overwrite", "skip"})
+OUTPUT_EXISTS_REASON = "Output path already exists"
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,7 @@ class CreateJobRequest:
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
     output_suffix: str | None = None
-    output_conflict_policy: Literal["append-number", "overwrite"] = "append-number"
+    output_conflict_policy: Literal["append-number", "overwrite", "skip"] = "skip"
     stream_index: int | None = None
     source_format: str | None = None
 
@@ -131,13 +133,16 @@ class Jobs:
         with self._lifecycle_lock:
             if self._closed.is_set():
                 raise ServiceError("worker_unavailable", "Job worker is shutting down")
+            media, subtitle, output, source_format = self._validate(request)
+            term_map = self._resolve_term_map(request, media)
+            if request.output_conflict_policy == "skip" and output.exists():
+                return _skipped_result(media, output, self._media_root)
+            _require_writable_directory(output.parent)
             if not self._translator.available:
                 raise ServiceError(
                     "provider_unavailable",
                     "Translation provider is unavailable; configure a provider and restart CueWeaver",
                 )
-            media, subtitle, output, source_format = self._validate(request)
-            term_map = self._resolve_term_map(request, media)
             self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
@@ -200,11 +205,6 @@ class Jobs:
             )
         if self._closed.is_set():
             raise ServiceError("worker_unavailable", "Job worker is shutting down")
-        if not self._translator.available:
-            raise ServiceError(
-                "provider_unavailable",
-                "Translation provider is unavailable; configure a provider and restart CueWeaver",
-            )
         if any(
             request.term_map_mode != requests[0].term_map_mode for request in requests
         ):
@@ -214,9 +214,16 @@ class Jobs:
                 field="term_map_mode",
             )
         parent_directories: set[str] = set()
-        for request in requests:
+        item_errors: dict[int, dict[str, object]] = {}
+        valid_media: dict[int, Path] = {}
+        for index, request in enumerate(requests):
             self._validate_shared_options(request)
-            media = self._media_path(request.media_path, "invalid_media_path")
+            try:
+                media = self._media_path(request.media_path, "invalid_media_path")
+            except ServiceError as error:
+                item_errors[index] = project_service_error(error)
+                continue
+            valid_media[index] = media
             parent = media.parent.relative_to(self._media_root)
             parent_directories.add("" if str(parent) == "." else parent.as_posix())
         if len(parent_directories) > 1:
@@ -225,14 +232,17 @@ class Jobs:
                 "All batch items must share one parent directory",
                 field="items",
             )
-        shared_media = self._media_path(requests[0].media_path, "invalid_media_path")
-        self._resolve_term_map(requests[0], shared_media)
+        if 0 not in item_errors:
+            self._resolve_term_map(requests[0], valid_media[0])
 
         results: list[dict[str, object]] = []
-        for request in requests:
+        for index, request in enumerate(requests):
+            if index in item_errors:
+                results.append(item_errors[index])
+                continue
             try:
                 results.append(self.create(request))
-            except ServiceError as error:  # noqa: PERF203
+            except ServiceError as error:
                 results.append(project_service_error(error))
         return results
 
@@ -626,6 +636,11 @@ class Jobs:
                     "invalid_embedded_subtitle",
                     "Embedded subtitle Jobs must not provide an Extraction path",
                 )
+            if request.source_format is None:
+                raise ServiceError(
+                    "invalid_embedded_subtitle",
+                    "Embedded subtitle source format is required",
+                )
             source_format = _source_format(request.source_format)
             subtitle = None
         else:
@@ -634,15 +649,24 @@ class Jobs:
                     "invalid_external_subtitle",
                     "External subtitle path is required",
                 )
+            if not isinstance(request.subtitle_path, str):
+                raise ServiceError(
+                    "invalid_external_subtitle",
+                    "External subtitle path must be a string",
+                )
             subtitle = self._media_path(
                 request.subtitle_path, "invalid_external_subtitle"
             )
+            if request.source_format is not None:
+                raise ServiceError(
+                    "invalid_external_subtitle",
+                    "External subtitles must not provide a source format",
+                )
         if subtitle is not None:
             source_format = self._validate_external_subtitle(media, subtitle)
         output = media.with_name(
             f"{media.stem}.{request.output_suffix or request.target_language_code}.{source_format}"
         )
-        _require_writable_directory(output.parent)
         return media, subtitle, output, source_format
 
     def _validate_shared_options(self, request: CreateJobRequest) -> None:
@@ -666,10 +690,10 @@ class Jobs:
             else request.output_suffix
         )
         _validate_output_suffix(output_suffix)
-        if request.output_conflict_policy not in {"append-number", "overwrite"}:
+        if request.output_conflict_policy not in OUTPUT_CONFLICT_POLICIES:
             raise ServiceError(
                 "invalid_output_conflict_policy",
-                "Output conflict policy must be append-number or overwrite",
+                "Output conflict policy must be append-number, overwrite, or skip",
             )
         if request.term_map_mode not in {"follow", "selected", "none"}:
             raise ServiceError(
@@ -762,7 +786,9 @@ class Jobs:
             )
         return external_format
 
-    def _media_path(self, value: str, error_code: str) -> Path:
+    def _media_path(self, value: object, error_code: str) -> Path:
+        if not isinstance(value, str) or not value:
+            raise ServiceError(error_code, "Media path must be a non-empty string")
         path = Path(value)
         if (
             "\\" in value
@@ -883,6 +909,7 @@ class Jobs:
                         request.get("subtitle_terminology_filter_enabled", True)
                     ),
                     overwrite=request.get("output_conflict_policy") == "overwrite",
+                    skip_if_exists=request.get("output_conflict_policy") == "skip",
                     embedded=embedded_details,
                 ),
                 on_progress=on_progress,
@@ -1013,7 +1040,10 @@ class Jobs:
 
     def _execution_output_path(self, request: dict[str, object]) -> Path:
         output = self._media_path(str(request["output_path"]), "invalid_output_path")
-        if request.get("output_conflict_policy", "append-number") == "overwrite":
+        if request.get("output_conflict_policy", "append-number") in {
+            "overwrite",
+            "skip",
+        }:
             return output
         candidate = output
         number = 2
@@ -1128,6 +1158,15 @@ class Jobs:
             return self._work.ensure_translation_directory(job_id)
         except ValueError as error:
             raise ServiceError("invalid_work_directory", str(error)) from error
+
+
+def _skipped_result(media: Path, output: Path, media_root: Path) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "media_path": str(media.relative_to(media_root)),
+        "output_path": str(output.relative_to(media_root)),
+        "reason": OUTPUT_EXISTS_REASON,
+    }
 
 
 def _source_format(value: str | None) -> str:

@@ -1364,7 +1364,9 @@ test.describe("subtitle submission", () => {
         await expect(page.getByLabel("Subtitle suffix")).toHaveValue("zh-Hans");
         await expect(page.getByLabel("Source format extension")).toHaveText(".srt");
         await expect(page.getByText("Example.zh-Hans.srt")).toBeVisible();
-        await expect(page.getByLabel("Append a number (recommended)")).toBeChecked();
+        await expect(
+          page.getByLabel("Skip existing output (recommended)"),
+        ).toBeChecked();
         await expect(page.getByLabel("Overwrite existing output")).not.toBeChecked();
         const outputFits = await outputGroup.evaluate(
           (element) => element.scrollWidth <= element.clientWidth,
@@ -1374,7 +1376,7 @@ test.describe("subtitle submission", () => {
           const suffixBox = await page.getByLabel("Subtitle suffix").boundingBox();
           expect(suffixBox?.height).toBeGreaterThanOrEqual(44);
           for (const label of [
-            "Append a number (recommended)",
+            "Skip existing output (recommended)",
             "Overwrite existing output",
           ]) {
             const box = await page
@@ -1391,7 +1393,7 @@ test.describe("subtitle submission", () => {
           ...source.request,
           target_language_code: "zh-Hans",
           output_suffix: "zh-Hans",
-          output_conflict_policy: "append-number",
+          output_conflict_policy: "skip",
           term_map_mode: "follow",
           term_map_id: null,
           dynamic_terminology_enabled: true,
@@ -1427,7 +1429,7 @@ test.describe("real translation workflow", () => {
       expect(await request.postDataJSON()).toMatchObject({
         target_language_code: targetLanguage,
         output_suffix: targetLanguage,
-        output_conflict_policy: "append-number",
+        output_conflict_policy: "skip",
         dynamic_terminology_enabled: false,
         subtitle_terminology_filter_enabled: false,
       });
@@ -1691,6 +1693,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     subtitle_path: "Example.en.srt",
     target_language_code: "e2e-number-one",
     output_suffix: "release-number",
+    output_conflict_policy: "append-number",
     term_map_mode: "follow",
     term_map_id: null,
   };

@@ -270,7 +270,8 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
             "output_conflict_policy" not in request
             or (
                 isinstance(request["output_conflict_policy"], str)
-                and request["output_conflict_policy"] in {"append-number", "overwrite"}
+                and request["output_conflict_policy"]
+                in {"append-number", "overwrite", "skip"}
             )
         )
         and all(

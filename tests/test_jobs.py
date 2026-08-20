@@ -4,6 +4,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -706,6 +707,7 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
             "target_language_code": target,
             "term_map_mode": "follow",
             "term_map_id": None,
+            "output_conflict_policy": "append-number",
         },
     )
 
@@ -719,6 +721,43 @@ def job_body(**overrides: object) -> dict[str, object]:
         "term_map_id": None,
         **overrides,
     }
+
+
+def post_batch(
+    client: TestClient,
+    items: list[dict[str, object]],
+    *,
+    target_language: str = "zh-Hans",
+):
+    return client.post(
+        "/api/jobs/batch",
+        json={
+            "items": items,
+            "target_language_code": target_language,
+            "term_map_mode": "none",
+        },
+    )
+
+
+def invalid_subtitle_source_items() -> list[dict[str, object]]:
+    return [
+        {
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "stream_index": "3",
+            "source_format": "srt",
+        },
+        {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+    ]
+
+
+@contextmanager
+def two_media_batch_client(tmp_path: Path, translator: FakeTranslator):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    (media_root / "Second.mkv").write_bytes(b"media")
+    (media_root / "Second.en.srt").write_bytes(SRT)
+    with make_client(media_root, work_root, translator) as client:
+        yield client
 
 
 def test_batch_preflight_and_item_errors_preserve_order(tmp_path: Path, monkeypatch):
@@ -848,21 +887,13 @@ def test_batch_preflight_rejects_shared_output_option_before_creating_jobs(
 
 
 def test_batch_creates_independent_jobs_available_from_jobs_endpoint(tmp_path: Path):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    (media_root / "Second.mkv").write_bytes(b"media")
-    (media_root / "Second.en.srt").write_bytes(SRT)
-
-    with make_client(media_root, work_root, FakeTranslator()) as client:
-        response = client.post(
-            "/api/jobs/batch",
-            json={
-                "items": [
-                    {"media_path": "Movie.mkv", "subtitle_path": "Movie.en.srt"},
-                    {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
-                ],
-                "target_language_code": "zh-Hans",
-                "term_map_mode": "none",
-            },
+    with two_media_batch_client(tmp_path, FakeTranslator()) as client:
+        response = post_batch(
+            client,
+            [
+                {"media_path": "Movie.mkv", "subtitle_path": "Movie.en.srt"},
+                {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+            ],
         )
 
         assert response.status_code == 200
@@ -3235,6 +3266,145 @@ def test_job_appends_a_number_to_an_existing_suggested_output(tmp_path: Path):
     assert (media_root / "Movie.zh.2.srt").read_bytes() == SRT
 
 
+def test_job_skips_existing_output_without_provider_or_persisting_a_job(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    output = media_root / "Movie.zh.srt"
+    output.write_bytes(b"keep")
+    client = make_client(media_root, work_root, FakeTranslator(available=False))
+
+    response = client.post(
+        "/api/jobs",
+        json=job_body(
+            target_language_code="zh",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "skipped",
+        "media_path": "Movie.mkv",
+        "output_path": "Movie.zh.srt",
+        "reason": "Output path already exists",
+    }
+    assert output.read_bytes() == b"keep"
+    assert list((work_root / "jobs").glob("*.json")) == []
+
+
+def test_batch_skips_existing_outputs_and_only_queues_remaining_items(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    (media_root / "Movie.zh.srt").write_bytes(b"keep")
+    (media_root / "Second.mkv").write_bytes(b"media")
+    (media_root / "Second.en.srt").write_bytes(SRT)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    results = jobs.create_batch(
+        [
+            CreateJobRequest(
+                "Movie.mkv",
+                "Movie.en.srt",
+                "zh",
+                "none",
+                output_conflict_policy="skip",
+            ),
+            CreateJobRequest(
+                "Second.mkv",
+                "Second.en.srt",
+                "zh",
+                "none",
+                output_conflict_policy="skip",
+            ),
+        ]
+    )
+
+    assert results[0] == {
+        "status": "skipped",
+        "media_path": "Movie.mkv",
+        "output_path": "Movie.zh.srt",
+        "reason": "Output path already exists",
+    }
+    assert isinstance(results[1].get("id"), str)
+    assert len(jobs.list_page()["active_jobs"]) == 1
+    jobs.close()
+
+
+def test_all_skipped_batch_succeeds_without_a_provider_or_jobs(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    (media_root / "Movie.zh.srt").write_bytes(b"keep")
+    (media_root / "Second.mkv").write_bytes(b"media")
+    (media_root / "Second.en.srt").write_bytes(SRT)
+    (media_root / "Second.zh.srt").write_bytes(b"keep")
+
+    with make_client(media_root, work_root, FakeTranslator(available=False)) as client:
+        response = client.post(
+            "/api/jobs/batch",
+            json={
+                "items": [
+                    {"media_path": "Movie.mkv", "subtitle_path": "Movie.en.srt"},
+                    {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+                ],
+                "target_language_code": "zh",
+                "term_map_mode": "none",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["results"] == [
+        {
+            "status": "skipped",
+            "media_path": "Movie.mkv",
+            "output_path": "Movie.zh.srt",
+            "reason": "Output path already exists",
+        },
+        {
+            "status": "skipped",
+            "media_path": "Second.mkv",
+            "output_path": "Second.zh.srt",
+            "reason": "Output path already exists",
+        },
+    ]
+    assert list((work_root / "jobs").glob("*.json")) == []
+
+
+def test_batch_isolates_invalid_subtitle_source_items(tmp_path: Path):
+    with two_media_batch_client(tmp_path, FakeTranslator()) as client:
+        response = post_batch(
+            client,
+            invalid_subtitle_source_items(),
+            target_language="zh",
+        )
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert results[0] == {
+        "error_code": "invalid_embedded_subtitle",
+        "message": "Embedded subtitle stream index must be a non-negative integer",
+    }
+    assert isinstance(results[1].get("id"), str)
+
+
+@pytest.mark.parametrize("media_path", [None, 123, []])
+def test_batch_isolates_invalid_media_path_types(tmp_path: Path, media_path: object):
+    with two_media_batch_client(tmp_path, FakeTranslator()) as client:
+        response = post_batch(
+            client,
+            [
+                {"media_path": media_path, "subtitle_path": "Movie.en.srt"},
+                {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+            ],
+            target_language="invalid-media-type",
+        )
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert results[0] == {
+        "error_code": "invalid_media_path",
+        "message": "Media path must be a non-empty string",
+    }
+    assert isinstance(results[1].get("id"), str)
+
+
 def test_retry_recomputes_append_number_from_original_output_name(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     original_output = media_root / "Movie.zh.srt"
@@ -3242,7 +3412,15 @@ def test_retry_recomputes_append_number_from_original_output_name(tmp_path: Path
     translator = FakeTranslator(error=RuntimeError("boom"))
     jobs = Jobs(translator, media_root, work_root)
 
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
+    queued = jobs.create(
+        CreateJobRequest(
+            "Movie.mkv",
+            "Movie.en.srt",
+            "zh",
+            "none",
+            output_conflict_policy="append-number",
+        )
+    )
     failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     assert failed["request"]["output_path"] == "Movie.zh.2.srt"
     original_output.unlink()

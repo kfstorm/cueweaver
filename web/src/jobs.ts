@@ -48,10 +48,21 @@ export interface Job {
     dynamic_terminology_enabled?: boolean;
     subtitle_terminology_filter_enabled?: boolean;
     output_suffix?: string;
-    output_conflict_policy?: "append-number" | "overwrite";
+    output_conflict_policy?: OutputConflictPolicy;
   };
   error: { code: string; message: string; [key: string]: unknown } | null;
 }
+
+export type OutputConflictPolicy = "append-number" | "overwrite" | "skip";
+
+export interface SkippedJobResult {
+  status: "skipped";
+  media_path: string;
+  output_path: string;
+  reason: string;
+}
+
+export type JobCreationResult = Job | SkippedJobResult;
 
 export interface JobStatusHistoryEntry {
   status: Job["status"];
@@ -77,7 +88,8 @@ export interface BatchJobError {
 }
 
 export type BatchJobSuccess = Pick<Job, "id">;
-export type BatchJobResult = BatchJobSuccess | BatchJobError;
+export type BatchJobSkipped = SkippedJobResult;
+export type BatchJobResult = BatchJobSuccess | BatchJobSkipped | BatchJobError;
 
 function isBatchJobResult(value: unknown): value is BatchJobResult {
   if (typeof value !== "object" || value === null) return false;
@@ -85,7 +97,19 @@ function isBatchJobResult(value: unknown): value is BatchJobResult {
   if (typeof result.error_code === "string") {
     return typeof result.message === "string";
   }
+  if (isSkippedJobResult(result)) return true;
   return typeof result.id === "string";
+}
+
+export function isSkippedJobResult(value: unknown): value is SkippedJobResult {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Record<string, unknown>;
+  return (
+    result.status === "skipped" &&
+    typeof result.media_path === "string" &&
+    typeof result.output_path === "string" &&
+    typeof result.reason === "string"
+  );
 }
 
 export const APPROVED_ERROR_CONTEXT_KEYS = [
@@ -328,10 +352,10 @@ export function useCreateJob() {
       dynamic_terminology_enabled: boolean;
       subtitle_terminology_filter_enabled: boolean;
       output_suffix: string;
-      output_conflict_policy: "append-number" | "overwrite";
+      output_conflict_policy: OutputConflictPolicy;
       stream_index?: number;
       source_format?: string;
-    }): Promise<Job> => {
+    }): Promise<JobCreationResult> => {
       const response = await fetch("/api/jobs", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -362,7 +386,7 @@ export function useCreateBatchJobs() {
       dynamic_terminology_enabled: boolean;
       subtitle_terminology_filter_enabled: boolean;
       output_suffix: string;
-      output_conflict_policy: "append-number" | "overwrite";
+      output_conflict_policy: OutputConflictPolicy;
     }): Promise<BatchJobResult[]> => {
       const response = await fetch("/api/jobs/batch", {
         method: "POST",
