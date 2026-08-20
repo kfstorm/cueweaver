@@ -2378,10 +2378,97 @@ describe("product shell", () => {
         }),
       ),
     );
-    expect(screen.getByRole("status")).toHaveTextContent("1 Jobs queued.");
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Some items could not be queued.",
+    expect(screen.getByRole("status")).toHaveTextContent("1 Job queued · 1 error.");
+    expect(screen.getAllByText("Movie.mkv").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Second.mkv").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Term map does not exist")).toBeInTheDocument();
+  });
+
+  it("associates mixed batch results with ordered Media and keeps later Jobs visible", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
     );
+    mockBatchRequest({
+      results: [
+        {
+          error_code: "term_map_not_found",
+          message: "Term map does not exist",
+          field: "term_map_id",
+          secret: "must not be shown",
+        },
+        { id: "job-2" },
+      ],
+    });
+
+    await selectBatchMedia();
+    await submitBatch();
+
+    expect(
+      await screen.findByRole("heading", { name: "Batch results" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("1 Job queued · 1 error.");
+    const results = screen.getByLabelText("Batch submission results");
+    expect(
+      within(results)
+        .getAllByRole("group", { name: /batch result/ })
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual(["Movie.mkv batch result", "Second.mkv batch result"]);
+    expect(within(results).getAllByText("Movie.mkv").length).toBeGreaterThanOrEqual(1);
+    expect(within(results).getByText("Second.mkv")).toBeInTheDocument();
+    expect(within(results).getByText("Term map does not exist")).toBeInTheDocument();
+    fireEvent.click(within(results).getByText("Show error details"));
+    expect(within(results).getByText("term_map_not_found")).toBeInTheDocument();
+    expect(within(results).getByText("term_map_id")).toBeInTheDocument();
+    expect(within(results).queryByText("must not be shown")).not.toBeInTheDocument();
+    expect(
+      within(results).getByRole("button", { name: "View Job" }),
+    ).toBeInTheDocument();
+    expect(within(results).getByText("job-2", { exact: false })).toBeInTheDocument();
+  });
+
+  it("keeps the submitted Media snapshot while a batch response is pending", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    let resolveBatch: (response: ReturnType<typeof jsonResponse>) => void = () => {};
+    const batchResponse = new Promise<ReturnType<typeof jsonResponse>>((resolve) => {
+      resolveBatch = resolve;
+    });
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const defaultImplementation = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) =>
+      String(input) === "/api/jobs/batch" && init?.method === "POST"
+        ? batchResponse
+        : defaultImplementation(input, init),
+    );
+
+    await selectBatchMedia();
+    await submitBatch();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+    resolveBatch(jsonResponse({ results: [{ id: "job-1" }, { id: "job-2" }] }));
+
+    const results = await screen.findByLabelText("Batch submission results");
+    expect(
+      within(results)
+        .getAllByRole("group", { name: /batch result/ })
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual(["Movie.mkv batch result", "Second.mkv batch result"]);
   });
 
   it("configures shared output settings in batch mode", async () => {
@@ -2393,7 +2480,7 @@ describe("product shell", () => {
       false,
       UNIQUE_BATCH_DISCOVERIES,
     );
-    const fetchMock = mockBatchRequest({ results: [] });
+    const fetchMock = mockBatchRequest({ results: [{ id: "job-1" }, { id: "job-2" }] });
 
     await selectBatchMedia();
     const suffix = await screen.findByLabelText("Subtitle suffix");

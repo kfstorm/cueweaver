@@ -570,7 +570,7 @@ function JobError({ error }: { error: NonNullable<Job["error"]> }) {
   );
 }
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
+export function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <dt>{label}</dt>
