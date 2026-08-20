@@ -156,7 +156,7 @@ function statusResponse(
       : {
           ready: false,
           message:
-            "Configure a provider in PySubtrans service settings, then restart CueWeaver.",
+            "Set PROVIDER and the matching provider environment variables, then restart CueWeaver.",
         },
     worker: { ready: true, mode: "single" },
     ...(jobRecords ? { job_records: jobRecords } : {}),
@@ -600,7 +600,7 @@ describe("product shell", () => {
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Configure a provider in PySubtrans service settings",
+        "Set PROVIDER and the matching provider environment variables",
       ),
     );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
