@@ -21,8 +21,47 @@ const CHARACTERS_TERM_MAP: TermMapSummary = {
   updated_at: "2026-08-13T12:00:00Z",
 };
 
+const BATCH_MEDIA: MediaDirectory = {
+  path: "",
+  entries: [
+    { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
+    { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+  ],
+};
+
+const UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  {
+    path: "Movie.mkv",
+    candidates: [{ kind: "external", path: "Movie.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+  {
+    path: "Second.mkv",
+    candidates: [{ kind: "external", path: "Second.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+];
+
+const AMBIGUOUS_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  UNIQUE_BATCH_DISCOVERIES[0],
+  {
+    path: "Second.mkv",
+    candidates: [
+      { kind: "external", path: "Second.en.srt", format: "srt" },
+      { kind: "embedded", stream_index: 3, format: "ass" },
+    ],
+    unsupported_candidates: [],
+  },
+];
+
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
+}
+
+async function selectBatchMedia() {
+  fireEvent.click(await screen.findByLabelText("Batch mode"));
+  fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
 }
 
 type JobFixture = { status: string; [key: string]: unknown };
@@ -1939,35 +1978,13 @@ describe("product shell", () => {
     renderRoute(
       "/translate",
       true,
-      {
-        path: "",
-        entries: [
-          { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
-          { kind: "media", name: "Second.mkv", path: "Second.mkv" },
-        ],
-      },
+      BATCH_MEDIA,
       undefined,
       false,
-      [
-        {
-          path: "Movie.mkv",
-          candidates: [{ kind: "external", path: "Movie.en.srt", format: "srt" }],
-          unsupported_candidates: [],
-        },
-        {
-          path: "Second.mkv",
-          candidates: [
-            { kind: "external", path: "Second.en.srt", format: "srt" },
-            { kind: "embedded", stream_index: 3, format: "ass" },
-          ],
-          unsupported_candidates: [],
-        },
-      ],
+      AMBIGUOUS_BATCH_DISCOVERIES,
     );
 
-    fireEvent.click(await screen.findByLabelText("Batch mode"));
-    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
+    await selectBatchMedia();
 
     expect(
       await screen.findByText(
@@ -1982,6 +1999,54 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: /Select external subtitle.*Second/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("submits selected unique Media as one ordered batch request", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const defaultImplementation = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) =>
+      String(input) === "/api/jobs/batch" && init?.method === "POST"
+        ? Promise.resolve(jsonResponse({ results: [] }))
+        : defaultImplementation(input, init),
+    );
+
+    await selectBatchMedia();
+    fireEvent.change(await screen.findByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Queue selected translations" }),
+    );
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            items: [
+              { media_path: "Movie.mkv", subtitle_path: "Movie.en.srt" },
+              { media_path: "Second.mkv", subtitle_path: "Second.en.srt" },
+            ],
+            target_language_code: "zh-Hans",
+            output_suffix: "zh-Hans",
+            output_conflict_policy: "append-number",
+            term_map_mode: "follow",
+            term_map_id: null,
+            dynamic_terminology_enabled: true,
+            subtitle_terminology_filter_enabled: true,
+          }),
+        }),
+      ),
+    );
   });
 
   it("queues an External subtitle with the target language", async () => {
