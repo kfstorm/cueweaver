@@ -233,6 +233,8 @@ async function stubMutableJobs(
 type E2EJobSummary = {
   id: string;
   attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
   request: {
     target_language_code: string;
     stream_index?: number;
@@ -531,6 +533,69 @@ test.describe("batch Translate workflow", () => {
       ).toEqual([]);
     });
   }
+});
+
+test("batch Translate creates independent Jobs in request order through the real queue", async ({
+  page,
+}) => {
+  const targetLanguage = "e2e-batch";
+
+  await page.goto("/translate");
+  await page.getByLabel("Batch mode").check();
+  await page.getByRole("button", { name: "Select Example movie" }).click();
+  await page.getByRole("button", { name: "Select Second.mkv" }).click();
+  const discoveries = page.locator(".subtitle-discovery");
+  await expect(discoveries).toHaveCount(2);
+  await discoveries.nth(0).getByRole("button", { name: "Resolve candidates" }).click();
+  await discoveries.nth(1).getByRole("button", { name: "Resolve candidates" }).click();
+  await discoveries
+    .nth(0)
+    .getByRole("button", { name: /Select external subtitle/ })
+    .click();
+  await discoveries
+    .nth(1)
+    .getByRole("button", { name: /Select external subtitle/ })
+    .click();
+  await page.getByLabel("Target language code").fill(targetLanguage);
+
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/jobs/batch") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Queue selected translations" }).click();
+
+  const response = await responsePromise;
+  expect(response.ok()).toBeTruthy();
+  const results = (await response.json()).results as Array<{
+    id: string;
+    request: { media_path: string };
+  }>;
+  expect(results.map((result) => result.request.media_path)).toEqual([
+    "Example.mkv",
+    "Second.mkv",
+  ]);
+  expect(results.map((result) => result.id)).toHaveLength(2);
+  expect(new Set(results.map((result) => result.id)).size).toBe(2);
+
+  const jobs = await Promise.all(
+    results.map(async (result) => {
+      await expect
+        .poll(async () => (await readJobDetail(page, result.id)).status, {
+          timeout: 15_000,
+        })
+        .toBe("Completed");
+      return readJobDetail(page, result.id);
+    }),
+  );
+  expect(jobs.map((job) => job.request.media_path)).toEqual([
+    "Example.mkv",
+    "Second.mkv",
+  ]);
+  expect(jobs.every((job) => job.error === null)).toBe(true);
+  expect(new Date(jobs[0].started_at!).getTime()).toBeLessThan(
+    new Date(jobs[1].started_at!).getTime(),
+  );
 });
 
 test("Translate manages the current Directory Term map binding", async ({ page }) => {

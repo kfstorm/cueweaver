@@ -30,6 +30,8 @@ docker run --rm --user "$RUN_USER" --volume "$ROOTS/media:/media" "$IMAGE" \
   -f srt -i /media/Example.en.srt \
   -map 0:v:0 -map 1:0 -c:v mpeg4 -t 1 -c:s srt \
   -metadata:s:s:0 language=en /media/Example.mkv
+cp "$ROOTS/media/Example.mkv" "$ROOTS/media/Second.mkv"
+cp "$ROOTS/media/Example.en.srt" "$ROOTS/media/Second.en.srt"
 docker run --detach --name "$CONTAINER" \
   --user "$RUN_USER" \
   --publish 127.0.0.1:8765:8000 \
