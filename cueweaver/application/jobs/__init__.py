@@ -19,7 +19,7 @@ from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ...work import WorkRoot
 from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
-from ..errors import ServiceError
+from ..errors import ServiceError, project_service_error
 from ..extraction import Extraction
 from ..media import require_readable_media
 from ..term_maps import TermMapDetail
@@ -191,6 +191,50 @@ class Jobs:
                 self._records[job_id] = record
             self._pending.put(job_id)
             return self._record_with_queue_position(record)
+
+    def create_batch(self, requests: list[CreateJobRequest]) -> list[dict[str, object]]:
+        """Queue requests in order while isolating service-level item errors."""
+        if not requests:
+            raise ServiceError(
+                "invalid_request", "Batch must contain at least one item"
+            )
+        if self._closed.is_set():
+            raise ServiceError("worker_unavailable", "Job worker is shutting down")
+        if not self._translator.available:
+            raise ServiceError(
+                "provider_unavailable",
+                "Translation provider is unavailable; configure a provider and restart CueWeaver",
+            )
+        if any(
+            request.term_map_mode != requests[0].term_map_mode for request in requests
+        ):
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "All batch items must use one Term map mode",
+                field="term_map_mode",
+            )
+        parent_directories: set[str] = set()
+        for request in requests:
+            self._validate_shared_options(request)
+            media = self._media_path(request.media_path, "invalid_media_path")
+            parent = media.parent.relative_to(self._media_root)
+            parent_directories.add("" if str(parent) == "." else parent.as_posix())
+        if len(parent_directories) > 1:
+            raise ServiceError(
+                "invalid_media_path",
+                "All batch items must share one parent directory",
+                field="items",
+            )
+        shared_media = self._media_path(requests[0].media_path, "invalid_media_path")
+        self._resolve_term_map(requests[0], shared_media)
+
+        results: list[dict[str, object]] = []
+        for request in requests:
+            try:
+                results.append(self.create(request))
+            except ServiceError as error:  # noqa: PERF203
+                results.append(project_service_error(error))
+        return results
 
     def retry(self, job_id: str) -> dict[str, object]:
         """Requeue a failed External subtitle Job without changing its identity."""
@@ -564,20 +608,7 @@ class Jobs:
     def _validate(
         self, request: CreateJobRequest
     ) -> tuple[Path, Path | None, Path, str]:
-        if (
-            not request.target_language_code.strip()
-            or "\\" in request.target_language_code
-            or any(
-                ord(character) < CONTROL_CHARACTER_LIMIT
-                or ord(character) == DELETE_CHARACTER
-                for character in request.target_language_code
-            )
-            or Path(request.target_language_code).name != request.target_language_code
-        ):
-            raise ServiceError(
-                "invalid_target_language",
-                "Target language must be non-empty and filename-safe",
-            )
+        self._validate_shared_options(request)
         media = self._media_path(request.media_path, "invalid_media_path")
         require_readable_media(media)
         if request.stream_index is not None:
@@ -608,6 +639,27 @@ class Jobs:
             )
         if subtitle is not None:
             source_format = self._validate_external_subtitle(media, subtitle)
+        output = media.with_name(
+            f"{media.stem}.{request.output_suffix or request.target_language_code}.{source_format}"
+        )
+        _require_writable_directory(output.parent)
+        return media, subtitle, output, source_format
+
+    def _validate_shared_options(self, request: CreateJobRequest) -> None:
+        if (
+            not request.target_language_code.strip()
+            or "\\" in request.target_language_code
+            or any(
+                ord(character) < CONTROL_CHARACTER_LIMIT
+                or ord(character) == DELETE_CHARACTER
+                for character in request.target_language_code
+            )
+            or Path(request.target_language_code).name != request.target_language_code
+        ):
+            raise ServiceError(
+                "invalid_target_language",
+                "Target language must be non-empty and filename-safe",
+            )
         output_suffix = (
             request.target_language_code
             if request.output_suffix is None
@@ -619,9 +671,27 @@ class Jobs:
                 "invalid_output_conflict_policy",
                 "Output conflict policy must be append-number or overwrite",
             )
-        output = media.with_name(f"{media.stem}.{output_suffix}.{source_format}")
-        _require_writable_directory(output.parent)
-        return media, subtitle, output, source_format
+        if request.term_map_mode not in {"follow", "selected", "none"}:
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Term map mode must be follow, selected, or none",
+                field="term_map_mode",
+            )
+        if (
+            request.term_map_mode in {"follow", "none"}
+            and request.term_map_id is not None
+        ):
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Term map ID must be null for follow or none mode",
+                field="term_map_id",
+            )
+        if request.term_map_mode == "selected" and not request.term_map_id:
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Selected mode requires a Term map ID",
+                field="term_map_id",
+            )
 
     def _validate_retry_sources(self, request: dict[str, object]) -> None:
         media_value = request.get("media_path")

@@ -34,13 +34,22 @@ import { Input, Select, Textarea } from "./components/ui/input";
 import {
   useMediaDirectory,
   useMediaDiscovery,
+  useMediaDiscoveries,
   type MediaDirectoryEntry,
   type SubtitleCandidate,
   type UnsupportedSubtitleCandidate,
 } from "./browse";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
 import { jobRecordAttention, useProductStatus } from "./status";
-import { useCreateJob, useJobs, useJobNotifications, type TermMapMode } from "./jobs";
+import {
+  useCreateBatchJobs,
+  useCreateJob,
+  useJobs,
+  useJobNotifications,
+  type BatchJobError,
+  type BatchJobResult,
+  type TermMapMode,
+} from "./jobs";
 import { JobNotificationRegion, JobsPage } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
@@ -138,14 +147,64 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
   );
 }
 
+const isBatchError = (result: BatchJobResult): result is BatchJobError =>
+  "error_code" in result;
+
+function OutputConflictPolicy({
+  value,
+  onChange,
+}: {
+  value: "append-number" | "overwrite";
+  onChange: (value: "append-number" | "overwrite") => void;
+}) {
+  return (
+    <fieldset className="output-conflict-policy">
+      <legend>If the final name already exists</legend>
+      <label>
+        <input
+          type="radio"
+          name="output-conflict-policy"
+          value="append-number"
+          checked={value === "append-number"}
+          onChange={() => onChange("append-number")}
+        />
+        Append a number (recommended)
+      </label>
+      <label>
+        <input
+          type="radio"
+          name="output-conflict-policy"
+          value="overwrite"
+          checked={value === "overwrite"}
+          onChange={() => onChange("overwrite")}
+        />
+        Overwrite existing output
+      </label>
+    </fieldset>
+  );
+}
+
+function OutputSuffixError({ error }: { error: string | null }) {
+  return error ? (
+    <p className="form-error" role="alert">
+      {error}
+    </p>
+  ) : null;
+}
+
 function Translate() {
   const queryClient = useQueryClient();
   const createJob = useCreateJob();
+  const createBatchJobs = useCreateBatchJobs();
   const navigate = useNavigate();
   const status = useProductStatus();
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedBatchMedia, setSelectedBatchMedia] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
@@ -186,6 +245,8 @@ function Translate() {
     termMapMode === "selected" && selectedTermMapId === null ? "none" : termMapMode;
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
+  const batchPaths = [...selectedBatchMedia];
+  const batchDiscoveries = useMediaDiscoveries(batchPaths);
   const clearDiscovery = (previousMedia: string | null) => {
     if (previousMedia !== null) {
       void queryClient.cancelQueries({ queryKey: ["media-discovery", previousMedia] });
@@ -200,6 +261,19 @@ function Translate() {
   const selectedCandidate = discovery.data?.candidates.find(
     (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
   );
+  const batchItems = batchPaths.flatMap((path, index) => {
+    const result = batchDiscoveries[index]?.data;
+    const selected = result?.candidates.length === 1 ? result.candidates[0] : undefined;
+    if (!selected) return [];
+    return [
+      {
+        media_path: path,
+        ...(selected.kind === "external"
+          ? { subtitle_path: selected.path }
+          : { stream_index: selected.stream_index, source_format: selected.format }),
+      },
+    ];
+  });
   const outputFormat = selectedCandidate?.format ?? "srt";
   const outputParts = selectedMedia
     ? outputNameParts(selectedMedia, outputFormat)
@@ -210,8 +284,12 @@ function Translate() {
     if (!suffixEdited.current) setOutputSuffix(value);
   };
   const canSubmit =
-    selectedMedia !== null &&
-    ((selectedCandidate?.kind === "external" && selectedCandidate.path !== undefined) ||
+    (batchMode
+      ? batchPaths.length > 0 && batchItems.length === batchPaths.length
+      : selectedMedia !== null) &&
+    (batchMode ||
+      (selectedCandidate?.kind === "external" &&
+        selectedCandidate.path !== undefined) ||
       (selectedCandidate?.kind === "embedded" &&
         selectedCandidate.stream_index !== undefined &&
         selectedCandidate.format !== undefined)) &&
@@ -219,10 +297,14 @@ function Translate() {
     outputSuffixError === null &&
     status.data?.translation_provider.ready === true &&
     !createJob.isSuccess &&
-    !createJob.isPending;
+    !createBatchJobs.isSuccess &&
+    !createJob.isPending &&
+    !createBatchJobs.isPending;
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
+    setSelectedBatchMedia(new Set());
+    setBatchMode(false);
     setTermMapMode("follow");
     setTermMapId(null);
     setDynamicTerminologyEnabled(true);
@@ -231,6 +313,7 @@ function Translate() {
     setOutputConflictPolicy("append-number");
     suffixEdited.current = false;
     createJob.reset();
+    createBatchJobs.reset();
   };
 
   return (
@@ -243,6 +326,25 @@ function Translate() {
         <div className="step-index">01</div>
         <div className="step-content">
           <h2 id="source-title">Choose media</h2>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={batchMode}
+              onChange={(event) => {
+                const nextBatchMode = event.target.checked;
+                setBatchMode(nextBatchMode);
+                setSelectedMedia(null);
+                setSelectedSubtitle(null);
+                setSelectedBatchMedia(new Set());
+                if (nextBatchMode) {
+                  setOutputSuffix(targetLanguage);
+                  setOutputConflictPolicy("append-number");
+                  suffixEdited.current = false;
+                }
+              }}
+            />
+            Batch mode
+          </label>
           <MediaBrowser
             directory={directory}
             filter={filter}
@@ -253,16 +355,50 @@ function Translate() {
               setDirectoryTermMapSelection(null);
               setFilter("");
               clearMedia(selectedMedia);
+              setSelectedBatchMedia(new Set());
             }}
             onFilterChange={setFilter}
             selectedMedia={selectedMedia}
+            selectedMediaPaths={selectedBatchMedia}
+            batchMode={batchMode}
             onMediaSelect={(path) => {
-              clearDiscovery(selectedMedia);
-              setSelectedMedia(path);
-              setSelectedSubtitle(null);
+              if (batchMode) {
+                setSelectedBatchMedia((current) => {
+                  const next = new Set(current);
+                  if (next.has(path)) next.delete(path);
+                  else next.add(path);
+                  return next;
+                });
+              } else {
+                clearDiscovery(selectedMedia);
+                setSelectedMedia(path);
+                setSelectedSubtitle(null);
+              }
             }}
             query={browser}
           />
+          {batchMode &&
+            batchPaths.map((path, index) => (
+              <SubtitleDiscovery
+                key={path}
+                mediaPath={path}
+                selected={
+                  batchDiscoveries[index]?.data?.candidates.length === 1
+                    ? candidateKey(batchDiscoveries[index].data.candidates[0], 0)
+                    : null
+                }
+                batchOnly
+                onSelect={() => undefined}
+                query={batchDiscoveries[index]}
+                onClear={() => {
+                  setSelectedBatchMedia((current) => {
+                    const next = new Set(current);
+                    next.delete(path);
+                    return next;
+                  });
+                }}
+              />
+            ))}
           {selectedMedia && (
             <SubtitleDiscovery
               mediaPath={selectedMedia}
@@ -300,7 +436,10 @@ function Translate() {
         </div>
       </section>
       <section
-        className={cn("workflow-panel", selectedCandidate === undefined && "muted")}
+        className={cn(
+          "workflow-panel",
+          !batchMode && selectedCandidate === undefined && "muted",
+        )}
         aria-labelledby="configure-title"
       >
         <div className="step-index">02</div>
@@ -320,7 +459,9 @@ function Translate() {
                   updateTargetLanguage(value);
                 }
               }}
-              disabled={selectedCandidate === undefined}
+              disabled={
+                batchMode ? batchItems.length === 0 : selectedCandidate === undefined
+              }
             >
               <option value="" disabled>
                 Choose a language
@@ -343,7 +484,9 @@ function Translate() {
                 value={targetLanguage}
                 onChange={(event) => updateTargetLanguage(event.target.value)}
                 placeholder="zh-Hans"
-                disabled={selectedCandidate === undefined}
+                disabled={
+                  batchMode ? batchItems.length === 0 : selectedCandidate === undefined
+                }
               />
             </label>
           )}
@@ -425,75 +568,89 @@ function Translate() {
               </label>
             </div>
           </details>
-          {selectedMedia && selectedCandidate && outputParts && (
-            <div className="output-name-section">
-              <span id="output-name-label" className="field-label">
-                Output filename
-              </span>
-              <div
-                className="output-name-control"
-                role="group"
-                aria-labelledby="output-name-label"
-              >
-                <output
-                  aria-label="Media stem"
-                  className="form-control output-name-stem"
-                >
-                  {`${outputParts.stem}.`}
-                </output>
-                <Input
-                  aria-label="Subtitle suffix"
-                  aria-describedby="output-suffix-help"
-                  className="output-name-suffix"
-                  value={outputSuffix}
-                  onChange={(event) => {
-                    suffixEdited.current = true;
-                    setOutputSuffix(event.target.value);
-                  }}
-                />
-                <output
-                  aria-label="Source format extension"
-                  className="form-control output-name-extension"
-                >
-                  {`.${outputParts.format}`}
-                </output>
-              </div>
-              <p id="output-suffix-help" className="field-help" aria-live="polite">
-                Final name: <strong>{outputParts.name(outputSuffix)}</strong>
-              </p>
-              {outputSuffixError && (
-                <p className="form-error" role="alert">
-                  {outputSuffixError}
-                </p>
+          {batchMode
+            ? batchPaths.length > 0 && (
+                <div className="output-name-section">
+                  <span className="field-label">Shared output settings</span>
+                  <label htmlFor="batch-output-suffix" className="field-label">
+                    Subtitle suffix
+                  </label>
+                  <Input
+                    id="batch-output-suffix"
+                    aria-describedby="batch-output-suffix-help"
+                    value={outputSuffix}
+                    onChange={(event) => {
+                      suffixEdited.current = true;
+                      setOutputSuffix(event.target.value);
+                    }}
+                  />
+                  <p
+                    id="batch-output-suffix-help"
+                    className="field-help"
+                    aria-live="polite"
+                  >
+                    Applied to every queued translation.
+                  </p>
+                  <OutputSuffixError error={outputSuffixError} />
+                  <OutputConflictPolicy
+                    value={outputConflictPolicy}
+                    onChange={setOutputConflictPolicy}
+                  />
+                </div>
+              )
+            : selectedMedia &&
+              selectedCandidate &&
+              outputParts && (
+                <div className="output-name-section">
+                  <span id="output-name-label" className="field-label">
+                    Output filename
+                  </span>
+                  <div
+                    className="output-name-control"
+                    role="group"
+                    aria-labelledby="output-name-label"
+                  >
+                    <output
+                      aria-label="Media stem"
+                      className="form-control output-name-stem"
+                    >
+                      {`${outputParts.stem}.`}
+                    </output>
+                    <Input
+                      aria-label="Subtitle suffix"
+                      aria-describedby="output-suffix-help"
+                      className="output-name-suffix"
+                      value={outputSuffix}
+                      onChange={(event) => {
+                        suffixEdited.current = true;
+                        setOutputSuffix(event.target.value);
+                      }}
+                    />
+                    <output
+                      aria-label="Source format extension"
+                      className="form-control output-name-extension"
+                    >
+                      {`.${outputParts.format}`}
+                    </output>
+                  </div>
+                  <p id="output-suffix-help" className="field-help" aria-live="polite">
+                    Final name: <strong>{outputParts.name(outputSuffix)}</strong>
+                  </p>
+                  <OutputSuffixError error={outputSuffixError} />
+                  <OutputConflictPolicy
+                    value={outputConflictPolicy}
+                    onChange={setOutputConflictPolicy}
+                  />
+                </div>
               )}
-              <fieldset className="output-conflict-policy">
-                <legend>If the final name already exists</legend>
-                <label>
-                  <input
-                    type="radio"
-                    name="output-conflict-policy"
-                    value="append-number"
-                    checked={outputConflictPolicy === "append-number"}
-                    onChange={() => setOutputConflictPolicy("append-number")}
-                  />
-                  Append a number (recommended)
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="output-conflict-policy"
-                    value="overwrite"
-                    checked={outputConflictPolicy === "overwrite"}
-                    onChange={() => setOutputConflictPolicy("overwrite")}
-                  />
-                  Overwrite existing output
-                </label>
-              </fieldset>
-            </div>
-          )}
         </div>
       </section>
-      <div className={cn("submission-bar", createJob.isSuccess && "queued")}>
+      <div
+        className={cn(
+          "submission-bar",
+          (createJob.isSuccess || createBatchJobs.isSuccess) && "queued",
+        )}
+      >
         {createJob.isSuccess ? (
           <QueueSuccess
             job={createJob.data}
@@ -503,13 +660,47 @@ function Translate() {
             }}
             onTranslateAnother={resetTranslationWorkflow}
           />
+        ) : createBatchJobs.isSuccess ? (
+          <div role="status">
+            <strong>
+              {createBatchJobs.data.filter((result) => !isBatchError(result)).length}{" "}
+              Jobs queued.
+            </strong>
+            {createBatchJobs.data.some(isBatchError) && (
+              <p>Some items could not be queued.</p>
+            )}
+            <Button type="button" variant="outline" onClick={resetTranslationWorkflow}>
+              Translate another
+            </Button>
+          </div>
         ) : (
           <>
             <ProviderState />
             <Button
               disabled={!canSubmit}
               onClick={() => {
-                if (
+                if (batchMode) {
+                  createBatchJobs.mutate(
+                    {
+                      items: batchItems,
+                      target_language_code: targetLanguage,
+                      output_suffix: outputSuffix,
+                      output_conflict_policy: outputConflictPolicy,
+                      term_map_mode: submissionTermMapMode,
+                      term_map_id: selectedTermMapId,
+                      dynamic_terminology_enabled: dynamicTerminologyEnabled,
+                      subtitle_terminology_filter_enabled:
+                        subtitleTerminologyFilterEnabled,
+                    },
+                    {
+                      onSuccess: () =>
+                        window.localStorage.setItem(
+                          "cueweaver.target-language",
+                          targetLanguage,
+                        ),
+                    },
+                  );
+                } else if (
                   selectedMedia &&
                   selectedCandidate &&
                   ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
@@ -545,7 +736,11 @@ function Translate() {
                 }
               }}
             >
-              {createJob.isPending ? "Queueing..." : "Start translation"}
+              {createJob.isPending || createBatchJobs.isPending
+                ? "Queueing..."
+                : batchMode
+                  ? "Queue selected translations"
+                  : "Start translation"}
             </Button>
           </>
         )}
@@ -553,6 +748,11 @@ function Translate() {
       {createJob.isError && (
         <p className="form-error" role="alert">
           {createJob.error.message}
+        </p>
+      )}
+      {createBatchJobs.isError && (
+        <p className="form-error" role="alert">
+          {createBatchJobs.error.message}
         </p>
       )}
     </>
@@ -767,12 +967,14 @@ function SubtitleDiscovery({
   onSelect,
   query,
   onClear,
+  batchOnly = false,
 }: {
   mediaPath: string;
   selected: string | null;
   onSelect: (value: string) => void;
   query: ReturnType<typeof useMediaDiscovery>;
   onClear: () => void;
+  batchOnly?: boolean;
 }) {
   return (
     <section className="subtitle-discovery" aria-labelledby="subtitle-title">
@@ -810,8 +1012,19 @@ function SubtitleDiscovery({
             <EmptyMessage>No subtitles were found for this Media.</EmptyMessage>
           )}
         {!query.isFetching &&
+          batchOnly &&
+          query.data &&
+          query.data.candidates.length > 1 && (
+            <EmptyMessage>
+              Multiple subtitles found. Manual selection is not available in batch mode.
+            </EmptyMessage>
+          )}
+        {!query.isFetching &&
           !query.isError &&
-          query.data?.candidates.map((candidate, index) => {
+          (batchOnly && query.data?.candidates.length !== 1
+            ? []
+            : (query.data?.candidates ?? [])
+          ).map((candidate, index) => {
             const key = candidateKey(candidate, index);
             return (
               <SubtitleEntry
@@ -958,6 +1171,8 @@ function MediaBrowser({
   onDirectoryChange,
   onFilterChange,
   selectedMedia,
+  selectedMediaPaths,
+  batchMode,
   onMediaSelect,
   query,
 }: {
@@ -966,6 +1181,8 @@ function MediaBrowser({
   onDirectoryChange: (path: string) => void;
   onFilterChange: (filter: string) => void;
   selectedMedia: string | null;
+  selectedMediaPaths: Set<string>;
+  batchMode: boolean;
   onMediaSelect: (path: string) => void;
   query: ReturnType<typeof useMediaDirectory>;
 }) {
@@ -1034,7 +1251,11 @@ function MediaBrowser({
             key={entry.path}
             entry={entry}
             onDirectoryChange={onDirectoryChange}
-            selected={selectedMedia === entry.path}
+            selected={
+              batchMode
+                ? selectedMediaPaths.has(entry.path)
+                : selectedMedia === entry.path
+            }
             onMediaSelect={onMediaSelect}
           />
         ))}

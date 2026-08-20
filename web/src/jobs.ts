@@ -70,6 +70,14 @@ export type TermMapMode = "follow" | "selected" | "none";
 
 export type JobListData = JobListPage;
 
+export interface BatchJobError {
+  error_code: string;
+  message: string;
+  [key: string]: unknown;
+}
+
+export type BatchJobResult = Job | BatchJobError;
+
 export const APPROVED_ERROR_CONTEXT_KEYS = [
   "field",
   "media_path",
@@ -323,6 +331,43 @@ export function useCreateJob() {
       if (!response.ok)
         throw new Error(body.message ?? "Translation could not be queued.");
       return body;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+}
+
+export function useCreateBatchJobs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: {
+      items: Array<{
+        media_path: string;
+        subtitle_path?: string;
+        stream_index?: number;
+        source_format?: string;
+      }>;
+      target_language_code: string;
+      term_map_mode: TermMapMode;
+      term_map_id: string | null;
+      dynamic_terminology_enabled: boolean;
+      subtitle_terminology_filter_enabled: boolean;
+      output_suffix: string;
+      output_conflict_policy: "append-number" | "overwrite";
+    }): Promise<BatchJobResult[]> => {
+      const response = await fetch("/api/jobs/batch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      const body = (await response.json()) as {
+        results?: BatchJobResult[];
+        message?: string;
+      };
+      if (!response.ok)
+        throw new Error(body.message ?? "Translations could not be queued.");
+      if (!Array.isArray(body.results))
+        throw new Error("Batch response has an invalid shape.");
+      return body.results;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   });

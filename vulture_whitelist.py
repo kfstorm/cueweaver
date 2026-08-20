@@ -40,6 +40,7 @@ delete_job
 RequestBody.model_config
 BrowseBody.model_config
 CreateJobBody.validate_term_map_id
+CreateBatchItem.validate_subtitle_source
 expat.ParserCreate().StartDoctypeDeclHandler
 expat.ParserCreate().EntityDeclHandler
 expat.ParserCreate().ExternalEntityRefHandler

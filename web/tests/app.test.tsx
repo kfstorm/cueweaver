@@ -21,8 +21,47 @@ const CHARACTERS_TERM_MAP: TermMapSummary = {
   updated_at: "2026-08-13T12:00:00Z",
 };
 
+const BATCH_MEDIA: MediaDirectory = {
+  path: "",
+  entries: [
+    { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
+    { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+  ],
+};
+
+const UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  {
+    path: "Movie.mkv",
+    candidates: [{ kind: "external", path: "Movie.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+  {
+    path: "Second.mkv",
+    candidates: [{ kind: "external", path: "Second.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+];
+
+const AMBIGUOUS_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  UNIQUE_BATCH_DISCOVERIES[0],
+  {
+    path: "Second.mkv",
+    candidates: [
+      { kind: "external", path: "Second.en.srt", format: "srt" },
+      { kind: "embedded", stream_index: 3, format: "ass" },
+    ],
+    unsupported_candidates: [],
+  },
+];
+
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
+}
+
+async function selectBatchMedia() {
+  fireEvent.click(await screen.findByLabelText("Batch mode"));
+  fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
 }
 
 type JobFixture = { status: string; [key: string]: unknown };
@@ -259,6 +298,31 @@ async function selectExternalSubtitle() {
   });
   fireEvent.click(subtitle);
   return subtitle;
+}
+
+async function selectExternalSubtitleWithLanguage(language = "zh-Hans") {
+  await selectExternalSubtitle();
+  fireEvent.change(screen.getByLabelText("Target language code"), {
+    target: { value: language },
+  });
+}
+
+function mockBatchRequest(response: unknown) {
+  const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+  const defaultImplementation = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((input, init) =>
+    String(input) === "/api/jobs/batch" && init?.method === "POST"
+      ? Promise.resolve(jsonResponse(response))
+      : defaultImplementation(input, init),
+  );
+  return fetchMock;
+}
+
+async function submitBatch() {
+  fireEvent.change(await screen.findByLabelText("Target language code"), {
+    target: { value: "zh-Hans" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Queue selected translations" }));
 }
 
 function expectJobSubmissionBlocked() {
@@ -1935,6 +1999,132 @@ describe("product shell", () => {
     expect(screen.getByText("Selected")).toBeInTheDocument();
   });
 
+  it("auto-selects unique batch candidates and leaves ambiguous Media unselected", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      AMBIGUOUS_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+
+    expect(
+      await screen.findByText(
+        "Multiple subtitles found. Manual selection is not available in batch mode.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Select external subtitle Metadata unavailable (Movie.en.srt)",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("button", { name: /Select external subtitle.*Second/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("submits selected unique Media as one ordered batch request", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    const fetchMock = mockBatchRequest({
+      results: [
+        { id: "job-1" },
+        {
+          error_code: "term_map_not_found",
+          message: "Term map does not exist",
+          id: "missing",
+        },
+      ],
+    });
+
+    await selectBatchMedia();
+    await submitBatch();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            items: [
+              { media_path: "Movie.mkv", subtitle_path: "Movie.en.srt" },
+              { media_path: "Second.mkv", subtitle_path: "Second.en.srt" },
+            ],
+            target_language_code: "zh-Hans",
+            output_suffix: "zh-Hans",
+            output_conflict_policy: "append-number",
+            term_map_mode: "follow",
+            term_map_id: null,
+            dynamic_terminology_enabled: true,
+            subtitle_terminology_filter_enabled: true,
+          }),
+        }),
+      ),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("1 Jobs queued.");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Some items could not be queued.",
+    );
+  });
+
+  it("configures shared output settings in batch mode", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    const fetchMock = mockBatchRequest({ results: [] });
+
+    await selectBatchMedia();
+    const suffix = await screen.findByLabelText("Subtitle suffix");
+    fireEvent.change(suffix, { target: { value: "zh-Hans.forced" } });
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+    await submitBatch();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          body: expect.stringContaining('"output_suffix":"zh-Hans.forced"'),
+        }),
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/batch",
+      expect.objectContaining({
+        body: expect.stringContaining('"output_conflict_policy":"overwrite"'),
+      }),
+    );
+  });
+
+  it("resets single-file output settings when entering batch mode", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitleWithLanguage();
+    fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
+      target: { value: "single-only" },
+    });
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+    fireEvent.click(screen.getByLabelText("Batch mode"));
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+    expect(screen.getByLabelText("Append a number (recommended)")).toBeChecked();
+    expect(screen.queryByText("single-only")).not.toBeInTheDocument();
+  });
+
   it("queues an External subtitle with the target language", async () => {
     renderRoute("/translate");
 
@@ -2336,10 +2526,7 @@ describe("product shell", () => {
   it("blocks unsafe output suffixes before submission", async () => {
     renderRoute("/translate");
 
-    await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await selectExternalSubtitleWithLanguage();
     fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
       target: { value: "CON" },
     });
