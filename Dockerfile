@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS web-builder
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS web-builder
 
 WORKDIR /build/web
 RUN corepack enable
