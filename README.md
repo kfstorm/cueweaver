@@ -92,6 +92,7 @@ The startup command above is a complete DeepSeek configuration. These optional s
 | `DEEPSEEK_PROXY` | None | string | Optional HTTP proxy URL. |
 
 You do not need to set an endpoint for DeepSeek.
+CueWeaver explicitly disables thinking for the DeepSeek provider.
 
 ### OpenRouter
 
@@ -133,6 +134,7 @@ Use an OpenRouter model identifier for `OPENROUTER_MODEL`, not a display name fr
 | `CUSTOM_MIN_P` | `0.0` | float | Minimum-probability sampling threshold for servers that support it. `0.0` disables it. |
 
 The remote server must be reachable from inside the container, not only from the host. Set the compatibility options to match the server's documented API.
+CueWeaver also disables thinking when `CUSTOM_MODEL` starts with `deepseek-`, regardless of letter case.
 
 Most users can leave the advanced settings at their defaults.
 
