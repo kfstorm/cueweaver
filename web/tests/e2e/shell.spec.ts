@@ -450,14 +450,21 @@ test.describe("batch Translate workflow", () => {
         name: "Search subtitle candidates",
       });
       const uniqueButton = page.getByRole("button", { name: "Select unique" });
+      const batchModeLabel = page.locator("label.checkbox-field").filter({
+        hasText: "Batch mode",
+      });
+      const conflictPolicyLabels = page.locator(".output-conflict-policy label");
       if (viewport.name === "mobile") {
         for (const control of [
+          batchModeLabel,
           firstMedia,
           secondMedia,
           firstExternalCandidate,
           secondExternalCandidate,
           uniqueButton,
           candidateSearch,
+          conflictPolicyLabels.nth(0),
+          conflictPolicyLabels.nth(1),
         ]) {
           expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
         }
