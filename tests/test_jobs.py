@@ -3,12 +3,14 @@ import os
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from cueweaver.adapters.output import AtomicOutputPublisher
+from cueweaver.adapters.term_maps import FileTermMapStore
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
@@ -860,6 +862,91 @@ def test_follow_resolution_failure_does_not_queue_a_job(
         assert response.status_code == 400
         assert response.json()["error_code"] == "directory_term_maps_unavailable"
         assert client.get("/api/jobs").json()["active_jobs"] == []
+
+
+def test_concurrent_follow_and_term_map_delete_are_linearized(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    setup_client = make_client(media_root, work_root, FakeTranslator())
+    term_map = create_and_bind_term_map(
+        setup_client, "Characters", "", {"Captain": "队长"}
+    )
+    setup_client.close()
+    started = threading.Event()
+    release = threading.Event()
+
+    def create_follow_job() -> object:
+        with make_client(
+            media_root,
+            work_root,
+            FakeTranslator(started=started, release=release),
+        ) as client:
+            return client.post("/api/jobs", json=job_body())
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        follow_future = executor.submit(create_follow_job)
+        assert started.wait(timeout=5)
+        with make_client(media_root, work_root, FakeTranslator()) as client:
+            delete_response = client.request(
+                "DELETE",
+                f"/api/term-maps/{term_map['id']}",
+                json={"name": term_map["name"]},
+            )
+        release.set()
+        follow_response = follow_future.result()
+
+    assert delete_response.status_code == 200
+    assert follow_response.status_code == 200
+    assert follow_response.json()["request"]["term_map"]["id"] == term_map["id"]
+
+
+def test_follow_that_loses_race_to_term_map_delete_is_not_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    setup_client = make_client(media_root, work_root, FakeTranslator())
+    term_map = create_and_bind_term_map(
+        setup_client, "Characters", "", {"Captain": "队长"}
+    )
+    setup_client.close()
+    first_read = threading.Event()
+    release_first_read = threading.Event()
+    original_get = FileTermMapStore.get
+    paused = False
+
+    def pause_after_first_read(store: object, term_map_id: str) -> object:
+        nonlocal paused
+        detail = original_get(store, term_map_id)  # type: ignore[arg-type]
+        if term_map_id == term_map["id"] and not paused:
+            paused = True
+            first_read.set()
+            assert release_first_read.wait(timeout=5)
+        return detail
+
+    monkeypatch.setattr(FileTermMapStore, "get", pause_after_first_read)
+
+    def create_follow_job() -> object:
+        with make_client(media_root, work_root, FakeTranslator()) as client:
+            return client.post("/api/jobs", json=job_body())
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        follow_future = executor.submit(create_follow_job)
+        assert first_read.wait(timeout=5)
+        with make_client(media_root, work_root, FakeTranslator()) as client:
+            deleted = client.request(
+                "DELETE",
+                f"/api/term-maps/{term_map['id']}",
+                json={"name": term_map["name"]},
+            )
+        release_first_read.set()
+        follow = follow_future.result()
+
+    assert deleted.status_code == 200
+    assert follow.status_code == 400
+    assert follow.json()["error_code"] == "term_map_not_found"
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        jobs = client.get("/api/jobs").json()
+    assert jobs["active_jobs"] == []
+    assert jobs["history_jobs"] == []
 
 
 @pytest.mark.parametrize(

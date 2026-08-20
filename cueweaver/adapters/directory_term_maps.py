@@ -25,6 +25,11 @@ class FileDirectoryTermMapStore(DirectoryTermMapStore):
         self._directory = work_root.term_maps_directory
         self._path = self._directory / "directory-bindings.json"
         self._lock = lock or DurableFileLock(self._directory / ".lock")
+        self._recover: Callable[[], None] | None = None
+
+    def set_recovery(self, recover: Callable[[], None]) -> None:
+        """Install the shared Term map transaction recovery callback."""
+        self._recover = recover
 
     def snapshot_bindings(self) -> dict[str, str]:
         with self._locked():
@@ -108,6 +113,8 @@ class FileDirectoryTermMapStore(DirectoryTermMapStore):
             ) from error
         try:
             with self._lock.locked(self._directory):
+                if self._recover is not None:
+                    self._recover()
                 yield
         except OSError as error:
             raise ServiceError(

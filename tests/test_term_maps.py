@@ -309,6 +309,45 @@ def test_term_map_delete_index_failure_keeps_old_content(
     assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
 
 
+def test_term_map_delete_rolls_back_when_index_commit_reports_failure_after_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client = make_client(tmp_path)
+    (tmp_path / "media" / "Series").mkdir(parents=True)
+    created = create_term_map(client)
+    assert (
+        client.put(
+            "/api/term-maps/directory",
+            json={"path": "Series", "term_map_id": created["id"]},
+        ).status_code
+        == 200
+    )
+    original_write_index = FileTermMapStore._write_index
+    failed = False
+
+    def fail_after_index_write(store: object, records: list[object]) -> None:
+        nonlocal failed
+        original_write_index(store, records)  # type: ignore[arg-type]
+        if not failed:
+            failed = True
+            raise ServiceError("term_map_write_failed", "index write failed")
+
+    monkeypatch.setattr(FileTermMapStore, "_write_index", fail_after_index_write)
+
+    response = client.request(
+        "DELETE", f"/api/term-maps/{created['id']}", json={"name": created["name"]}
+    )
+
+    assert response.json()["error_code"] == "term_map_write_failed"
+    assert client.get(f"/api/term-maps/{created['id']}").status_code == 200
+    assert (
+        client.get("/api/term-maps/directory", params={"path": "Series"}).json()[
+            "local"
+        ]["id"]
+        == created["id"]
+    )
+
+
 @pytest.mark.parametrize("failure_point", ["journal", "bindings", "index"])
 def test_term_map_delete_recovers_after_interrupted_transaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
