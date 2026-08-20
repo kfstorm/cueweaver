@@ -2431,6 +2431,46 @@ describe("product shell", () => {
     expect(within(results).getByText("job-2", { exact: false })).toBeInTheDocument();
   });
 
+  it("keeps the submitted Media snapshot while a batch response is pending", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    let resolveBatch: (response: ReturnType<typeof jsonResponse>) => void = () => {};
+    const batchResponse = new Promise<ReturnType<typeof jsonResponse>>((resolve) => {
+      resolveBatch = resolve;
+    });
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const defaultImplementation = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) =>
+      String(input) === "/api/jobs/batch" && init?.method === "POST"
+        ? batchResponse
+        : defaultImplementation(input, init),
+    );
+
+    await selectBatchMedia();
+    await submitBatch();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+    resolveBatch(jsonResponse({ results: [{ id: "job-1" }, { id: "job-2" }] }));
+
+    const results = await screen.findByLabelText("Batch submission results");
+    expect(
+      within(results)
+        .getAllByRole("group", { name: /batch result/ })
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual(["Movie.mkv batch result", "Second.mkv batch result"]);
+  });
+
   it("configures shared output settings in batch mode", async () => {
     renderRoute(
       "/translate",

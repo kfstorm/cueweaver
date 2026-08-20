@@ -760,7 +760,9 @@ function Translate() {
           />
         ) : createBatchJobs.isSuccess ? (
           <BatchQueueResults
-            mediaPaths={batchPaths}
+            mediaPaths={
+              createBatchJobs.variables?.items.map((item) => item.media_path) ?? []
+            }
             results={createBatchJobs.data}
             onViewJob={(jobId) => navigate(`/jobs/${encodeURIComponent(jobId)}`)}
             onTranslateAnother={resetTranslationWorkflow}
