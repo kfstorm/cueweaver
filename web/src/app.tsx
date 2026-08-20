@@ -158,7 +158,6 @@ function Translate() {
   const [selectedBatchMedia, setSelectedBatchMedia] = useState<Set<string>>(
     () => new Set(),
   );
-  const [batchSubtitles, setBatchSubtitles] = useState<Record<string, string>>({});
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
@@ -217,10 +216,7 @@ function Translate() {
   );
   const batchItems = batchPaths.flatMap((path, index) => {
     const result = batchDiscoveries[index]?.data;
-    const selected = result?.candidates.find(
-      (candidate, candidateIndex) =>
-        candidateKey(candidate, candidateIndex) === batchSubtitles[path],
-    );
+    const selected = result?.candidates.length === 1 ? result.candidates[0] : undefined;
     if (!selected) return [];
     return [
       {
@@ -261,7 +257,6 @@ function Translate() {
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
     setSelectedBatchMedia(new Set());
-    setBatchSubtitles({});
     setBatchMode(false);
     setTermMapMode("follow");
     setTermMapId(null);
@@ -271,6 +266,7 @@ function Translate() {
     setOutputConflictPolicy("append-number");
     suffixEdited.current = false;
     createJob.reset();
+    createBatchJobs.reset();
   };
 
   return (
@@ -292,7 +288,6 @@ function Translate() {
                 setSelectedMedia(null);
                 setSelectedSubtitle(null);
                 setSelectedBatchMedia(new Set());
-                setBatchSubtitles({});
               }}
             />
             Batch mode
@@ -307,6 +302,7 @@ function Translate() {
               setDirectoryTermMapSelection(null);
               setFilter("");
               clearMedia(selectedMedia);
+              setSelectedBatchMedia(new Set());
             }}
             onFilterChange={setFilter}
             selectedMedia={selectedMedia}
@@ -333,20 +329,18 @@ function Translate() {
               <SubtitleDiscovery
                 key={path}
                 mediaPath={path}
-                selected={batchSubtitles[path] ?? null}
-                onSelect={(value) =>
-                  setBatchSubtitles((current) => ({ ...current, [path]: value }))
+                selected={
+                  batchDiscoveries[index]?.data?.candidates.length === 1
+                    ? candidateKey(batchDiscoveries[index].data.candidates[0], 0)
+                    : null
                 }
+                batchOnly
+                onSelect={() => undefined}
                 query={batchDiscoveries[index]}
                 onClear={() => {
                   setSelectedBatchMedia((current) => {
                     const next = new Set(current);
                     next.delete(path);
-                    return next;
-                  });
-                  setBatchSubtitles((current) => {
-                    const next = { ...current };
-                    delete next[path];
                     return next;
                   });
                 }}
@@ -911,12 +905,14 @@ function SubtitleDiscovery({
   onSelect,
   query,
   onClear,
+  batchOnly = false,
 }: {
   mediaPath: string;
   selected: string | null;
   onSelect: (value: string) => void;
   query: ReturnType<typeof useMediaDiscovery>;
   onClear: () => void;
+  batchOnly?: boolean;
 }) {
   return (
     <section className="subtitle-discovery" aria-labelledby="subtitle-title">
@@ -954,8 +950,19 @@ function SubtitleDiscovery({
             <EmptyMessage>No subtitles were found for this Media.</EmptyMessage>
           )}
         {!query.isFetching &&
+          batchOnly &&
+          query.data &&
+          query.data.candidates.length > 1 && (
+            <EmptyMessage>
+              Multiple subtitles found. Manual selection is not available in batch mode.
+            </EmptyMessage>
+          )}
+        {!query.isFetching &&
           !query.isError &&
-          query.data?.candidates.map((candidate, index) => {
+          (batchOnly && query.data?.candidates.length !== 1
+            ? []
+            : (query.data?.candidates ?? [])
+          ).map((candidate, index) => {
             const key = candidateKey(candidate, index);
             return (
               <SubtitleEntry

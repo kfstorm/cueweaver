@@ -215,6 +215,7 @@ class Jobs:
             )
         parent_directories: set[str] = set()
         for request in requests:
+            self._validate_shared_options(request)
             media = self._media_path(request.media_path, "invalid_media_path")
             parent = media.parent.relative_to(self._media_root)
             parent_directories.add("" if str(parent) == "." else parent.as_posix())
@@ -611,20 +612,7 @@ class Jobs:
     def _validate(
         self, request: CreateJobRequest
     ) -> tuple[Path, Path | None, Path, str]:
-        if (
-            not request.target_language_code.strip()
-            or "\\" in request.target_language_code
-            or any(
-                ord(character) < CONTROL_CHARACTER_LIMIT
-                or ord(character) == DELETE_CHARACTER
-                for character in request.target_language_code
-            )
-            or Path(request.target_language_code).name != request.target_language_code
-        ):
-            raise ServiceError(
-                "invalid_target_language",
-                "Target language must be non-empty and filename-safe",
-            )
+        self._validate_shared_options(request)
         media = self._media_path(request.media_path, "invalid_media_path")
         require_readable_media(media)
         if request.stream_index is not None:
@@ -655,6 +643,27 @@ class Jobs:
             )
         if subtitle is not None:
             source_format = self._validate_external_subtitle(media, subtitle)
+        output = media.with_name(
+            f"{media.stem}.{request.output_suffix or request.target_language_code}.{source_format}"
+        )
+        _require_writable_directory(output.parent)
+        return media, subtitle, output, source_format
+
+    def _validate_shared_options(self, request: CreateJobRequest) -> None:
+        if (
+            not request.target_language_code.strip()
+            or "\\" in request.target_language_code
+            or any(
+                ord(character) < CONTROL_CHARACTER_LIMIT
+                or ord(character) == DELETE_CHARACTER
+                for character in request.target_language_code
+            )
+            or Path(request.target_language_code).name != request.target_language_code
+        ):
+            raise ServiceError(
+                "invalid_target_language",
+                "Target language must be non-empty and filename-safe",
+            )
         output_suffix = (
             request.target_language_code
             if request.output_suffix is None
@@ -666,9 +675,27 @@ class Jobs:
                 "invalid_output_conflict_policy",
                 "Output conflict policy must be append-number or overwrite",
             )
-        output = media.with_name(f"{media.stem}.{output_suffix}.{source_format}")
-        _require_writable_directory(output.parent)
-        return media, subtitle, output, source_format
+        if request.term_map_mode not in {"follow", "selected", "none"}:
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Term map mode must be follow, selected, or none",
+                field="term_map_mode",
+            )
+        if (
+            request.term_map_mode in {"follow", "none"}
+            and request.term_map_id is not None
+        ):
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Term map ID must be null for follow or none mode",
+                field="term_map_id",
+            )
+        if request.term_map_mode == "selected" and not request.term_map_id:
+            raise ServiceError(
+                "invalid_term_map_mode",
+                "Selected mode requires a Term map ID",
+                field="term_map_id",
+            )
 
     def _validate_retry_sources(self, request: dict[str, object]) -> None:
         media_value = request.get("media_path")
