@@ -2013,7 +2013,7 @@ describe("product shell", () => {
 
     expect(
       await screen.findByText(
-        "Multiple subtitles found. Manual selection is not available in batch mode.",
+        "Multiple subtitles found. Select one candidate to continue.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -2038,7 +2038,7 @@ describe("product shell", () => {
 
     await selectBatchMedia();
     await screen.findByText(
-      "Multiple subtitles found. Manual selection is not available in batch mode.",
+      "Multiple subtitles found. Select one candidate to continue.",
     );
     fireEvent.click(await screen.findByRole("button", { name: "Resolve candidates" }));
     fireEvent.change(
@@ -2056,6 +2056,41 @@ describe("product shell", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(embedded);
     expect(embedded).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("submits an ordered mixed External and Embedded batch", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      AMBIGUOUS_BATCH_DISCOVERIES,
+    );
+    const fetchMock = mockBatchRequest({ results: [{ id: "job-1" }, { id: "job-2" }] });
+
+    await selectBatchMedia();
+    await screen.findByText(
+      "Multiple subtitles found. Select one candidate to continue.",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve candidates" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Select embedded subtitle stream 3 Metadata unavailable",
+      }),
+    );
+    await submitBatch();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          body: expect.stringContaining(
+            '"items":[{"media_path":"Movie.mkv","subtitle_path":"Movie.en.srt"},{"media_path":"Second.mkv","stream_index":3,"source_format":"ass"}]',
+          ),
+        }),
+      ),
+    );
   });
 
   it("submits selected unique Media as one ordered batch request", async () => {

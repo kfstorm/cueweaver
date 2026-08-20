@@ -292,8 +292,8 @@ function Translate() {
     ];
   });
   const selectUniqueBatchCandidates = () => {
-    setBatchSubtitleSelections((current) => {
-      const next = new Map(current);
+    setBatchSubtitleSelections(() => {
+      const next = new Map<string, string>();
       batchPaths.forEach((path, index) => {
         const candidates = filteredCandidates(
           batchDiscoveries[index]?.data?.candidates ?? [],
@@ -1115,7 +1115,7 @@ function SubtitleDiscovery({
         {!query.isFetching && query.data && batchMode && candidates.length > 1 && (
           <>
             <EmptyMessage>
-              Multiple subtitles found. Manual selection is not available in batch mode.
+              Multiple subtitles found. Select one candidate to continue.
             </EmptyMessage>
             {onToggleExpanded && (
               <Button type="button" variant="outline" onClick={onToggleExpanded}>
