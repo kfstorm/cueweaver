@@ -755,6 +755,32 @@ def test_batch_preflight_rejects_shared_output_option_before_creating_jobs(
     jobs.close()
 
 
+def test_batch_creates_independent_jobs_available_from_jobs_endpoint(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    (media_root / "Second.mkv").write_bytes(b"media")
+    (media_root / "Second.en.srt").write_bytes(SRT)
+
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.post(
+            "/api/jobs/batch",
+            json={
+                "items": [
+                    {"media_path": "Movie.mkv", "subtitle_path": "Movie.en.srt"},
+                    {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+                ],
+                "target_language_code": "zh-Hans",
+                "term_map_mode": "none",
+            },
+        )
+
+        assert response.status_code == 200
+        results = response.json()["results"]
+        assert len(results) == 2
+        assert all("id" in result for result in results)
+        listed = client.get("/api/jobs").json()
+        assert len(listed["active_jobs"]) == 2
+
+
 def create_and_bind_term_map(
     client: TestClient, name: str, path: str, content: dict[str, str]
 ) -> dict[str, object]:
