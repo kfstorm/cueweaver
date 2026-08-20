@@ -696,6 +696,65 @@ def job_body(**overrides: object) -> dict[str, object]:
     }
 
 
+def test_batch_preflight_and_item_errors_preserve_order(tmp_path: Path, monkeypatch):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    (media_root / "Second.mkv").write_bytes(b"media")
+    (media_root / "Second.en.srt").write_bytes(SRT)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    attempted: list[str] = []
+
+    def create(request: CreateJobRequest) -> dict[str, object]:
+        attempted.append(request.media_path)
+        if request.media_path == "Second.mkv":
+            raise ServiceError("late_failure", "The item failed")
+        return {"id": "first", "request": {"media_path": request.media_path}}
+
+    monkeypatch.setattr(jobs, "create", create)
+    results = jobs.create_batch(
+        [
+            CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none"),
+            CreateJobRequest("Second.mkv", "Second.en.srt", "zh-Hans", "none"),
+        ]
+    )
+
+    assert attempted == ["Movie.mkv", "Second.mkv"]
+    assert results == [
+        {"id": "first", "request": {"media_path": "Movie.mkv"}},
+        {"error_code": "late_failure", "message": "The item failed"},
+    ]
+    jobs.close()
+
+
+def test_batch_preflight_rejects_shared_output_option_before_creating_jobs(
+    tmp_path: Path, monkeypatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+    create_called = False
+
+    def create(_request: CreateJobRequest) -> dict[str, object]:
+        nonlocal create_called
+        create_called = True
+        return {}
+
+    monkeypatch.setattr(jobs, "create", create)
+    with pytest.raises(ServiceError, match="unsafe character"):
+        jobs.create_batch(
+            [
+                CreateJobRequest(
+                    "Movie.mkv",
+                    "Movie.en.srt",
+                    "zh-Hans",
+                    "none",
+                    output_suffix="bad/name",
+                )
+            ]
+        )
+
+    assert not create_called
+    jobs.close()
+
+
 def create_and_bind_term_map(
     client: TestClient, name: str, path: str, content: dict[str, str]
 ) -> dict[str, object]:
