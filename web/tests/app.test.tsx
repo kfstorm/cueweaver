@@ -1935,6 +1935,55 @@ describe("product shell", () => {
     expect(screen.getByText("Selected")).toBeInTheDocument();
   });
 
+  it("auto-selects unique batch candidates and leaves ambiguous Media unselected", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      {
+        path: "",
+        entries: [
+          { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
+          { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+        ],
+      },
+      undefined,
+      false,
+      [
+        {
+          path: "Movie.mkv",
+          candidates: [{ kind: "external", path: "Movie.en.srt", format: "srt" }],
+          unsupported_candidates: [],
+        },
+        {
+          path: "Second.mkv",
+          candidates: [
+            { kind: "external", path: "Second.en.srt", format: "srt" },
+            { kind: "embedded", stream_index: 3, format: "ass" },
+          ],
+          unsupported_candidates: [],
+        },
+      ],
+    );
+
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
+
+    expect(
+      await screen.findByText(
+        "Multiple subtitles found. Manual selection is not available in batch mode.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Select external subtitle Metadata unavailable (Movie.en.srt)",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("button", { name: /Select external subtitle.*Second/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("queues an External subtitle with the target language", async () => {
     renderRoute("/translate");
 
