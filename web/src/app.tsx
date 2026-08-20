@@ -270,14 +270,16 @@ function Translate() {
   );
   const batchItems = batchPaths.flatMap((path, index) => {
     const result = batchDiscoveries[index]?.data;
-    const candidates = filteredCandidates(
-      result?.candidates ?? [],
-      batchSubtitleFilter,
-    );
+    const allCandidates = result?.candidates ?? [];
+    const candidates = filteredCandidates(allCandidates, batchSubtitleFilter);
+    const manuallySelectedKey = batchSubtitleSelections.get(path);
     const selectedKey =
-      batchSubtitleSelections.get(path) ??
-      (candidates.length === 1 ? candidateKey(candidates[0], 0) : undefined);
-    const selected = candidates.find(
+      manuallySelectedKey ??
+      (candidates.length === 1 && isCompleteCandidate(candidates[0])
+        ? candidateKey(candidates[0], 0)
+        : undefined);
+    const selectionCandidates = manuallySelectedKey ? allCandidates : candidates;
+    const selected = selectionCandidates.find(
       (candidate, candidateIndex) =>
         candidateKey(candidate, candidateIndex) === selectedKey,
     );
@@ -446,18 +448,15 @@ function Translate() {
                 mediaPath={path}
                 selected={
                   batchSubtitleSelections.get(path) ??
-                  (filteredCandidates(
-                    batchDiscoveries[index]?.data?.candidates ?? [],
-                    batchSubtitleFilter,
-                  ).length === 1
-                    ? candidateKey(
-                        filteredCandidates(
-                          batchDiscoveries[index]?.data?.candidates ?? [],
-                          batchSubtitleFilter,
-                        )[0],
-                        0,
-                      )
-                    : null)
+                  (() => {
+                    const candidates = filteredCandidates(
+                      batchDiscoveries[index]?.data?.candidates ?? [],
+                      batchSubtitleFilter,
+                    );
+                    return candidates.length === 1 && isCompleteCandidate(candidates[0])
+                      ? candidateKey(candidates[0], 0)
+                      : null;
+                  })()
                 }
                 candidateFilter={batchSubtitleFilter}
                 batchMode
@@ -1265,14 +1264,18 @@ function SubtitleEntry({
   selected: boolean;
   onSelect: (value: string) => void;
 }) {
+  const selectable = isCompleteCandidate(candidate);
   return (
     <Button
       type="button"
       variant="outline"
       className={cn("subtitle-entry", candidate.kind === "embedded" && "embedded")}
-      aria-pressed={selected}
+      aria-pressed={selectable && selected}
+      disabled={!selectable}
       aria-label={`Select ${candidate.kind} subtitle ${subtitleAccessibleLabel(candidate)}`}
-      onClick={() => onSelect(candidateId)}
+      onClick={() => {
+        if (selectable) onSelect(candidateId);
+      }}
     >
       <span className="subtitle-kind">
         {candidate.kind === "external" ? "External" : "Embedded"}
@@ -1281,7 +1284,8 @@ function SubtitleEntry({
         <strong>{subtitleLabel(candidate)}</strong>
         <small>{subtitleDetails(candidate)}</small>
       </span>
-      {selected && <span className="media-entry-selected">Selected</span>}
+      {selectable && selected && <span className="media-entry-selected">Selected</span>}
+      {!selectable && <span className="disabled-note">Incomplete candidate</span>}
     </Button>
   );
 }

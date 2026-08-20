@@ -54,6 +54,58 @@ const AMBIGUOUS_BATCH_DISCOVERIES: MediaDiscovery[] = [
   },
 ];
 
+const FILTERED_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  {
+    path: "Movie.mkv",
+    candidates: [
+      {
+        kind: "external",
+        path: "Movie.en.srt",
+        format: "srt",
+        tags: { language: "en", title: "English" },
+      },
+      {
+        kind: "embedded",
+        stream_index: 3,
+        format: "ass",
+        tags: { language: "zhs", title: "Chinese" },
+        dispositions: ["forced"],
+      },
+    ],
+    unsupported_candidates: [
+      { kind: "embedded", stream_index: 8, reason: "bitmap subtitle" },
+    ],
+  },
+  {
+    path: "Second.mkv",
+    candidates: [
+      {
+        kind: "external",
+        path: "Second.en.srt",
+        format: "srt",
+        tags: { language: "en", title: "English" },
+      },
+      {
+        kind: "embedded",
+        stream_index: 4,
+        format: "ass",
+        tags: { language: "zhs", title: "Chinese" },
+        dispositions: ["forced"],
+      },
+    ],
+    unsupported_candidates: [],
+  },
+];
+
+const INCOMPLETE_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  {
+    path: "Movie.mkv",
+    candidates: [{ kind: "embedded", stream_index: 3 }],
+    unsupported_candidates: [],
+  },
+  UNIQUE_BATCH_DISCOVERIES[1],
+];
+
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
@@ -2056,6 +2108,195 @@ describe("product shell", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(embedded);
     expect(embedded).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps manual selections when the shared candidate filter changes", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      FILTERED_BATCH_DISCOVERIES,
+    );
+    const fetchMock = mockBatchRequest({ results: [{ id: "job-1" }, { id: "job-2" }] });
+
+    await selectBatchMedia();
+    const filter = await screen.findByRole("searchbox", {
+      name: "Search subtitle candidates",
+    });
+    fireEvent.change(filter, { target: { value: "en" } });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Select external subtitle en / English (Movie.en.srt)",
+      }),
+    );
+    fireEvent.change(filter, { target: { value: "ass" } });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Select embedded subtitle stream 4 zhs / Chinese",
+      }),
+    );
+
+    await submitBatch();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          body: expect.stringContaining(
+            '"items":[{"media_path":"Movie.mkv","subtitle_path":"Movie.en.srt"},{"media_path":"Second.mkv","stream_index":4,"source_format":"ass"}]',
+          ),
+        }),
+      ),
+    );
+  });
+
+  it("selects only complete unique candidates from the current filter", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      AMBIGUOUS_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    await screen.findByText(
+      "Multiple subtitles found. Select one candidate to continue.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select unique" }));
+
+    expect(
+      screen.getByRole("button", {
+        name: "Select external subtitle Metadata unavailable (Movie.en.srt)",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByText("Multiple subtitles found. Select one candidate to continue."),
+    ).toBeInTheDocument();
+  });
+
+  it("recovers a failed batch Discovery row with retry", async () => {
+    renderRoute("/translate", true, BATCH_MEDIA, undefined, false, [
+      new Error("ffprobe failed"),
+      UNIQUE_BATCH_DISCOVERIES[1],
+      UNIQUE_BATCH_DISCOVERIES[0],
+    ]);
+
+    await selectBatchMedia();
+    expect(
+      await screen.findByRole("button", { name: "Try again" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", {
+          name: "Select external subtitle Metadata unavailable (Movie.en.srt)",
+        }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+  });
+
+  it("filters candidate language, name, format, tags, and Embedded metadata", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      FILTERED_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    const filter = await screen.findByRole("searchbox", {
+      name: "Search subtitle candidates",
+    });
+
+    fireEvent.change(filter, { target: { value: "en" } });
+    expect(
+      await screen.findByRole("button", {
+        name: "Select external subtitle en / English (Movie.en.srt)",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "Movie.en.srt" } });
+    expect(
+      await screen.findByRole("button", {
+        name: "Select external subtitle en / English (Movie.en.srt)",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "ass" } });
+    expect(
+      await screen.findByRole("button", {
+        name: "Select embedded subtitle stream 3 zhs / Chinese",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "Chinese" } });
+    expect(
+      await screen.findByRole("button", {
+        name: "Select embedded subtitle stream 3 zhs / Chinese",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "forced" } });
+    expect(
+      await screen.findByRole("button", {
+        name: "Select embedded subtitle stream 3 zhs / Chinese",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not present incomplete candidates as selectable", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      INCOMPLETE_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    fireEvent.click(screen.getByRole("button", { name: "Select unique" }));
+    fireEvent.change(await screen.findByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+    expect(
+      await screen.findByRole("button", {
+        name: "Select embedded subtitle stream 3 Metadata unavailable",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Queue selected translations" }),
+    ).toBeDisabled();
+  });
+
+  it("shows empty filtered results even when unsupported candidates remain", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      FILTERED_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    fireEvent.change(
+      await screen.findByRole("searchbox", {
+        name: "Search subtitle candidates",
+      }),
+      { target: { value: "no-match" } },
+    );
+
+    expect(
+      await screen.findAllByText("No subtitle candidates match this filter."),
+    ).toHaveLength(2);
   });
 
   it("submits an ordered mixed External and Embedded batch", async () => {
