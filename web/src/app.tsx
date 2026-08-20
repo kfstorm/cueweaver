@@ -205,6 +205,13 @@ function Translate() {
   const [selectedBatchMedia, setSelectedBatchMedia] = useState<Set<string>>(
     () => new Set(),
   );
+  const [batchSubtitleSelections, setBatchSubtitleSelections] = useState<
+    Map<string, string>
+  >(() => new Map());
+  const [expandedBatchMedia, setExpandedBatchMedia] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [batchSubtitleFilter, setBatchSubtitleFilter] = useState("");
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
@@ -263,8 +270,20 @@ function Translate() {
   );
   const batchItems = batchPaths.flatMap((path, index) => {
     const result = batchDiscoveries[index]?.data;
-    const selected = result?.candidates.length === 1 ? result.candidates[0] : undefined;
-    if (!selected) return [];
+    const allCandidates = result?.candidates ?? [];
+    const candidates = filteredCandidates(allCandidates, batchSubtitleFilter);
+    const manuallySelectedKey = batchSubtitleSelections.get(path);
+    const selectedKey =
+      manuallySelectedKey ??
+      (candidates.length === 1 && isCompleteCandidate(candidates[0])
+        ? candidateKey(candidates[0], 0)
+        : undefined);
+    const selectionCandidates = manuallySelectedKey ? allCandidates : candidates;
+    const selected = selectionCandidates.find(
+      (candidate, candidateIndex) =>
+        candidateKey(candidate, candidateIndex) === selectedKey,
+    );
+    if (!selected || !isCompleteCandidate(selected)) return [];
     return [
       {
         media_path: path,
@@ -274,6 +293,21 @@ function Translate() {
       },
     ];
   });
+  const selectUniqueBatchCandidates = () => {
+    setBatchSubtitleSelections(() => {
+      const next = new Map<string, string>();
+      batchPaths.forEach((path, index) => {
+        const candidates = filteredCandidates(
+          batchDiscoveries[index]?.data?.candidates ?? [],
+          batchSubtitleFilter,
+        );
+        if (candidates.length === 1 && isCompleteCandidate(candidates[0])) {
+          next.set(path, candidateKey(candidates[0], 0));
+        }
+      });
+      return next;
+    });
+  };
   const outputFormat = selectedCandidate?.format ?? "srt";
   const outputParts = selectedMedia
     ? outputNameParts(selectedMedia, outputFormat)
@@ -304,6 +338,9 @@ function Translate() {
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
     setSelectedBatchMedia(new Set());
+    setBatchSubtitleSelections(new Map());
+    setExpandedBatchMedia(new Set());
+    setBatchSubtitleFilter("");
     setBatchMode(false);
     setTermMapMode("follow");
     setTermMapId(null);
@@ -336,6 +373,9 @@ function Translate() {
                 setSelectedMedia(null);
                 setSelectedSubtitle(null);
                 setSelectedBatchMedia(new Set());
+                setBatchSubtitleSelections(new Map());
+                setExpandedBatchMedia(new Set());
+                setBatchSubtitleFilter("");
                 if (nextBatchMode) {
                   setOutputSuffix(targetLanguage);
                   setOutputConflictPolicy("append-number");
@@ -356,6 +396,8 @@ function Translate() {
               setFilter("");
               clearMedia(selectedMedia);
               setSelectedBatchMedia(new Set());
+              setBatchSubtitleSelections(new Map());
+              setExpandedBatchMedia(new Set());
             }}
             onFilterChange={setFilter}
             selectedMedia={selectedMedia}
@@ -377,21 +419,76 @@ function Translate() {
             }}
             query={browser}
           />
+          {batchMode && (
+            <div className="batch-subtitle-controls">
+              <label htmlFor="batch-subtitle-filter">
+                Search subtitle candidates
+                <Input
+                  id="batch-subtitle-filter"
+                  type="search"
+                  value={batchSubtitleFilter}
+                  onChange={(event) => setBatchSubtitleFilter(event.target.value)}
+                  placeholder="Language, name, path, format, or tags"
+                />
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={batchPaths.length === 0}
+                onClick={selectUniqueBatchCandidates}
+              >
+                Select unique
+              </Button>
+            </div>
+          )}
           {batchMode &&
             batchPaths.map((path, index) => (
               <SubtitleDiscovery
                 key={path}
                 mediaPath={path}
                 selected={
-                  batchDiscoveries[index]?.data?.candidates.length === 1
-                    ? candidateKey(batchDiscoveries[index].data.candidates[0], 0)
-                    : null
+                  batchSubtitleSelections.get(path) ??
+                  (() => {
+                    const candidates = filteredCandidates(
+                      batchDiscoveries[index]?.data?.candidates ?? [],
+                      batchSubtitleFilter,
+                    );
+                    return candidates.length === 1 && isCompleteCandidate(candidates[0])
+                      ? candidateKey(candidates[0], 0)
+                      : null;
+                  })()
                 }
-                batchOnly
-                onSelect={() => undefined}
+                candidateFilter={batchSubtitleFilter}
+                batchMode
+                expanded={expandedBatchMedia.has(path)}
+                onToggleExpanded={() =>
+                  setExpandedBatchMedia((current) => {
+                    const next = new Set(current);
+                    if (next.has(path)) next.delete(path);
+                    else next.add(path);
+                    return next;
+                  })
+                }
+                onSelect={(value) =>
+                  setBatchSubtitleSelections((current) => {
+                    const next = new Map(current);
+                    next.set(path, value);
+                    return next;
+                  })
+                }
                 query={batchDiscoveries[index]}
                 onClear={() => {
                   setSelectedBatchMedia((current) => {
+                    const next = new Set(current);
+                    next.delete(path);
+                    return next;
+                  });
+                  setBatchSubtitleSelections((current) => {
+                    const next = new Map(current);
+                    next.delete(path);
+                    return next;
+                  });
+                  setExpandedBatchMedia((current) => {
                     const next = new Set(current);
                     next.delete(path);
                     return next;
@@ -967,15 +1064,24 @@ function SubtitleDiscovery({
   onSelect,
   query,
   onClear,
-  batchOnly = false,
+  candidateFilter = "",
+  batchMode = false,
+  expanded = true,
+  onToggleExpanded,
 }: {
   mediaPath: string;
   selected: string | null;
   onSelect: (value: string) => void;
   query: ReturnType<typeof useMediaDiscovery>;
   onClear: () => void;
-  batchOnly?: boolean;
+  candidateFilter?: string;
+  batchMode?: boolean;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }) {
+  const candidates = filteredCandidates(query.data?.candidates ?? [], candidateFilter);
+  const visibleCandidates =
+    batchMode && candidates.length > 1 && !expanded ? [] : candidates;
   return (
     <section className="subtitle-discovery" aria-labelledby="subtitle-title">
       <div className="subtitle-heading">
@@ -1005,26 +1111,31 @@ function SubtitleDiscovery({
             onRetry={() => void query.refetch()}
           />
         )}
-        {!query.isFetching &&
-          query.data &&
-          query.data.candidates.length === 0 &&
-          query.data.unsupported_candidates.length === 0 && (
-            <EmptyMessage>No subtitles were found for this Media.</EmptyMessage>
-          )}
-        {!query.isFetching &&
-          batchOnly &&
-          query.data &&
-          query.data.candidates.length > 1 && (
+        {!query.isFetching && query.data && batchMode && candidates.length > 1 && (
+          <>
             <EmptyMessage>
-              Multiple subtitles found. Manual selection is not available in batch mode.
+              Multiple subtitles found. Select one candidate to continue.
+            </EmptyMessage>
+            {onToggleExpanded && (
+              <Button type="button" variant="outline" onClick={onToggleExpanded}>
+                Resolve candidates
+              </Button>
+            )}
+          </>
+        )}
+        {!query.isFetching &&
+          query.data &&
+          candidates.length === 0 &&
+          (candidateFilter || query.data.unsupported_candidates.length === 0) && (
+            <EmptyMessage>
+              {candidateFilter
+                ? "No subtitle candidates match this filter."
+                : "No subtitles were found for this Media."}
             </EmptyMessage>
           )}
         {!query.isFetching &&
           !query.isError &&
-          (batchOnly && query.data?.candidates.length !== 1
-            ? []
-            : (query.data?.candidates ?? [])
-          ).map((candidate, index) => {
+          visibleCandidates.map((candidate, index) => {
             const key = candidateKey(candidate, index);
             return (
               <SubtitleEntry
@@ -1054,6 +1165,39 @@ function candidateKey(
   index: number,
 ) {
   return `${candidate.kind}-${candidate.path ?? candidate.stream_index ?? index}`;
+}
+
+function filteredCandidates(candidates: SubtitleCandidate[], filter: string) {
+  const normalized = filter.trim().toLocaleLowerCase();
+  if (!normalized) return candidates;
+  return candidates.filter((candidate) => {
+    const tags = Object.values(candidate.tags ?? {});
+    const metadata = [
+      candidate.kind,
+      candidate.path,
+      candidate.format,
+      candidate.stream_index,
+      ...(candidate.dispositions ?? []),
+      ...tags,
+    ];
+    return metadata.some((value) =>
+      String(value ?? "")
+        .toLocaleLowerCase()
+        .includes(normalized),
+    );
+  });
+}
+
+function isCompleteCandidate(
+  candidate: SubtitleCandidate | undefined,
+): candidate is SubtitleCandidate {
+  return (
+    candidate !== undefined &&
+    ((candidate.kind === "external" && candidate.path !== undefined) ||
+      (candidate.kind === "embedded" &&
+        candidate.stream_index !== undefined &&
+        candidate.format !== undefined))
+  );
 }
 
 const SUBTITLE_DISPOSITION_LABELS: Record<string, string> = {
@@ -1120,14 +1264,18 @@ function SubtitleEntry({
   selected: boolean;
   onSelect: (value: string) => void;
 }) {
+  const selectable = isCompleteCandidate(candidate);
   return (
     <Button
       type="button"
       variant="outline"
       className={cn("subtitle-entry", candidate.kind === "embedded" && "embedded")}
-      aria-pressed={selected}
+      aria-pressed={selectable && selected}
+      disabled={!selectable}
       aria-label={`Select ${candidate.kind} subtitle ${subtitleAccessibleLabel(candidate)}`}
-      onClick={() => onSelect(candidateId)}
+      onClick={() => {
+        if (selectable) onSelect(candidateId);
+      }}
     >
       <span className="subtitle-kind">
         {candidate.kind === "external" ? "External" : "Embedded"}
@@ -1136,7 +1284,8 @@ function SubtitleEntry({
         <strong>{subtitleLabel(candidate)}</strong>
         <small>{subtitleDetails(candidate)}</small>
       </span>
-      {selected && <span className="media-entry-selected">Selected</span>}
+      {selectable && selected && <span className="media-entry-selected">Selected</span>}
+      {!selectable && <span className="disabled-note">Incomplete candidate</span>}
     </Button>
   );
 }
