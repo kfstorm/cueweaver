@@ -76,7 +76,17 @@ export interface BatchJobError {
   [key: string]: unknown;
 }
 
-export type BatchJobResult = Job | BatchJobError;
+export type BatchJobSuccess = Pick<Job, "id">;
+export type BatchJobResult = BatchJobSuccess | BatchJobError;
+
+function isBatchJobResult(value: unknown): value is BatchJobResult {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Record<string, unknown>;
+  if (typeof result.error_code === "string") {
+    return typeof result.message === "string";
+  }
+  return typeof result.id === "string";
+}
 
 export const APPROVED_ERROR_CONTEXT_KEYS = [
   "field",
@@ -365,7 +375,11 @@ export function useCreateBatchJobs() {
       };
       if (!response.ok)
         throw new Error(body.message ?? "Translations could not be queued.");
-      if (!Array.isArray(body.results))
+      if (
+        !Array.isArray(body.results) ||
+        body.results.length !== request.items.length ||
+        !body.results.every(isBatchJobResult)
+      )
         throw new Error("Batch response has an invalid shape.");
       return body.results;
     },

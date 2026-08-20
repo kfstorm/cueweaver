@@ -48,9 +48,10 @@ import {
   useJobNotifications,
   type BatchJobError,
   type BatchJobResult,
+  APPROVED_ERROR_CONTEXT_KEYS,
   type TermMapMode,
 } from "./jobs";
-import { JobNotificationRegion, JobsPage } from "./job-history";
+import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
 import {
   useCreateTermMap,
@@ -758,18 +759,12 @@ function Translate() {
             onTranslateAnother={resetTranslationWorkflow}
           />
         ) : createBatchJobs.isSuccess ? (
-          <div role="status">
-            <strong>
-              {createBatchJobs.data.filter((result) => !isBatchError(result)).length}{" "}
-              Jobs queued.
-            </strong>
-            {createBatchJobs.data.some(isBatchError) && (
-              <p>Some items could not be queued.</p>
-            )}
-            <Button type="button" variant="outline" onClick={resetTranslationWorkflow}>
-              Translate another
-            </Button>
-          </div>
+          <BatchQueueResults
+            mediaPaths={batchPaths}
+            results={createBatchJobs.data}
+            onViewJob={(jobId) => navigate(`/jobs/${encodeURIComponent(jobId)}`)}
+            onTranslateAnother={resetTranslationWorkflow}
+          />
         ) : (
           <>
             <ProviderState />
@@ -1011,6 +1006,124 @@ function QueueSuccess({
         </Button>
       </div>
     </section>
+  );
+}
+
+function BatchQueueResults({
+  mediaPaths,
+  results,
+  onViewJob,
+  onTranslateAnother,
+}: {
+  mediaPaths: string[];
+  results: BatchJobResult[];
+  onViewJob: (jobId: string) => void;
+  onTranslateAnother: () => void;
+}) {
+  const queuedCount = results.filter((result) => !isBatchError(result)).length;
+  const failedCount = results.length - queuedCount;
+
+  return (
+    <section
+      className="queue-success batch-queue-results"
+      aria-labelledby="batch-results-title"
+    >
+      <div className="queue-success-heading" role="status">
+        <CheckCircleIcon size={22} weight="fill" aria-hidden="true" />
+        <div>
+          <p className="eyebrow">Batch submission</p>
+          <h2 id="batch-results-title">Batch results</h2>
+          <p>
+            {queuedCount} {queuedCount === 1 ? "Job" : "Jobs"} queued
+            {failedCount > 0 &&
+              ` · ${failedCount} ${failedCount === 1 ? "error" : "errors"}`}
+            .
+          </p>
+        </div>
+      </div>
+      <div className="batch-result-list" aria-label="Batch submission results">
+        {mediaPaths.map((mediaPath, index) => {
+          const result = results[index];
+          return (
+            <BatchResultRow
+              key={`${mediaPath}-${index}`}
+              mediaPath={mediaPath}
+              result={result}
+              onViewJob={onViewJob}
+            />
+          );
+        })}
+      </div>
+      <div className="queue-success-actions">
+        <Button type="button" variant="outline" onClick={onTranslateAnother}>
+          Translate another
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function BatchResultRow({
+  mediaPath,
+  result,
+  onViewJob,
+}: {
+  mediaPath: string;
+  result: BatchJobResult | undefined;
+  onViewJob: (jobId: string) => void;
+}) {
+  const media = mediaPath.split("/").pop() ?? mediaPath;
+  if (result === undefined) {
+    return (
+      <div
+        className="batch-result-row"
+        role="group"
+        aria-label={`${media} batch result`}
+      >
+        {media}
+      </div>
+    );
+  }
+  if (!isBatchError(result)) {
+    return (
+      <div
+        className="batch-result-row batch-result-success"
+        role="group"
+        aria-label={`${media} batch result`}
+      >
+        <div>
+          <strong>{media}</strong>
+          <span>Queued as Job {result.id}</span>
+        </div>
+        <Button type="button" variant="outline" onClick={() => onViewJob(result.id)}>
+          View Job
+        </Button>
+      </div>
+    );
+  }
+  const context = Object.entries(result).filter(([key]) =>
+    (APPROVED_ERROR_CONTEXT_KEYS as readonly string[]).includes(key),
+  );
+  return (
+    <div
+      className="batch-result-row batch-result-error"
+      role="group"
+      aria-label={`${media} batch result`}
+    >
+      <div>
+        <strong>{media}</strong>
+        <span>{result.message}</span>
+        <details>
+          <summary>Show error details</summary>
+          <dl className="job-summary">
+            <SummaryItem label="Error code" value={result.error_code} />
+            {context.map(([key, value]) => (
+              <SummaryItem key={key} label={key} value={String(value)} />
+            ))}
+          </dl>
+        </details>
+      </div>
+    </div>
   );
 }
 

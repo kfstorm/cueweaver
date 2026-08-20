@@ -831,6 +831,60 @@ a {
   gap: var(--space-3);
 }
 
+.batch-queue-results {
+  gap: var(--space-4);
+}
+
+.batch-result-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.batch-result-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid #e0e4eb;
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+
+.batch-result-row > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.batch-result-row strong {
+  overflow-wrap: anywhere;
+  color: #273043;
+}
+
+.batch-result-row span {
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+.batch-result-error {
+  border-color: #f0caca;
+  background: #fffafa;
+}
+
+.batch-result-error details {
+  margin-top: 6px;
+}
+
+.batch-result-error summary {
+  color: #8f2525;
+  cursor: pointer;
+  font-size: var(--font-small);
+}
+
+.batch-result-error .job-summary {
+  margin-top: 8px;
+}
+
 .provider-state {
   display: flex;
   align-items: center;
