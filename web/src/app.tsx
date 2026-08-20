@@ -47,8 +47,13 @@ import {
   useJobs,
   useJobNotifications,
   type BatchJobError,
+  type BatchJobSkipped,
   type BatchJobResult,
+  type Job,
   APPROVED_ERROR_CONTEXT_KEYS,
+  isSkippedJobResult,
+  type OutputConflictPolicy,
+  type SkippedJobResult,
   type TermMapMode,
 } from "./jobs";
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
@@ -150,13 +155,15 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
 
 const isBatchError = (result: BatchJobResult): result is BatchJobError =>
   "error_code" in result;
+const isBatchSkipped = (result: BatchJobResult): result is BatchJobSkipped =>
+  "status" in result && result.status === "skipped";
 
 function OutputConflictPolicy({
   value,
   onChange,
 }: {
-  value: "append-number" | "overwrite";
-  onChange: (value: "append-number" | "overwrite") => void;
+  value: OutputConflictPolicy;
+  onChange: (value: OutputConflictPolicy) => void;
 }) {
   return (
     <fieldset className="output-conflict-policy">
@@ -165,11 +172,21 @@ function OutputConflictPolicy({
         <input
           type="radio"
           name="output-conflict-policy"
+          value="skip"
+          checked={value === "skip"}
+          onChange={() => onChange("skip")}
+        />
+        Skip existing output (recommended)
+      </label>
+      <label>
+        <input
+          type="radio"
+          name="output-conflict-policy"
           value="append-number"
           checked={value === "append-number"}
           onChange={() => onChange("append-number")}
         />
-        Append a number (recommended)
+        Append a number
       </label>
       <label>
         <input
@@ -224,9 +241,8 @@ function Translate() {
     ? targetLanguage
     : "custom";
   const customTargetLanguage = commonTargetLanguage === "custom";
-  const [outputConflictPolicy, setOutputConflictPolicy] = useState<
-    "append-number" | "overwrite"
-  >("append-number");
+  const [outputConflictPolicy, setOutputConflictPolicy] =
+    useState<OutputConflictPolicy>("skip");
   const suffixEdited = useRef(false);
   const [termMapMode, setTermMapMode] = useState<TermMapMode>("follow");
   const [termMapId, setTermMapId] = useState<string | null>(null);
@@ -330,11 +346,14 @@ function Translate() {
         selectedCandidate.format !== undefined)) &&
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
-    status.data?.translation_provider.ready === true &&
+    (outputConflictPolicy === "skip" ||
+      status.data?.translation_provider.ready === true) &&
     !createJob.isSuccess &&
     !createBatchJobs.isSuccess &&
     !createJob.isPending &&
     !createBatchJobs.isPending;
+  const queuedJob =
+    createJob.data && !isSkippedJobResult(createJob.data) ? createJob.data : undefined;
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
@@ -348,7 +367,7 @@ function Translate() {
     setDynamicTerminologyEnabled(true);
     setSubtitleTerminologyFilterEnabled(true);
     setOutputSuffix(targetLanguage);
-    setOutputConflictPolicy("append-number");
+    setOutputConflictPolicy("skip");
     suffixEdited.current = false;
     createJob.reset();
     createBatchJobs.reset();
@@ -379,7 +398,7 @@ function Translate() {
                 setBatchSubtitleFilter("");
                 if (nextBatchMode) {
                   setOutputSuffix(targetLanguage);
-                  setOutputConflictPolicy("append-number");
+                  setOutputConflictPolicy("skip");
                   suffixEdited.current = false;
                 }
               }}
@@ -750,14 +769,21 @@ function Translate() {
         )}
       >
         {createJob.isSuccess ? (
-          <QueueSuccess
-            job={createJob.data}
-            onViewJob={() => {
-              if (createJob.data?.id)
-                navigate(`/jobs/${encodeURIComponent(createJob.data.id)}`);
-            }}
-            onTranslateAnother={resetTranslationWorkflow}
-          />
+          isSkippedJobResult(createJob.data) ? (
+            <SkipSuccess
+              result={createJob.data}
+              onTranslateAnother={resetTranslationWorkflow}
+            />
+          ) : (
+            <QueueSuccess
+              job={queuedJob}
+              onViewJob={() => {
+                if (queuedJob?.id)
+                  navigate(`/jobs/${encodeURIComponent(queuedJob.id)}`);
+              }}
+              onTranslateAnother={resetTranslationWorkflow}
+            />
+          )
         ) : createBatchJobs.isSuccess ? (
           <BatchQueueResults
             mediaPaths={
@@ -969,7 +995,7 @@ function QueueSuccess({
   onViewJob,
   onTranslateAnother,
 }: {
-  job: ReturnType<typeof useCreateJob>["data"];
+  job: Job | undefined;
   onViewJob: () => void;
   onTranslateAnother: () => void;
 }) {
@@ -1011,6 +1037,42 @@ function QueueSuccess({
   );
 }
 
+function SkipSuccess({
+  result,
+  onTranslateAnother,
+}: {
+  result: SkippedJobResult;
+  onTranslateAnother: () => void;
+}) {
+  return (
+    <section className="queue-success" aria-labelledby="skip-success-title">
+      <div className="queue-success-heading" role="status">
+        <CheckCircleIcon size={22} weight="fill" aria-hidden="true" />
+        <div>
+          <p className="eyebrow">Translation skipped</p>
+          <h2 id="skip-success-title">Output already exists</h2>
+          <p>{result.reason}. No Job was created.</p>
+        </div>
+      </div>
+      <dl className="queue-success-summary">
+        <div>
+          <dt>Media</dt>
+          <dd title={result.media_path}>{result.media_path}</dd>
+        </div>
+        <div>
+          <dt>Output</dt>
+          <dd title={result.output_path}>{result.output_path}</dd>
+        </div>
+      </dl>
+      <div className="queue-success-actions">
+        <Button type="button" variant="outline" onClick={onTranslateAnother}>
+          Translate another
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function BatchQueueResults({
   mediaPaths,
   results,
@@ -1022,8 +1084,11 @@ function BatchQueueResults({
   onViewJob: (jobId: string) => void;
   onTranslateAnother: () => void;
 }) {
-  const queuedCount = results.filter((result) => !isBatchError(result)).length;
-  const failedCount = results.length - queuedCount;
+  const queuedCount = results.filter(
+    (result) => !isBatchError(result) && !isBatchSkipped(result),
+  ).length;
+  const skippedCount = results.filter(isBatchSkipped).length;
+  const failedCount = results.filter(isBatchError).length;
 
   return (
     <section
@@ -1037,6 +1102,8 @@ function BatchQueueResults({
           <h2 id="batch-results-title">Batch results</h2>
           <p>
             {queuedCount} {queuedCount === 1 ? "Job" : "Jobs"} queued
+            {skippedCount > 0 &&
+              ` · ${skippedCount} ${skippedCount === 1 ? "item" : "items"} skipped`}
             {failedCount > 0 &&
               ` · ${failedCount} ${failedCount === 1 ? "error" : "errors"}`}
             .
@@ -1087,6 +1154,21 @@ function BatchResultRow({
     );
   }
   if (!isBatchError(result)) {
+    if (isBatchSkipped(result)) {
+      return (
+        <div
+          className="batch-result-row batch-result-skipped"
+          role="group"
+          aria-label={`${media} batch result`}
+        >
+          <div>
+            <strong>{media}</strong>
+            <span>Skipped: {result.reason}</span>
+            <small>Existing output: {result.output_path}</small>
+          </div>
+        </div>
+      );
+    }
     return (
       <div
         className="batch-result-row batch-result-success"

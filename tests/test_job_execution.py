@@ -29,6 +29,34 @@ class TranslatorFixture:
         return SRT
 
 
+def test_skip_if_existing_output_fails_before_translation_or_extraction(tmp_path: Path):
+    media = tmp_path / "Media.mkv"
+    media.write_bytes(b"media")
+    source = tmp_path / "Media.en.srt"
+    source.write_bytes(SRT)
+    output = tmp_path / "Media.zh-Hans.srt"
+    output.write_bytes(b"keep")
+    translator = TranslatorFixture()
+    extraction = embedded_extractor()
+
+    outcome = JobExecution(translator, OutputFixture(), extraction=extraction).execute(
+        JobExecutionInput(
+            subtitle_path=source,
+            target_language_code="zh-Hans",
+            output_path=output,
+            work_directory=tmp_path / "work",
+            skip_if_exists=True,
+        )
+    )
+
+    assert outcome.status == "Failed"
+    assert outcome.error is not None
+    assert outcome.error.error_code == "output_exists"
+    assert translator.calls == []
+    extraction.probe_subtitle_streams.assert_not_called()
+    assert output.read_bytes() == b"keep"
+
+
 class OutputFixture:
     def __init__(self) -> None:
         self.overwrite = False
