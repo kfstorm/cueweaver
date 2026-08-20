@@ -1127,7 +1127,7 @@ function SubtitleDiscovery({
         {!query.isFetching &&
           query.data &&
           candidates.length === 0 &&
-          query.data.unsupported_candidates.length === 0 && (
+          (candidateFilter || query.data.unsupported_candidates.length === 0) && (
             <EmptyMessage>
               {candidateFilter
                 ? "No subtitle candidates match this filter."
