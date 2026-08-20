@@ -46,6 +46,8 @@ import {
   useCreateJob,
   useJobs,
   useJobNotifications,
+  type BatchJobError,
+  type BatchJobResult,
   type TermMapMode,
 } from "./jobs";
 import { JobNotificationRegion, JobsPage } from "./job-history";
@@ -143,6 +145,51 @@ function PageHeader({ title, detail }: { title: string; detail: string }) {
       </div>
     </header>
   );
+}
+
+const isBatchError = (result: BatchJobResult): result is BatchJobError =>
+  "error_code" in result;
+
+function OutputConflictPolicy({
+  value,
+  onChange,
+}: {
+  value: "append-number" | "overwrite";
+  onChange: (value: "append-number" | "overwrite") => void;
+}) {
+  return (
+    <fieldset className="output-conflict-policy">
+      <legend>If the final name already exists</legend>
+      <label>
+        <input
+          type="radio"
+          name="output-conflict-policy"
+          value="append-number"
+          checked={value === "append-number"}
+          onChange={() => onChange("append-number")}
+        />
+        Append a number (recommended)
+      </label>
+      <label>
+        <input
+          type="radio"
+          name="output-conflict-policy"
+          value="overwrite"
+          checked={value === "overwrite"}
+          onChange={() => onChange("overwrite")}
+        />
+        Overwrite existing output
+      </label>
+    </fieldset>
+  );
+}
+
+function OutputSuffixError({ error }: { error: string | null }) {
+  return error ? (
+    <p className="form-error" role="alert">
+      {error}
+    </p>
+  ) : null;
 }
 
 function Translate() {
@@ -284,10 +331,16 @@ function Translate() {
               type="checkbox"
               checked={batchMode}
               onChange={(event) => {
-                setBatchMode(event.target.checked);
+                const nextBatchMode = event.target.checked;
+                setBatchMode(nextBatchMode);
                 setSelectedMedia(null);
                 setSelectedSubtitle(null);
                 setSelectedBatchMedia(new Set());
+                if (nextBatchMode) {
+                  setOutputSuffix(targetLanguage);
+                  setOutputConflictPolicy("append-number");
+                  suffixEdited.current = false;
+                }
               }}
             />
             Batch mode
@@ -515,72 +568,81 @@ function Translate() {
               </label>
             </div>
           </details>
-          {selectedMedia && selectedCandidate && outputParts && (
-            <div className="output-name-section">
-              <span id="output-name-label" className="field-label">
-                Output filename
-              </span>
-              <div
-                className="output-name-control"
-                role="group"
-                aria-labelledby="output-name-label"
-              >
-                <output
-                  aria-label="Media stem"
-                  className="form-control output-name-stem"
-                >
-                  {`${outputParts.stem}.`}
-                </output>
-                <Input
-                  aria-label="Subtitle suffix"
-                  aria-describedby="output-suffix-help"
-                  className="output-name-suffix"
-                  value={outputSuffix}
-                  onChange={(event) => {
-                    suffixEdited.current = true;
-                    setOutputSuffix(event.target.value);
-                  }}
-                />
-                <output
-                  aria-label="Source format extension"
-                  className="form-control output-name-extension"
-                >
-                  {`.${outputParts.format}`}
-                </output>
-              </div>
-              <p id="output-suffix-help" className="field-help" aria-live="polite">
-                Final name: <strong>{outputParts.name(outputSuffix)}</strong>
-              </p>
-              {outputSuffixError && (
-                <p className="form-error" role="alert">
-                  {outputSuffixError}
-                </p>
+          {batchMode
+            ? batchPaths.length > 0 && (
+                <div className="output-name-section">
+                  <span className="field-label">Shared output settings</span>
+                  <label htmlFor="batch-output-suffix" className="field-label">
+                    Subtitle suffix
+                  </label>
+                  <Input
+                    id="batch-output-suffix"
+                    aria-describedby="batch-output-suffix-help"
+                    value={outputSuffix}
+                    onChange={(event) => {
+                      suffixEdited.current = true;
+                      setOutputSuffix(event.target.value);
+                    }}
+                  />
+                  <p
+                    id="batch-output-suffix-help"
+                    className="field-help"
+                    aria-live="polite"
+                  >
+                    Applied to every queued translation.
+                  </p>
+                  <OutputSuffixError error={outputSuffixError} />
+                  <OutputConflictPolicy
+                    value={outputConflictPolicy}
+                    onChange={setOutputConflictPolicy}
+                  />
+                </div>
+              )
+            : selectedMedia &&
+              selectedCandidate &&
+              outputParts && (
+                <div className="output-name-section">
+                  <span id="output-name-label" className="field-label">
+                    Output filename
+                  </span>
+                  <div
+                    className="output-name-control"
+                    role="group"
+                    aria-labelledby="output-name-label"
+                  >
+                    <output
+                      aria-label="Media stem"
+                      className="form-control output-name-stem"
+                    >
+                      {`${outputParts.stem}.`}
+                    </output>
+                    <Input
+                      aria-label="Subtitle suffix"
+                      aria-describedby="output-suffix-help"
+                      className="output-name-suffix"
+                      value={outputSuffix}
+                      onChange={(event) => {
+                        suffixEdited.current = true;
+                        setOutputSuffix(event.target.value);
+                      }}
+                    />
+                    <output
+                      aria-label="Source format extension"
+                      className="form-control output-name-extension"
+                    >
+                      {`.${outputParts.format}`}
+                    </output>
+                  </div>
+                  <p id="output-suffix-help" className="field-help" aria-live="polite">
+                    Final name: <strong>{outputParts.name(outputSuffix)}</strong>
+                  </p>
+                  <OutputSuffixError error={outputSuffixError} />
+                  <OutputConflictPolicy
+                    value={outputConflictPolicy}
+                    onChange={setOutputConflictPolicy}
+                  />
+                </div>
               )}
-              <fieldset className="output-conflict-policy">
-                <legend>If the final name already exists</legend>
-                <label>
-                  <input
-                    type="radio"
-                    name="output-conflict-policy"
-                    value="append-number"
-                    checked={outputConflictPolicy === "append-number"}
-                    onChange={() => setOutputConflictPolicy("append-number")}
-                  />
-                  Append a number (recommended)
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="output-conflict-policy"
-                    value="overwrite"
-                    checked={outputConflictPolicy === "overwrite"}
-                    onChange={() => setOutputConflictPolicy("overwrite")}
-                  />
-                  Overwrite existing output
-                </label>
-              </fieldset>
-            </div>
-          )}
         </div>
       </section>
       <div
@@ -601,10 +663,10 @@ function Translate() {
         ) : createBatchJobs.isSuccess ? (
           <div role="status">
             <strong>
-              {createBatchJobs.data.filter((result) => "id" in result).length} Jobs
-              queued.
+              {createBatchJobs.data.filter((result) => !isBatchError(result)).length}{" "}
+              Jobs queued.
             </strong>
-            {createBatchJobs.data.some((result) => "error_code" in result) && (
+            {createBatchJobs.data.some(isBatchError) && (
               <p>Some items could not be queued.</p>
             )}
             <Button type="button" variant="outline" onClick={resetTranslationWorkflow}>

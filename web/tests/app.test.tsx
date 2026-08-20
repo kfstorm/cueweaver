@@ -300,6 +300,31 @@ async function selectExternalSubtitle() {
   return subtitle;
 }
 
+async function selectExternalSubtitleWithLanguage(language = "zh-Hans") {
+  await selectExternalSubtitle();
+  fireEvent.change(screen.getByLabelText("Target language code"), {
+    target: { value: language },
+  });
+}
+
+function mockBatchRequest(response: unknown) {
+  const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+  const defaultImplementation = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((input, init) =>
+    String(input) === "/api/jobs/batch" && init?.method === "POST"
+      ? Promise.resolve(jsonResponse(response))
+      : defaultImplementation(input, init),
+  );
+  return fetchMock;
+}
+
+async function submitBatch() {
+  fireEvent.change(await screen.findByLabelText("Target language code"), {
+    target: { value: "zh-Hans" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Queue selected translations" }));
+}
+
 function expectJobSubmissionBlocked() {
   expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   expect(globalThis.fetch).not.toHaveBeenCalledWith(
@@ -2010,21 +2035,19 @@ describe("product shell", () => {
       false,
       UNIQUE_BATCH_DISCOVERIES,
     );
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    const defaultImplementation = fetchMock.getMockImplementation()!;
-    fetchMock.mockImplementation((input, init) =>
-      String(input) === "/api/jobs/batch" && init?.method === "POST"
-        ? Promise.resolve(jsonResponse({ results: [] }))
-        : defaultImplementation(input, init),
-    );
+    const fetchMock = mockBatchRequest({
+      results: [
+        { id: "job-1" },
+        {
+          error_code: "term_map_not_found",
+          message: "Term map does not exist",
+          id: "missing",
+        },
+      ],
+    });
 
     await selectBatchMedia();
-    fireEvent.change(await screen.findByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Queue selected translations" }),
-    );
+    await submitBatch();
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -2047,6 +2070,59 @@ describe("product shell", () => {
         }),
       ),
     );
+    expect(screen.getByRole("status")).toHaveTextContent("1 Jobs queued.");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Some items could not be queued.",
+    );
+  });
+
+  it("configures shared output settings in batch mode", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+    const fetchMock = mockBatchRequest({ results: [] });
+
+    await selectBatchMedia();
+    const suffix = await screen.findByLabelText("Subtitle suffix");
+    fireEvent.change(suffix, { target: { value: "zh-Hans.forced" } });
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+    await submitBatch();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          body: expect.stringContaining('"output_suffix":"zh-Hans.forced"'),
+        }),
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/batch",
+      expect.objectContaining({
+        body: expect.stringContaining('"output_conflict_policy":"overwrite"'),
+      }),
+    );
+  });
+
+  it("resets single-file output settings when entering batch mode", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitleWithLanguage();
+    fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
+      target: { value: "single-only" },
+    });
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+    fireEvent.click(screen.getByLabelText("Batch mode"));
+    fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
+
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+    expect(screen.getByLabelText("Append a number (recommended)")).toBeChecked();
+    expect(screen.queryByText("single-only")).not.toBeInTheDocument();
   });
 
   it("queues an External subtitle with the target language", async () => {
@@ -2450,10 +2526,7 @@ describe("product shell", () => {
   it("blocks unsafe output suffixes before submission", async () => {
     renderRoute("/translate");
 
-    await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await selectExternalSubtitleWithLanguage();
     fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
       target: { value: "CON" },
     });
