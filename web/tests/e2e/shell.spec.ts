@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 import { jobRecord } from "./fixtures";
 
@@ -57,6 +57,73 @@ async function stubJobCreation(page: Page): Promise<Array<Record<string, unknown
     });
   });
   return submissions;
+}
+
+async function stubBatchTranslate(page: Page) {
+  await page.route("/api/media/browse", async (route) => {
+    const path = postedPath(route);
+    await fulfillJson(route, {
+      path,
+      entries:
+        path === ""
+          ? [
+              { kind: "media", name: "First.mkv", path: "First.mkv" },
+              { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+            ]
+          : [],
+    });
+  });
+  await page.route("/api/media/discover", async (route) => {
+    const path = postedPath(route);
+    await fulfillJson(route, {
+      path,
+      candidates: [
+        {
+          kind: "external",
+          path: path.replace(".mkv", ".en.srt"),
+          format: "srt",
+          tags: { language: "en", title: "English" },
+        },
+        ...(path === "First.mkv"
+          ? [
+              {
+                kind: "embedded",
+                stream_index: 3,
+                format: "ass",
+                tags: { language: "zhs", title: "Chinese" },
+              },
+            ]
+          : []),
+      ],
+      unsupported_candidates: [],
+    });
+  });
+  await page.route("/api/term-maps", (route) => fulfillJson(route, { term_maps: [] }));
+  await page.route("**/api/term-maps/directory**", (route) =>
+    fulfillJson(route, {
+      directory: "",
+      local: null,
+      effective: null,
+      source_directory: null,
+    }),
+  );
+}
+
+function postedPath(route: Route): string {
+  return (JSON.parse(route.request().postData() ?? "{}").path ?? "") as string;
+}
+
+function fulfillJson(route: Route, body: unknown) {
+  return route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+}
+
+async function stubBatchJobs(page: Page) {
+  await page.route("/api/jobs", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ active_jobs: [], history_jobs: [], next_cursor: null }),
+    }),
+  );
 }
 
 async function stubJobs(page: Page, jobs: Array<ReturnType<typeof jobRecord>>) {
@@ -318,6 +385,145 @@ test("Translate source and subtitle selection work with the keyboard", async ({
   await subtitle.focus();
   await subtitle.press("Enter");
   await expect(subtitle).toHaveAttribute("aria-pressed", "true");
+});
+
+test.describe("batch Translate workflow", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} supports keyboard selection, submission, and mixed results`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await stubProductStatus(page);
+      await stubBatchTranslate(page);
+      await stubBatchJobs(page);
+
+      const submissions: Array<Record<string, unknown>> = [];
+      await page.route("/api/jobs/batch", async (route) => {
+        submissions.push(
+          (await route.request().postDataJSON()) as Record<string, unknown>,
+        );
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              { id: "batch-job-1" },
+              {
+                error_code: "term_map_not_found",
+                message: "Term map does not exist",
+                field: "term_map_id",
+              },
+            ],
+          }),
+        });
+      });
+
+      await page.goto("/translate");
+      await page.getByLabel("Batch mode").press("Space");
+
+      const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
+      const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
+      await firstMedia.press("Enter");
+      await secondMedia.press("Enter");
+      await expect(firstMedia).toHaveAttribute("aria-pressed", "true");
+      await expect(secondMedia).toHaveAttribute("aria-pressed", "true");
+
+      await expect(page.locator(".subtitle-discovery")).toHaveCount(2);
+      await page.getByRole("button", { name: "Resolve candidates" }).click();
+      const firstExternalCandidate = page.getByRole("button", {
+        name: "Select external subtitle en / English (First.en.srt)",
+      });
+      const secondExternalCandidate = page.getByRole("button", {
+        name: "Select external subtitle en / English (Second.en.srt)",
+      });
+      await expect(firstExternalCandidate).toBeVisible();
+      await expect(secondExternalCandidate).toBeVisible();
+      const selectionResults = await new AxeBuilder({ page }).analyze();
+      expect(
+        selectionResults.violations,
+        `${viewport.name} batch selection violations`,
+      ).toEqual([]);
+
+      const candidateSearch = page.getByRole("searchbox", {
+        name: "Search subtitle candidates",
+      });
+      const uniqueButton = page.getByRole("button", { name: "Select unique" });
+      if (viewport.name === "mobile") {
+        for (const control of [
+          firstMedia,
+          secondMedia,
+          firstExternalCandidate,
+          secondExternalCandidate,
+          uniqueButton,
+          candidateSearch,
+        ]) {
+          expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+        }
+      }
+      await candidateSearch.fill("English");
+      await firstExternalCandidate.press("Enter");
+      await expect(firstExternalCandidate).toHaveAttribute("aria-pressed", "true");
+      const searchResults = await new AxeBuilder({ page }).analyze();
+      expect(
+        searchResults.violations,
+        `${viewport.name} candidate search violations`,
+      ).toEqual([]);
+
+      await page.getByLabel("Target language code").fill("zh-Hans");
+      const submitResults = await new AxeBuilder({ page }).analyze();
+      expect(
+        submitResults.violations,
+        `${viewport.name} batch submit violations`,
+      ).toEqual([]);
+      const queueButton = page.getByRole("button", {
+        name: "Queue selected translations",
+      });
+      if (viewport.name === "mobile") {
+        expect((await queueButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+      }
+      await queueButton.click();
+
+      await expect.poll(() => submissions).toHaveLength(1);
+      expect(submissions[0]).toMatchObject({
+        items: [
+          { media_path: "First.mkv", subtitle_path: "First.en.srt" },
+          { media_path: "Second.mkv", subtitle_path: "Second.en.srt" },
+        ],
+        target_language_code: "zh-Hans",
+      });
+      await expect(page.getByRole("heading", { name: "Batch results" })).toBeVisible();
+      await expect(page.getByRole("status")).toContainText("1 Job queued · 1 error.");
+      const resultList = page.getByLabel("Batch submission results");
+      await expect(
+        resultList.getByRole("group", { name: "First.mkv batch result" }),
+      ).toContainText("Queued");
+      const failedResult = resultList.getByRole("group", {
+        name: "Second.mkv batch result",
+      });
+      await expect(failedResult).toContainText("Term map does not exist");
+      await failedResult.getByText("Show error details").click();
+      await expect(failedResult).toContainText("term_map_not_found");
+      await expect(resultList.getByRole("button", { name: "View Job" })).toBeVisible();
+      if (viewport.name === "mobile") {
+        expect(
+          (await resultList.getByRole("button", { name: "View Job" }).boundingBox())
+            ?.height,
+        ).toBeGreaterThanOrEqual(44);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= window.innerWidth,
+          ),
+        ).toBe(true);
+      }
+      const resultChecks = await new AxeBuilder({ page }).analyze();
+      expect(
+        resultChecks.violations,
+        `${viewport.name} batch result violations`,
+      ).toEqual([]);
+    });
+  }
 });
 
 test("Translate manages the current Directory Term map binding", async ({ page }) => {
