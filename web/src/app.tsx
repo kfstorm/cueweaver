@@ -1197,12 +1197,16 @@ function SubtitleDiscovery({
   const candidates = filteredCandidates(query.data?.candidates ?? [], candidateFilter);
   const visibleCandidates =
     batchMode && candidates.length > 1 && !expanded ? [] : candidates;
+  const mediaName = mediaPath.split("/").pop() ?? mediaPath;
   return (
-    <section className="subtitle-discovery" aria-labelledby="subtitle-title">
+    <section
+      className="subtitle-discovery"
+      aria-label={`Subtitle selection for ${mediaName}`}
+    >
       <div className="subtitle-heading">
         <div>
-          <h3 id="subtitle-title">Choose a subtitle</h3>
-          <p>Sources discovered for {mediaPath.split("/").pop()}.</p>
+          <h3>Choose a subtitle</h3>
+          <p>Sources discovered for {mediaName}.</p>
         </div>
         <Button type="button" variant="outline" onClick={onClear}>
           Choose another Media

@@ -1885,6 +1885,14 @@ summary:focus-visible {
     min-height: 56px;
   }
 
+  .checkbox-field {
+    min-height: 44px;
+  }
+
+  .output-conflict-policy label {
+    min-height: 44px;
+  }
+
   .subtitle-heading {
     flex-direction: column;
     gap: 6px;
@@ -1912,6 +1920,14 @@ summary:focus-visible {
   .queue-success-actions button {
     width: 100%;
     min-height: 44px;
+  }
+
+  .batch-result-row {
+    flex-direction: column;
+  }
+
+  .batch-result-row button {
+    width: 100%;
   }
 
   .submission-bar button {
