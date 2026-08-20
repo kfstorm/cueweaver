@@ -72,8 +72,15 @@ def test_directory_term_map_supports_root_local_inherited_and_remove(tmp_path: P
 def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
     client = make_client(tmp_path)
     (tmp_path / "media" / "Series").mkdir(parents=True)
+    (tmp_path / "media" / "Other").mkdir()
     term_map = create_term_map(client)
     bind_series(client, term_map["id"])
+    assert (
+        directory_request(
+            client, "PUT", "Other", term_map_id=term_map["id"]
+        ).status_code
+        == 200
+    )
 
     restarted = make_client(tmp_path)
     assert (
@@ -94,6 +101,77 @@ def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
         "effective": None,
         "source_directory": None,
     }
+    assert directory_request(restarted, "GET", "Other").json()["effective"] is None
+    restarted_again = make_client(tmp_path)
+    assert restarted_again.get(f"/api/term-maps/{term_map['id']}").status_code == 400
+    assert (
+        directory_request(restarted_again, "GET", "Series").json()["effective"] is None
+    )
+
+
+def test_directory_binding_follows_term_map_rename(tmp_path: Path):
+    client = make_client(tmp_path)
+    (tmp_path / "media" / "Series").mkdir(parents=True)
+    term_map = create_term_map(client)
+    bind_series(client, term_map["id"])
+
+    renamed = client.patch(f"/api/term-maps/{term_map['id']}", json={"name": "People"})
+
+    assert renamed.status_code == 200
+    state = directory_request(client, "GET", "Series").json()
+    assert state["local"]["id"] == term_map["id"]
+    assert state["local"]["name"] == "People"
+    assert state["effective"]["name"] == "People"
+
+
+def test_stale_directory_binding_can_be_removed_without_recreating_directory(
+    tmp_path: Path,
+):
+    client = make_client(tmp_path)
+    directory = tmp_path / "media" / "Series"
+    directory.mkdir(parents=True)
+    term_map = create_term_map(client)
+    bind_series(client, term_map["id"])
+    directory.rename(tmp_path / "media" / "Other")
+
+    removed = directory_request(client, "DELETE", "Series")
+
+    assert removed.status_code == 200
+    assert removed.json()["local"] is None
+    assert directory_request(client, "GET", "Series").json()["effective"] is None
+
+
+def test_stale_directory_binding_becomes_effective_when_path_returns(tmp_path: Path):
+    client = make_client(tmp_path)
+    directory = tmp_path / "media" / "Series"
+    directory.mkdir(parents=True)
+    term_map = create_term_map(client)
+    bind_series(client, term_map["id"])
+    directory.rmdir()
+
+    missing = directory_request(client, "GET", "Series")
+    directory.mkdir()
+    returned = directory_request(client, "GET", "Series")
+
+    assert missing.status_code == 200
+    assert missing.json()["local"]["id"] == term_map["id"]
+    assert returned.json()["effective"]["id"] == term_map["id"]
+
+
+def test_unsafe_stale_directory_removal_does_not_change_safe_bindings(tmp_path: Path):
+    client = make_client(tmp_path)
+    (tmp_path / "media" / "Series").mkdir(parents=True)
+    term_map = create_term_map(client)
+    bind_series(client, term_map["id"])
+
+    rejected = directory_request(client, "DELETE", "../Series")
+
+    assert rejected.status_code == 400
+    assert rejected.json()["error_code"] == "invalid_media_path"
+    assert (
+        directory_request(client, "GET", "Series").json()["local"]["id"]
+        == term_map["id"]
+    )
 
 
 def test_directory_term_map_rejects_a_work_term_maps_symlink(tmp_path: Path):

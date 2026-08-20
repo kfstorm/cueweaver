@@ -185,7 +185,6 @@ class FileTermMapStore:
                 )
             bindings_before: dict[str, str] = {}
             journal_path: Path | None = None
-            index_committed = False
             if self._directory_bindings is not None:
                 bindings_before = self._directory_bindings.snapshot_bindings_locked()
                 journal_path = self._delete_journal_path(term_map_id)
@@ -200,16 +199,28 @@ class FileTermMapStore:
                 if self._directory_bindings is not None:
                     self._directory_bindings.remove_term_map_locked(term_map_id)
                 self._write_index([item for item in records if item.id != term_map_id])
-                index_committed = True
                 if journal_path is not None:
                     self._remove_delete_journal(journal_path)
             except ServiceError:
-                if self._directory_bindings is not None:
-                    self._directory_bindings.replace_bindings_locked(bindings_before)
-                if index_committed:
-                    self._write_index(records)
-                if journal_path is not None:
-                    self._remove_delete_journal(journal_path)
+                rollback_failed = False
+                try:
+                    if (
+                        self._directory_bindings is not None
+                        and self._directory_bindings.snapshot_bindings_locked()
+                        != bindings_before
+                    ):
+                        self._directory_bindings.replace_bindings_locked(
+                            bindings_before
+                        )
+                    # An atomic replace may already have succeeded when the
+                    # writer reports an error, so restore a changed index.
+                    if not self._index_matches(records):
+                        self._write_index(records)
+                except Exception:
+                    rollback_failed = True
+                if journal_path is not None and not rollback_failed:
+                    with suppress(ServiceError):
+                        self._remove_delete_journal(journal_path)
                 raise
             self._remove_content_file(record.content_file)
             return self._summary(record)
@@ -259,6 +270,13 @@ class FileTermMapStore:
 
     def _write_index(self, records: builtins.list[_TermMapRecord]) -> None:
         self._write_json(self._index_path, [item.to_json() for item in records])
+
+    def _index_matches(self, records: builtins.list[_TermMapRecord]) -> bool:
+        try:
+            payload = json.loads(self._index_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return bool(payload == [item.to_json() for item in records])
 
     def _remove_content_file(self, content_file: str | None) -> None:
         if not content_file:
