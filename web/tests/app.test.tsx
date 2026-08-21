@@ -143,6 +143,15 @@ async function selectBatchMedia() {
   fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
 }
 
+async function selectDirectoryTermMap(id: string, optionName: string) {
+  const directorySelect = await screen.findByRole("combobox", {
+    name: "Directory default",
+  });
+  await screen.findByRole("option", { name: optionName });
+  fireEvent.change(directorySelect, { target: { value: id } });
+  return directorySelect;
+}
+
 type JobFixture = { status: string; [key: string]: unknown };
 
 function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) {
@@ -166,6 +175,86 @@ async function expectEmbeddedSubtitlePrompt(language: string) {
 
 function emptyMediaResponse() {
   return jsonResponse({ path: "", entries: [] });
+}
+
+function singleExternalMediaResponse(input: string) {
+  if (input === "/api/media/browse") {
+    return jsonResponse({
+      path: "",
+      entries: [{ kind: "media", name: "Movie.mkv", path: "Movie.mkv" }],
+    });
+  }
+  if (input === "/api/media/discover") {
+    return jsonResponse({
+      path: "Movie.mkv",
+      candidates: [
+        {
+          kind: "external",
+          path: "Movie.en.srt",
+          format: "srt",
+          tags: { language: "en", title: "" },
+        },
+      ],
+      unsupported_candidates: [],
+    });
+  }
+  return null;
+}
+
+function createDirectoryMutationFetchMock(
+  termMaps: TermMapSummary[],
+  handlers: {
+    bind?: (
+      scenario: {
+        localTermMap: TermMapSummary | null;
+        bindCalls: number;
+        removeCalls: number;
+      },
+      state: () => Record<string, unknown>,
+    ) => unknown;
+    remove?: (
+      scenario: {
+        localTermMap: TermMapSummary | null;
+        bindCalls: number;
+        removeCalls: number;
+      },
+      state: () => Record<string, unknown>,
+    ) => unknown;
+  } = {},
+  initialLocalTermMap: TermMapSummary | null = termMaps[0] ?? null,
+) {
+  const scenario = {
+    localTermMap: initialLocalTermMap,
+    bindCalls: 0,
+    removeCalls: 0,
+  };
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") {
+        return jsonResponse({ term_maps: termMaps });
+      }
+      if (input.startsWith("/api/term-maps/directory")) {
+        const state = () => ({
+          directory: "",
+          local: scenario.localTermMap,
+          effective: scenario.localTermMap,
+          source_directory: scenario.localTermMap ? "" : null,
+        });
+        if (init?.method === "PUT") {
+          scenario.bindCalls += 1;
+          return handlers.bind?.(scenario, state) ?? jsonResponse(state());
+        }
+        if (init?.method === "DELETE") {
+          scenario.removeCalls += 1;
+          return handlers.remove?.(scenario, state) ?? jsonResponse(state());
+        }
+        return jsonResponse(state());
+      }
+      return singleExternalMediaResponse(input) ?? jobListResponse([]);
+    });
+  return { fetchMock, scenario };
 }
 
 function statusResponse(
@@ -381,7 +470,14 @@ async function selectExternalSubtitle() {
 
 async function selectExternalSubtitleWithLanguage(language = "zh-Hans") {
   await selectExternalSubtitle();
-  fireEvent.change(screen.getByLabelText("Target language code"), {
+  await enterCustomTargetLanguage(language);
+}
+
+async function enterCustomTargetLanguage(language: string) {
+  fireEvent.change(screen.getByLabelText("Common target language"), {
+    target: { value: "custom" },
+  });
+  fireEvent.change(await screen.findByLabelText("Target language code"), {
     target: { value: language },
   });
 }
@@ -398,9 +494,7 @@ function mockBatchRequest(response: unknown) {
 }
 
 async function submitBatch() {
-  fireEvent.change(await screen.findByLabelText("Target language code"), {
-    target: { value: "zh-Hans" },
-  });
+  await enterCustomTargetLanguage("zh-Hans");
   fireEvent.click(screen.getByRole("button", { name: "Queue selected translations" }));
 }
 
@@ -1711,7 +1805,7 @@ describe("product shell", () => {
       });
     renderTermMapsWithFetch(fetchMock);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Term maps unavailable");
+    expect(await screen.findByText("Term maps unavailable")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(
       await screen.findByRole("heading", { name: "No Term maps yet" }),
@@ -2409,9 +2503,7 @@ describe("product shell", () => {
 
     await selectBatchMedia();
     fireEvent.click(screen.getByRole("button", { name: "Select unique" }));
-    fireEvent.change(await screen.findByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     expect(
       await screen.findByRole("button", {
         name: "Select embedded subtitle stream 3 Metadata unavailable",
@@ -2669,9 +2761,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
 
     expect(screen.getByText("Movie.zh-Hans.srt")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -2728,12 +2818,69 @@ describe("product shell", () => {
     );
   });
 
+  it("starts new translations at an explicit language choice", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    const commonLanguage = screen.getByLabelText("Common target language");
+    expect(commonLanguage).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Choose a language" })).toBeDisabled();
+    expect(screen.queryByLabelText("Target language code")).not.toBeInTheDocument();
+
+    fireEvent.change(commonLanguage, { target: { value: "custom" } });
+
+    expect(screen.getByLabelText("Target language code")).toHaveValue("");
+  });
+
+  it("restores a remembered common language as its friendly choice", async () => {
+    window.localStorage.setItem("cueweaver.target-language", "zh-Hans");
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    expect(screen.getByLabelText("Common target language")).toHaveValue("zh-Hans");
+    expect(screen.queryByLabelText("Target language code")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+  });
+
+  it("restores a remembered custom language on the custom path", async () => {
+    window.localStorage.setItem("cueweaver.target-language", "x-custom");
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    expect(screen.getByLabelText("Common target language")).toHaveValue("custom");
+    expect(screen.getByLabelText("Target language code")).toHaveValue("x-custom");
+  });
+
+  it("explains the Directory default and Job-level Term map scopes", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    expect(
+      screen.getByRole("region", { name: "Directory default" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Applies to Media beneath the current directory unless a Job overrides or disables it.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Term map for this translation" }),
+    ).toHaveAttribute("aria-describedby", "term-map-policy-help");
+    expect(
+      screen.getByText(
+        "Follow the Directory default, explicitly use no Term map, or choose a specific Term map for this translation.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("announces queueing while Job creation is pending and after success", async () => {
     renderRoute("/translate");
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     let resolveCreate!: (value: unknown) => void;
     const createPending = new Promise((resolve) => {
       resolveCreate = resolve;
@@ -2820,9 +2967,7 @@ describe("product shell", () => {
     const job = queuedEmbeddedJob("queued-detail-1");
     renderRoute("/translate");
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     mockQueuedJobCreation(job);
 
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -2853,14 +2998,12 @@ describe("product shell", () => {
     );
     await selectExternalSubtitle();
     fireEvent.click(screen.getByText("Advanced settings"));
-    fireEvent.change(await screen.findByLabelText("Term map"), {
+    fireEvent.change(await screen.findByLabelText("Term map for this translation"), {
       target: { value: "map-1" },
     });
     fireEvent.click(screen.getByLabelText("Dynamic terminology"));
     fireEvent.click(screen.getByLabelText("Subtitle terminology filtering"));
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     mockQueuedJobCreation(job, [CHARACTERS_TERM_MAP]);
 
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -2868,7 +3011,7 @@ describe("product shell", () => {
     expect(
       screen.getByRole("button", { name: "Choose another Media" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Term map")).toHaveValue("map-1");
+    expect(screen.getByLabelText("Term map for this translation")).toHaveValue("map-1");
     expect(screen.getByLabelText("Dynamic terminology")).not.toBeChecked();
     expect(
       screen.queryByRole("button", { name: "Start translation" }),
@@ -2882,7 +3025,9 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: "Choose another Media" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Term map")).toHaveValue("__directory_default__");
+    expect(screen.getByLabelText("Term map for this translation")).toHaveValue(
+      "__directory_default__",
+    );
     expect(screen.getByLabelText("Dynamic terminology")).toBeChecked();
     expect(screen.getByLabelText("Subtitle terminology filtering")).toBeChecked();
   });
@@ -2891,9 +3036,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectEmbeddedSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await expectQueuedJob({
@@ -2956,32 +3099,197 @@ describe("product shell", () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") return pending;
+      const mediaResponse = singleExternalMediaResponse(input);
+      if (mediaResponse) return mediaResponse;
+      return jobListResponse([]);
+    });
+    renderWithFetch("/translate", fetchMock);
+    await selectExternalSubtitle();
+    expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Term map for this translation" }),
+    ).toBeDisabled();
+  });
+
+  it("recovers the Term map control after its list request fails", async () => {
+    let termMapCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") {
+        termMapCalls += 1;
+        return termMapCalls === 1
+          ? jsonResponse({ message: "Term maps unavailable" }, false)
+          : jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
+      }
+      const mediaResponse = singleExternalMediaResponse(input);
+      if (mediaResponse) return mediaResponse;
+      return jsonResponse({
+        directory: "",
+        local: null,
+        effective: null,
+        source_directory: null,
+      });
+    });
+    renderWithFetch("/translate", fetchMock);
+
+    await selectExternalSubtitle();
+    expect(await screen.findByText("Term maps unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(
+      await screen.findByRole("option", { name: "Characters" }),
+    ).toBeInTheDocument();
+    const termMapSelect = screen.getByRole("combobox", {
+      name: "Term map for this translation",
+    });
+    expect(termMapSelect).toBeEnabled();
+    expect(termMapSelect).toHaveFocus();
+  });
+
+  it("recovers the Directory default after its binding request fails", async () => {
+    let directoryCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+      if (input.startsWith("/api/term-maps/directory")) {
+        directoryCalls += 1;
+        return directoryCalls === 1
+          ? jsonResponse({ message: "Directory binding unavailable" }, false)
+          : jsonResponse({
+              directory: "",
+              local: null,
+              effective: null,
+              source_directory: null,
+            });
+      }
       if (input === "/api/media/browse") {
         return jsonResponse({
           path: "",
           entries: [{ kind: "media", name: "Movie.mkv", path: "Movie.mkv" }],
         });
       }
-      if (input === "/api/media/discover") {
-        return jsonResponse({
-          path: "Movie.mkv",
-          candidates: [
-            {
-              kind: "external",
-              path: "Movie.en.srt",
-              format: "srt",
-              tags: { language: "en", title: "" },
-            },
-          ],
-          unsupported_candidates: [],
-        });
-      }
-      return jobListResponse([]);
+      return jsonResponse({
+        path: "Movie.mkv",
+        candidates: [],
+        unsupported_candidates: [],
+      });
     });
     renderWithFetch("/translate", fetchMock);
-    await selectExternalSubtitle();
-    expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Term map" })).toBeDisabled();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Directory binding unavailable",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("No default")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Directory default" }),
+    ).toBeInTheDocument();
+  });
+
+  it("retries a failed Directory default binding and restores focus", async () => {
+    const { fetchMock, scenario } = createDirectoryMutationFetchMock(
+      [CHARACTERS_TERM_MAP],
+      {
+        bind: (current, state) =>
+          current.bindCalls === 1
+            ? jsonResponse({ message: "Directory binding failed" }, false)
+            : jsonResponse({
+                ...state(),
+                local: CHARACTERS_TERM_MAP,
+                effective: CHARACTERS_TERM_MAP,
+                source_directory: "",
+              }),
+      },
+      null,
+    );
+    renderWithFetch("/translate", fetchMock);
+
+    const directorySelect = await screen.findByRole("combobox", {
+      name: "Directory default",
+    });
+    await screen.findByRole("option", { name: "Characters" });
+    fireEvent.change(directorySelect, { target: { value: "map-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bind Term map" }));
+    await waitFor(() => expect(scenario.bindCalls).toBe(1));
+    expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(directorySelect).toHaveFocus());
+    expect(scenario.bindCalls).toBe(2);
+  });
+
+  it("clears a failed binding when removing the existing Directory default", async () => {
+    const settingsTermMap: TermMapSummary = {
+      id: "map-settings",
+      name: "Settings",
+      entry_count: 1,
+      updated_at: "2026-08-13T12:00:00Z",
+    };
+    const { fetchMock, scenario } = createDirectoryMutationFetchMock(
+      [CHARACTERS_TERM_MAP, settingsTermMap],
+      {
+        bind: () => jsonResponse({ message: "Directory binding failed" }, false),
+        remove: (current) => {
+          current.localTermMap = null;
+          return jsonResponse({
+            directory: "",
+            local: null,
+            effective: null,
+            source_directory: null,
+          });
+        },
+      },
+    );
+    renderWithFetch("/translate", fetchMock);
+
+    await selectDirectoryTermMap("map-settings", "Directory: Settings");
+    fireEvent.click(screen.getByRole("button", { name: "Replace local binding" }));
+    expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove local binding" }));
+    await waitFor(() => expect(scenario.removeCalls).toBe(1));
+    await waitFor(() => expect(screen.getByText("No default")).toBeInTheDocument());
+
+    expect(scenario.bindCalls).toBe(1);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("clears a failed removal when replacing the Directory default", async () => {
+    const settingsTermMap: TermMapSummary = {
+      id: "map-settings",
+      name: "Settings",
+      entry_count: 1,
+      updated_at: "2026-08-13T12:00:00Z",
+    };
+    const { fetchMock, scenario } = createDirectoryMutationFetchMock(
+      [CHARACTERS_TERM_MAP, settingsTermMap],
+      {
+        bind: (current, state) => {
+          current.localTermMap = settingsTermMap;
+          return jsonResponse(state());
+        },
+        remove: (current, state) =>
+          current.removeCalls === 1
+            ? jsonResponse({ message: "Directory removal failed" }, false)
+            : jsonResponse(state()),
+      },
+    );
+    renderWithFetch("/translate", fetchMock);
+
+    const directorySelect = await selectDirectoryTermMap(
+      "map-settings",
+      "Directory: Settings",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove local binding" }));
+    expect(await screen.findByText("Directory removal failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Replace local binding" }));
+    await waitFor(() => expect(scenario.bindCalls).toBe(1));
+    await waitFor(() => expect(directorySelect).toHaveValue("map-settings"));
+
+    expect(scenario.removeCalls).toBe(1);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {
@@ -2997,15 +3305,13 @@ describe("product shell", () => {
 
     await selectExternalSubtitle();
     fireEvent.click(screen.getByText("Advanced settings"));
-    const termMap = screen.getByLabelText("Term map");
+    const termMap = screen.getByLabelText("Term map for this translation");
     expect(
       screen.getByRole("option", { name: "No Term map for this Job" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Characters" })).toBeInTheDocument();
     fireEvent.change(termMap, { target: { value: "map-1" } });
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await expectQueuedJobRequest("zh-Hans", "map-1", true, true);
@@ -3023,10 +3329,10 @@ describe("product shell", () => {
     );
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Term map"), { target: { value: "" } });
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
+    fireEvent.change(screen.getByLabelText("Term map for this translation"), {
+      target: { value: "" },
     });
+    await enterCustomTargetLanguage("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await waitFor(() =>
@@ -3057,7 +3363,7 @@ describe("product shell", () => {
     );
 
     await screen.findByRole("option", { name: "Characters" });
-    const termMap = screen.getByLabelText("Term map");
+    const termMap = screen.getByLabelText("Term map for this translation");
     await waitFor(() => expect(termMap).toBeEnabled());
     fireEvent.change(termMap, {
       target: { value: "map-1" },
@@ -3066,7 +3372,9 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open Series" }));
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Term map")).toHaveValue("__directory_default__"),
+      expect(screen.getByLabelText("Term map for this translation")).toHaveValue(
+        "__directory_default__",
+      ),
     );
   });
 
@@ -3084,7 +3392,7 @@ describe("product shell", () => {
 
     fireEvent.click(screen.getByText("Advanced settings"));
     await screen.findByRole("option", { name: "Characters" });
-    const termMap = screen.getByLabelText("Term map");
+    const termMap = screen.getByLabelText("Term map for this translation");
     fireEvent.change(termMap, { target: { value: "map-1" } });
     expect(termMap).toHaveValue("map-1");
 
@@ -3098,9 +3406,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
     expect(
       screen.getByText(
@@ -3153,9 +3459,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "x-custom" },
-    });
+    await enterCustomTargetLanguage("x-custom");
     fireEvent.click(screen.getByText("Advanced settings"));
     fireEvent.click(screen.getByLabelText("Dynamic terminology"));
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -3192,9 +3496,7 @@ describe("product shell", () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));

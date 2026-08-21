@@ -40,6 +40,25 @@ async function stubProductStatus(page: Page, providerReady = true) {
   );
 }
 
+async function stubTermMapRoutes(
+  page: Page,
+  termMaps: unknown[],
+  directoryState: Record<string, unknown>,
+) {
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: termMaps }),
+    }),
+  );
+  await page.route("**/api/term-maps/directory**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(directoryState),
+    }),
+  );
+}
+
 async function stubJobCreation(page: Page): Promise<Array<Record<string, unknown>>> {
   const submissions: Array<Record<string, unknown>> = [];
   await page.route("**/api/jobs", async (route) => {
@@ -299,7 +318,7 @@ async function startRealTranslation(
   await page.goto("/translate");
   await page.getByRole("button", { name: "Select Example movie" }).click();
   await page.getByRole("button", { name: subtitleName }).click();
-  await page.getByLabel("Target language code").fill(targetLanguage);
+  await fillCustomTargetLanguage(page, targetLanguage);
   await beforeSubmit?.(page);
 
   const requestPromise = page.waitForRequest(
@@ -307,6 +326,11 @@ async function startRealTranslation(
   );
   await page.getByRole("button", { name: "Start translation" }).click();
   return requestPromise;
+}
+
+async function fillCustomTargetLanguage(page: Page, language: string) {
+  await page.getByLabel("Common target language").selectOption("custom");
+  await page.getByLabel("Target language code").fill(language);
 }
 
 test("desktop shell renders every product route", async ({ page }) => {
@@ -547,7 +571,7 @@ test.describe("batch Translate workflow", () => {
         `${viewport.name} candidate search violations`,
       ).toEqual([]);
 
-      await page.getByLabel("Target language code").fill("zh-Hans");
+      await fillCustomTargetLanguage(page, "zh-Hans");
       const submitResults = await new AxeBuilder({ page }).analyze();
       expect(
         submitResults.violations,
@@ -625,7 +649,7 @@ test("batch Translate creates independent Jobs in request order through the real
     .nth(1)
     .getByRole("button", { name: /Select external subtitle/ })
     .click();
-  await page.getByLabel("Target language code").fill(targetLanguage);
+  await fillCustomTargetLanguage(page, targetLanguage);
 
   const responsePromise = page.waitForResponse(
     (response) =>
@@ -667,7 +691,7 @@ test("batch Translate creates independent Jobs in request order through the real
   );
 });
 
-test("Translate manages the current Directory Term map binding", async ({ page }) => {
+test("Translate manages the current Directory default binding", async ({ page }) => {
   const termMap = {
     id: "map-directory",
     name: "Series terms",
@@ -767,7 +791,7 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   const expectEffectiveTermMap = async (name: string) => {
     await expect(
       page
-        .getByRole("region", { name: "Directory Term map" })
+        .getByRole("region", { name: "Directory default" })
         .locator(".directory-term-map-state dd")
         .filter({ hasText: name })
         .first(),
@@ -778,7 +802,7 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await page.getByRole("button", { name: "Open Series" }).click();
   await expect(page.getByText("Effective Term map")).toBeVisible();
   await page
-    .getByRole("combobox", { name: "Directory Term map" })
+    .getByRole("combobox", { name: "Directory default" })
     .selectOption(termMap.id);
   await page.getByRole("button", { name: "Bind Term map" }).click();
   await expectEffectiveTermMap("Series terms");
@@ -787,14 +811,15 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   ).toBeVisible();
   await page.getByRole("button", { name: "Open Season 1" }).click();
   await expectEffectiveTermMap("Series terms");
+  await expect(page.getByText("Inherited from Series")).toBeVisible();
   await page
-    .getByRole("combobox", { name: "Directory Term map" })
+    .getByRole("combobox", { name: "Directory default" })
     .selectOption(childTermMap.id);
   await page.getByRole("button", { name: "Bind Term map" }).click();
   await expectEffectiveTermMap("Season terms");
   await page.getByRole("button", { name: "alias", exact: true }).click();
   await page
-    .getByRole("combobox", { name: "Directory Term map" })
+    .getByRole("combobox", { name: "Directory default" })
     .selectOption(replacementTermMap.id);
   await page.getByRole("button", { name: "Replace local binding" }).click();
   await expectEffectiveTermMap("Replacement terms");
@@ -803,6 +828,44 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await page.getByRole("button", { name: "alias", exact: true }).click();
   await page.getByRole("button", { name: "Remove local binding" }).click();
   await expect(page.getByText("No default")).toBeVisible();
+});
+
+test("Translate Term map controls are keyboard-operable", async ({ page }) => {
+  const termMap = {
+    id: "map-keyboard",
+    name: "Keyboard terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  await stubTermMapRoutes(page, [termMap], {
+    directory: "",
+    local: null,
+    effective: null,
+    source_directory: null,
+  });
+
+  await page.goto("/translate");
+  const directoryDefault = page.getByRole("combobox", { name: "Directory default" });
+  await expect(directoryDefault).toBeEnabled();
+  await directoryDefault.focus();
+  await directoryDefault.press("ArrowDown");
+  await directoryDefault.press("Enter");
+  await expect(directoryDefault).toHaveValue(termMap.id);
+
+  await page.getByRole("button", { name: "Select Example movie" }).click();
+  await page
+    .getByRole("button", {
+      name: /Select external subtitle en \(Example\.en\.srt\)/,
+    })
+    .click();
+  const jobTermMap = page.getByRole("combobox", {
+    name: "Term map for this translation",
+  });
+  await jobTermMap.focus();
+  await jobTermMap.press("ArrowDown");
+  await jobTermMap.press("ArrowDown");
+  await jobTermMap.press("Enter");
+  await expect(jobTermMap).toHaveValue(termMap.id);
 });
 
 test("Translate submits the server-authoritative directory default", async ({
@@ -815,23 +878,12 @@ test("Translate submits the server-authoritative directory default", async ({
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
-  await page.route("/api/term-maps", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ term_maps: [defaultTermMap] }),
-    }),
-  );
-  await page.route("**/api/term-maps/directory**", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        directory: "",
-        local: null,
-        effective: defaultTermMap,
-        source_directory: "",
-      }),
-    }),
-  );
+  await stubTermMapRoutes(page, [defaultTermMap], {
+    directory: "",
+    local: null,
+    effective: defaultTermMap,
+    source_directory: "",
+  });
   const submissions = await stubJobCreation(page);
 
   await page.goto("/translate");
@@ -841,7 +893,7 @@ test("Translate submits the server-authoritative directory default", async ({
       name: /Select external subtitle en \(Example\.en\.srt\)/,
     })
     .click();
-  await page.getByLabel("Target language code").fill("zh-Hans");
+  await fillCustomTargetLanguage(page, "zh-Hans");
   await expect(page.locator("#term-map-select")).toHaveValue("__directory_default__");
   await expect(page.locator("#term-map-select")).toContainText("Series terms");
   await page.getByRole("button", { name: "Start translation" }).click();
@@ -863,23 +915,12 @@ test("Translate keeps one-off Term map choices scoped to each submission", async
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
-  await page.route("/api/term-maps", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ term_maps: [termMap] }),
-    }),
-  );
-  await page.route("**/api/term-maps/directory**", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        directory: "",
-        local: null,
-        effective: termMap,
-        source_directory: "",
-      }),
-    }),
-  );
+  await stubTermMapRoutes(page, [termMap], {
+    directory: "",
+    local: null,
+    effective: termMap,
+    source_directory: "",
+  });
   const submissions = await stubJobCreation(page);
 
   const submit = async (termMapValue: string) => {
@@ -889,12 +930,7 @@ test("Translate keeps one-off Term map choices scoped to each submission", async
         name: /Select external subtitle en \(Example\.en\.srt\)/,
       })
       .click();
-    const targetInput = page.getByLabel("Target language code");
-    if (await targetInput.count()) {
-      await targetInput.fill("zh-Hans");
-    } else {
-      await page.getByLabel("Common target language").selectOption("zh-Hans");
-    }
+    await fillCustomTargetLanguage(page, "zh-Hans");
     await page.locator("#term-map-select").selectOption(termMapValue);
     const expectedSubmissionCount = submissions.length + 1;
     await page.getByRole("button", { name: "Start translation" }).click();
@@ -984,7 +1020,7 @@ test("Translate clears a one-off Term map choice when changing directories", asy
   await page
     .getByRole("button", { name: "Select external subtitle en (Example.en.srt)" })
     .click();
-  await page.getByLabel("Target language code").fill("zh-Hans");
+  await fillCustomTargetLanguage(page, "zh-Hans");
   await page.locator("#term-map-select").selectOption(termMap.id);
   await expect(page.locator("#term-map-select")).toHaveValue(termMap.id);
 
@@ -996,12 +1032,7 @@ test("Translate clears a one-off Term map choice when changing directories", asy
   await page
     .getByRole("button", { name: "Select external subtitle en (Other.en.srt)" })
     .click();
-  const targetLanguage = page.getByLabel("Target language code");
-  if (await targetLanguage.count()) {
-    await targetLanguage.fill("zh-Hans");
-  } else {
-    await page.getByLabel("Common target language").selectOption("zh-Hans");
-  }
+  await fillCustomTargetLanguage(page, "zh-Hans");
   await page.getByRole("button", { name: "Start translation" }).click();
   await expect.poll(() => submissions).toHaveLength(1);
   expect(submissions[0]).toMatchObject({
@@ -1445,7 +1476,7 @@ test.describe("subtitle submission", () => {
         await page.getByRole("button", { name: "Select Example.mkv" }).click();
         await page.getByRole("button", { name: source.subtitleName }).click();
         await expect(page.locator("#common-target-language option")).toHaveCount(31);
-        await page.getByLabel("Target language code").fill("zh-Hans");
+        await fillCustomTargetLanguage(page, "zh-Hans");
         await expect(page.getByLabel("Subtitle suffix")).toHaveValue("zh-Hans");
         await expect(page.locator("#output-suffix-help")).toHaveText(
           "Output filename: Example.zh-Hans.srt",
@@ -1586,7 +1617,7 @@ test.describe("real translation workflow", () => {
 
     await page.getByRole("button", { name: "Select Example movie" }).click();
     await page.getByRole("button", { name: /Select external subtitle en/ }).click();
-    await page.getByLabel("Target language code").fill("x-failed");
+    await fillCustomTargetLanguage(page, "x-failed");
     await page.getByRole("button", { name: "Start translation" }).click();
 
     await expect(page.getByRole("alert")).toContainText(

@@ -291,6 +291,17 @@ a {
   line-height: 1.5;
 }
 
+.field-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field-recovery .form-error {
+  margin: 0;
+}
+
 .step-content > label + .custom-language-field {
   display: block;
   margin-top: 12px;
