@@ -93,17 +93,13 @@ export function JobsPage() {
   const selected = allJobs.find((job) => job.id === jobId) ?? null;
   const detail = useJob(jobId ?? null, jobId !== undefined);
   const displayedJob = detail.data ?? selected;
-  const completedCount =
-    jobs.data?.completed_count ??
-    historyJobs.filter((job) => job.status === "Completed").length;
+  const completedCount = jobs.data?.completed_count ?? 0;
   const matchingCount = jobs.data?.matching_count ?? historyJobs.length;
-  const completedCountKnown =
-    jobs.data?.completed_count !== undefined || !jobs.hasNextPage;
-  const canClearCompleted =
-    completedCount > 0 || (jobs.hasNextPage && historyJobs.length > 0);
+  const completedCountKnown = jobs.data?.completed_count !== undefined;
+  const canClearCompleted = completedCount > 0;
   const clearCompletedLabel = completedCountKnown
-    ? `Clear Completed (${completedCount})`
-    : "Clear Completed";
+    ? `Clear completed history (${completedCount})`
+    : "Clear completed history";
   const recordHealth = productStatus.data?.job_records;
   const recordAttention =
     (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
@@ -150,7 +146,6 @@ export function JobsPage() {
         <section className="job-list-panel" aria-labelledby="job-list-title">
           <div className="section-heading job-list-heading">
             <div>
-              <p className="eyebrow">History</p>
               <h2 id="job-list-title" ref={listTitleRef} tabIndex={-1}>
                 Job history
               </h2>
@@ -197,10 +192,15 @@ export function JobsPage() {
                 variant="outline"
                 type="button"
                 disabled={!canClearCompleted || clearCompleted.isPending}
+                aria-describedby="clear-completed-scope"
                 onClick={clearCompletedJobs}
               >
                 {clearCompleted.isPending ? "Clearing..." : clearCompletedLabel}
               </Button>
+              <span id="clear-completed-scope" className="sr-only">
+                Global action: removes all completed Job history regardless of the
+                current filters.
+              </span>
             </div>
           </div>
           {clearCompleted.isError && (
@@ -486,9 +486,6 @@ function JobDetail({
           <h2 id="job-detail-title" ref={titleRef} tabIndex={-1}>
             {mediaBasename(job.request.media_path)}
           </h2>
-          <p>
-            {sourceSummary(job)} to {job.request.target_language_code}
-          </p>
         </div>
         <div className="job-detail-context">
           <JobStatus status={job.status} />

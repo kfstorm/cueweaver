@@ -30,21 +30,29 @@ async function stubMedia(page: Page) {
   );
 }
 
-async function stubJobs(page: Page, historyJobs = [jobRecord("density-job")]) {
-  const job = jobRecord("density-job");
-  await page.route("**/api/jobs**", (route) =>
-    route.fulfill({
+async function stubJobs(
+  page: Page,
+  historyJobs = [jobRecord("density-job")],
+  detailJob = historyJobs[0] ?? jobRecord("density-job"),
+) {
+  await page.route("**/api/jobs**", async (route) => {
+    if (new URL(route.request().url()).pathname !== "/api/jobs") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         active_jobs: [],
         history_jobs: historyJobs,
         next_cursor: null,
+        matching_count: historyJobs.length,
         completed_count: historyJobs.filter((job) => job.status === "Completed").length,
       }),
-    }),
-  );
-  await page.route("**/api/jobs/density-job*", (route) =>
-    route.fulfill({ contentType: "application/json", body: JSON.stringify(job) }),
+    });
+  });
+  await page.route(`**/api/jobs/${historyJobs[0]?.id ?? "density-job"}*`, (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(detailJob) }),
   );
 }
 
@@ -196,12 +204,30 @@ for (const viewport of viewports) {
   }) => {
     await page.setViewportSize(viewport);
     await stubStatus(page);
-    await stubJobs(page);
+    const longJobId = `density-${"x".repeat(80)}`;
+    await stubJobs(page, [jobRecord("density-job")], jobRecord(longJobId));
     await page.goto("/jobs");
-    const clearHistory = page.getByRole("button", { name: /Clear Completed/ });
-    await clearHistory.focus();
-    await expect(clearHistory).toBeFocused();
-    await page.getByRole("button", { name: "Example.mkv" }).click();
+    const tabStops: string[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      await page.keyboard.press("Tab");
+      const tabStop = await page.evaluate(() => {
+        const active = document.activeElement;
+        if (!active) return "";
+        const label = active.closest("label")?.firstChild?.textContent?.trim();
+        return (
+          label || active.textContent?.trim() || active.getAttribute("aria-label") || ""
+        );
+      });
+      tabStops.push(tabStop);
+      if (tabStop.startsWith("Clear completed history")) break;
+    }
+    expect(tabStops.some((stop) => stop.startsWith("Search Jobs"))).toBe(true);
+    expect(tabStops.some((stop) => stop === "Status")).toBe(true);
+    expect(tabStops.some((stop) => stop.startsWith("Clear completed history"))).toBe(
+      true,
+    );
+    await page.goto("/jobs");
+    await page.getByRole("button", { name: /Example\.mkv/ }).click();
     await expect(page.getByRole("heading", { name: "Example.mkv" })).toBeVisible();
 
     const identityBoxes = await page
@@ -215,19 +241,36 @@ for (const viewport of viewports) {
     expect(
       identityBoxes.every(({ left, right }) => left >= 0 && right <= viewport.width),
     ).toBe(true);
-    const jobId = page.locator(".job-id-control code");
+    const [statusBox, jobIdBox] = identityBoxes;
     expect(
-      await jobId.evaluate((element) => getComputedStyle(element).overflowWrap),
-    ).toBe("anywhere");
-    await page.getByRole("button", { name: "Copy Job ID" }).focus();
-    expect(await page.evaluate(() => document.activeElement?.textContent)).toContain(
-      "Copy Job ID",
-    );
-    for (const name of ["Back to Jobs", "Copy Job ID", "Delete Job"]) {
-      const control = page.getByRole("button", { name });
-      await control.focus();
-      await expect(control).toBeFocused();
+      statusBox.right <= jobIdBox.left ||
+        jobIdBox.right <= statusBox.left ||
+        statusBox.bottom <= jobIdBox.top ||
+        jobIdBox.bottom <= statusBox.top,
+    ).toBe(true);
+    const jobId = page.locator(".job-id-control code");
+    const jobIdValueBox = await jobId.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+    });
+    expect(jobIdValueBox.left).toBeGreaterThanOrEqual(0);
+    expect(jobIdValueBox.right).toBeLessThanOrEqual(viewport.width);
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByRole("button", { name: "Back to Jobs" })).toBeFocused();
+    const detailTabStops = ["Back to Jobs"];
+    for (let index = 0; index < 20; index += 1) {
+      await page.keyboard.press("Tab");
+      const tabStop = await page.evaluate(
+        () => document.activeElement?.textContent?.trim() ?? "",
+      );
+      detailTabStops.push(tabStop);
+      if (tabStop === "Delete Job") break;
     }
+    expect(detailTabStops).toEqual(
+      expect.arrayContaining(["Back to Jobs", "Copy Job ID", "Delete Job"]),
+    );
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByRole("button", { name: "Copy Job ID" })).toBeFocused();
   });
 
   test(`${viewport.name} Jobs and Term maps retain visible empty-state footprints`, async ({
