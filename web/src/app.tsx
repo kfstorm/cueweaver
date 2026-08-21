@@ -238,6 +238,7 @@ function Translate() {
   const [expandedBatchMedia, setExpandedBatchMedia] = useState<Set<string>>(
     () => new Set(),
   );
+  const [batchBrowserExpanded, setBatchBrowserExpanded] = useState(true);
   const [batchSubtitleFilter, setBatchSubtitleFilter] = useState("");
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
@@ -378,6 +379,7 @@ function Translate() {
     setSelectedBatchMedia(new Set());
     setBatchSubtitleSelections(new Map());
     setExpandedBatchMedia(new Set());
+    setBatchBrowserExpanded(true);
     setBatchSubtitleFilter("");
     setBatchMode(false);
     setTermMapMode("follow");
@@ -413,6 +415,7 @@ function Translate() {
                 setSelectedBatchMedia(new Set());
                 setBatchSubtitleSelections(new Map());
                 setExpandedBatchMedia(new Set());
+                setBatchBrowserExpanded(true);
                 setBatchSubtitleFilter("");
                 if (nextBatchMode) {
                   setOutputSuffix(targetLanguage);
@@ -442,6 +445,7 @@ function Translate() {
               selectedMedia={selectedMedia}
               selectedMediaPaths={selectedBatchMedia}
               batchMode={batchMode}
+              collapseUnselectedBatch={!batchBrowserExpanded}
               onMediaSelect={(path) => {
                 if (batchMode) {
                   setSelectedBatchMedia((current) => {
@@ -450,6 +454,7 @@ function Translate() {
                     else next.add(path);
                     return next;
                   });
+                  setBatchBrowserExpanded(false);
                 } else {
                   clearDiscovery(selectedMedia);
                   setSelectedMedia(path);
@@ -462,6 +467,15 @@ function Translate() {
             <div className="discovery-stack">
               {batchMode && (
                 <div className="batch-subtitle-controls">
+                  {batchPaths.length > 0 && !batchBrowserExpanded && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setBatchBrowserExpanded(true)}
+                    >
+                      Select another Media
+                    </Button>
+                  )}
                   <label htmlFor="batch-subtitle-filter">
                     Search subtitle candidates
                     <Input
@@ -1533,6 +1547,7 @@ function MediaBrowser({
   selectedMedia,
   selectedMediaPaths,
   batchMode,
+  collapseUnselectedBatch,
   onMediaSelect,
   mediaButtonRefs,
   query,
@@ -1544,6 +1559,7 @@ function MediaBrowser({
   selectedMedia: string | null;
   selectedMediaPaths: Set<string>;
   batchMode: boolean;
+  collapseUnselectedBatch: boolean;
   onMediaSelect: (path: string) => void;
   mediaButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   query: ReturnType<typeof useMediaDirectory>;
@@ -1630,6 +1646,7 @@ function MediaBrowser({
                 : undefined
             }
             collapsed={
+              collapseUnselectedBatch &&
               selectionActive &&
               entry.kind === "media" &&
               (batchMode

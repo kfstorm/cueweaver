@@ -403,10 +403,10 @@ test.describe("responsive Media and Discovery layout", () => {
       await stubBatchJobs(page);
       await page.goto("/translate");
 
-      const media = page.getByRole("button", { name: "Select Example movie" });
+      const media = page.getByRole("button", { name: "Select First.mkv" });
       await media.click();
       await expect(
-        page.getByRole("region", { name: "Subtitle selection for Example movie" }),
+        page.getByRole("region", { name: "Subtitle selection for First.mkv" }),
       ).toBeVisible();
       await expect(
         page.getByRole("button", { name: "Choose another Media" }),
@@ -417,7 +417,7 @@ test.describe("responsive Media and Discovery layout", () => {
           .getByRole("region", { name: "Media browser" })
           .boundingBox();
         const discoveryBox = await page
-          .getByRole("region", { name: "Subtitle selection for Example movie" })
+          .getByRole("region", { name: "Subtitle selection for First.mkv" })
           .boundingBox();
         expect(browserBox?.x).toBeLessThan(discoveryBox?.x ?? 0);
         expect((browserBox?.x ?? 0) + (browserBox?.width ?? 0)).toBeLessThan(
@@ -479,6 +479,7 @@ test.describe("batch Translate workflow", () => {
       const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
       const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
       await firstMedia.press("Enter");
+      await page.getByRole("button", { name: "Select another Media" }).click();
       await secondMedia.press("Enter");
       await expect(firstMedia).toHaveAttribute("aria-pressed", "true");
       await expect(secondMedia).toHaveAttribute("aria-pressed", "true");
