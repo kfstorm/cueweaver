@@ -1058,6 +1058,12 @@ a {
   min-height: 36px;
 }
 
+.clear-completed-scope {
+  color: var(--text-muted);
+  font-size: var(--font-help);
+  line-height: 1.4;
+}
+
 .job-list-panel > section {
   margin-top: var(--space-5);
 }
