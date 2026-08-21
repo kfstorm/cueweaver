@@ -18,6 +18,7 @@ import {
   useState,
   type DragEvent,
   type FormEvent,
+  type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -259,13 +260,22 @@ function Translate() {
   const [directoryTermMapSelection, setDirectoryTermMapSelection] = useState<
     string | null
   >(null);
+  const directorySelectRef = useRef<HTMLSelectElement>(null);
   const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useState(true);
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
     useState(true);
+  const termMapSelectRef = useRef<HTMLSelectElement>(null);
+  const focusTermMapAfterRetry = useRef(false);
   const termMaps = useTermMaps();
   const directoryTermMap = useDirectoryTermMap(directory);
   const bindDirectoryTermMap = useBindDirectoryTermMap();
   const removeDirectoryTermMap = useRemoveDirectoryTermMap();
+  useEffect(() => {
+    if (focusTermMapAfterRetry.current && termMaps.isSuccess) {
+      focusTermMapAfterRetry.current = false;
+      termMapSelectRef.current?.focus();
+    }
+  }, [termMaps.isSuccess]);
   const selectedDirectoryTermMapId =
     directoryTermMapSelection ?? directoryTermMap.data?.local?.id ?? "";
   const selectedTermMapId =
@@ -541,17 +551,48 @@ function Translate() {
             directory={directory}
             termMaps={termMaps.data?.term_maps ?? []}
             query={directoryTermMap}
+            selectRef={directorySelectRef}
             selectedId={selectedDirectoryTermMapId}
-            onSelectedIdChange={setDirectoryTermMapSelection}
+            onSelectedIdChange={(value) => {
+              bindDirectoryTermMap.reset();
+              removeDirectoryTermMap.reset();
+              setDirectoryTermMapSelection(value);
+            }}
             onBind={() => {
               if (selectedDirectoryTermMapId) {
-                bindDirectoryTermMap.mutate({
-                  path: directory,
-                  termMapId: selectedDirectoryTermMapId,
+                bindDirectoryTermMap.mutate(
+                  {
+                    path: directory,
+                    termMapId: selectedDirectoryTermMapId,
+                  },
+                  {
+                    onSuccess: () => directorySelectRef.current?.focus(),
+                  },
+                );
+              }
+            }}
+            onRemove={() =>
+              removeDirectoryTermMap.mutate(directory, {
+                onSuccess: () => directorySelectRef.current?.focus(),
+              })
+            }
+            onRetry={() => {
+              if (bindDirectoryTermMap.error && selectedDirectoryTermMapId) {
+                bindDirectoryTermMap.mutate(
+                  {
+                    path: directory,
+                    termMapId: selectedDirectoryTermMapId,
+                  },
+                  {
+                    onSuccess: () => directorySelectRef.current?.focus(),
+                  },
+                );
+              } else if (removeDirectoryTermMap.error) {
+                removeDirectoryTermMap.mutate(directory, {
+                  onSuccess: () => directorySelectRef.current?.focus(),
                 });
               }
             }}
-            onRemove={() => removeDirectoryTermMap.mutate(directory)}
             isBinding={bindDirectoryTermMap.isPending}
             isRemoving={removeDirectoryTermMap.isPending}
             error={
@@ -626,6 +667,7 @@ function Translate() {
             <label htmlFor="term-map-select">Term map for this translation</label>
             <Select
               id="term-map-select"
+              ref={termMapSelectRef}
               aria-label="Term map for this translation"
               aria-describedby="term-map-policy-help"
               value={
@@ -679,7 +721,10 @@ function Translate() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => void termMaps.refetch()}
+                  onClick={() => {
+                    focusTermMapAfterRetry.current = true;
+                    void termMaps.refetch();
+                  }}
                 >
                   Try again
                 </Button>
@@ -890,10 +935,12 @@ function DirectoryTermMapPanel({
   directory,
   termMaps,
   query,
+  selectRef,
   selectedId,
   onSelectedIdChange,
   onBind,
   onRemove,
+  onRetry,
   isBinding,
   isRemoving,
   error,
@@ -901,16 +948,25 @@ function DirectoryTermMapPanel({
   directory: string;
   termMaps: Array<{ id: string; name: string }>;
   query: ReturnType<typeof useDirectoryTermMap>;
+  selectRef: RefObject<HTMLSelectElement | null>;
   selectedId: string;
   onSelectedIdChange: (value: string) => void;
   onBind: () => void;
   onRemove: () => void;
+  onRetry: () => void;
   isBinding: boolean;
   isRemoving: boolean;
   error: string | null;
 }) {
   const local = query.data?.local;
   const effective = query.data?.effective;
+  const focusAfterRetry = useRef(false);
+  useEffect(() => {
+    if (focusAfterRetry.current && query.isSuccess) {
+      focusAfterRetry.current = false;
+      selectRef.current?.focus();
+    }
+  }, [query.isSuccess, selectRef]);
   return (
     <section className="directory-term-map" aria-labelledby="directory-term-map-title">
       <div className="directory-term-map-heading">
@@ -933,7 +989,14 @@ function DirectoryTermMapPanel({
           <p className="form-error" role="alert">
             {query.error.message}
           </p>
-          <Button type="button" variant="outline" onClick={() => void query.refetch()}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              focusAfterRetry.current = true;
+              void query.refetch();
+            }}
+          >
             Try again
           </Button>
         </div>
@@ -958,6 +1021,7 @@ function DirectoryTermMapPanel({
           </dl>
           <div className="directory-term-map-controls">
             <Select
+              ref={selectRef}
               aria-label="Directory default"
               aria-describedby="directory-default-help"
               value={selectedId}
@@ -997,9 +1061,14 @@ function DirectoryTermMapPanel({
             )}
           </div>
           {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
+            <div className="field-recovery">
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+              <Button type="button" variant="outline" onClick={onRetry}>
+                Try again
+              </Button>
+            </div>
           )}
         </>
       )}

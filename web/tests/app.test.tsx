@@ -2937,9 +2937,11 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("option", { name: "Characters" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("combobox", { name: "Term map for this translation" }),
-    ).toBeEnabled();
+    const termMapSelect = screen.getByRole("combobox", {
+      name: "Term map for this translation",
+    });
+    expect(termMapSelect).toBeEnabled();
+    expect(termMapSelect).toHaveFocus();
   });
 
   it("recovers the Directory default after its binding request fails", async () => {
@@ -2981,6 +2983,52 @@ describe("product shell", () => {
     expect(
       screen.getByRole("region", { name: "Directory default" }),
     ).toBeInTheDocument();
+  });
+
+  it("retries a failed Directory default binding and restores focus", async () => {
+    let bindCalls = 0;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/term-maps") {
+          return jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
+        }
+        if (input.startsWith("/api/term-maps/directory")) {
+          if (init?.method === "PUT") {
+            bindCalls += 1;
+            return bindCalls === 1
+              ? jsonResponse({ message: "Directory binding failed" }, false)
+              : jsonResponse({
+                  directory: "",
+                  local: CHARACTERS_TERM_MAP,
+                  effective: CHARACTERS_TERM_MAP,
+                  source_directory: "",
+                });
+          }
+          return jsonResponse({
+            directory: "",
+            local: null,
+            effective: null,
+            source_directory: null,
+          });
+        }
+        return singleExternalMediaResponse(input) ?? jobListResponse([]);
+      });
+    renderWithFetch("/translate", fetchMock);
+
+    const directorySelect = await screen.findByRole("combobox", {
+      name: "Directory default",
+    });
+    await screen.findByRole("option", { name: "Characters" });
+    fireEvent.change(directorySelect, { target: { value: "map-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bind Term map" }));
+    await waitFor(() => expect(bindCalls).toBe(1));
+    expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(directorySelect).toHaveFocus());
+    expect(bindCalls).toBe(2);
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {

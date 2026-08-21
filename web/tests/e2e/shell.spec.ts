@@ -40,6 +40,25 @@ async function stubProductStatus(page: Page, providerReady = true) {
   );
 }
 
+async function stubTermMapRoutes(
+  page: Page,
+  termMaps: unknown[],
+  directoryState: Record<string, unknown>,
+) {
+  await page.route("/api/term-maps", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ term_maps: termMaps }),
+    }),
+  );
+  await page.route("**/api/term-maps/directory**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(directoryState),
+    }),
+  );
+}
+
 async function stubJobCreation(page: Page): Promise<Array<Record<string, unknown>>> {
   const submissions: Array<Record<string, unknown>> = [];
   await page.route("**/api/jobs", async (route) => {
@@ -723,6 +742,7 @@ test("Translate manages the current Directory default binding", async ({ page })
   ).toBeVisible();
   await page.getByRole("button", { name: "Open Season 1" }).click();
   await expectEffectiveTermMap("Series terms");
+  await expect(page.getByText("Inherited from Series")).toBeVisible();
   await page
     .getByRole("combobox", { name: "Directory default" })
     .selectOption(childTermMap.id);
@@ -741,6 +761,44 @@ test("Translate manages the current Directory default binding", async ({ page })
   await expect(page.getByText("No default")).toBeVisible();
 });
 
+test("Translate Term map controls are keyboard-operable", async ({ page }) => {
+  const termMap = {
+    id: "map-keyboard",
+    name: "Keyboard terms",
+    entry_count: 1,
+    updated_at: "2026-08-13T12:00:00Z",
+  };
+  await stubTermMapRoutes(page, [termMap], {
+    directory: "",
+    local: null,
+    effective: null,
+    source_directory: null,
+  });
+
+  await page.goto("/translate");
+  const directoryDefault = page.getByRole("combobox", { name: "Directory default" });
+  await expect(directoryDefault).toBeEnabled();
+  await directoryDefault.focus();
+  await directoryDefault.press("ArrowDown");
+  await directoryDefault.press("Enter");
+  await expect(directoryDefault).toHaveValue(termMap.id);
+
+  await page.getByRole("button", { name: "Select Example movie" }).click();
+  await page
+    .getByRole("button", {
+      name: /Select external subtitle en \(Example\.en\.srt\)/,
+    })
+    .click();
+  const jobTermMap = page.getByRole("combobox", {
+    name: "Term map for this translation",
+  });
+  await jobTermMap.focus();
+  await jobTermMap.press("ArrowDown");
+  await jobTermMap.press("ArrowDown");
+  await jobTermMap.press("Enter");
+  await expect(jobTermMap).toHaveValue(termMap.id);
+});
+
 test("Translate submits the server-authoritative directory default", async ({
   page,
 }) => {
@@ -751,23 +809,12 @@ test("Translate submits the server-authoritative directory default", async ({
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
-  await page.route("/api/term-maps", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ term_maps: [defaultTermMap] }),
-    }),
-  );
-  await page.route("**/api/term-maps/directory**", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        directory: "",
-        local: null,
-        effective: defaultTermMap,
-        source_directory: "",
-      }),
-    }),
-  );
+  await stubTermMapRoutes(page, [defaultTermMap], {
+    directory: "",
+    local: null,
+    effective: defaultTermMap,
+    source_directory: "",
+  });
   const submissions = await stubJobCreation(page);
 
   await page.goto("/translate");
@@ -799,23 +846,12 @@ test("Translate keeps one-off Term map choices scoped to each submission", async
     entry_count: 1,
     updated_at: "2026-08-13T12:00:00Z",
   };
-  await page.route("/api/term-maps", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ term_maps: [termMap] }),
-    }),
-  );
-  await page.route("**/api/term-maps/directory**", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        directory: "",
-        local: null,
-        effective: termMap,
-        source_directory: "",
-      }),
-    }),
-  );
+  await stubTermMapRoutes(page, [termMap], {
+    directory: "",
+    local: null,
+    effective: termMap,
+    source_directory: "",
+  });
   const submissions = await stubJobCreation(page);
 
   const submit = async (termMapValue: string) => {
