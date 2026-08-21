@@ -956,6 +956,7 @@ describe("product shell", () => {
         media_path: "Shows/Movie.mkv",
         subtitle_path: "Shows/Movie.en.srt",
         target_language_code: "zh-Hans",
+        term_map_mode: "selected",
         term_map: {
           id: "map-1",
           name: "Characters",
@@ -984,7 +985,12 @@ describe("product shell", () => {
     expect(screen.getByText("Shows/Movie.mkv")).toBeInTheDocument();
     expect(screen.getByText("job-detail-1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy Job ID" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy Job ID" }));
+    expect(
+      await screen.findByText("Select the Job ID and copy it manually."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Characters")).toBeInTheDocument();
+    expect(screen.getByText("Explicit Term map")).toBeInTheDocument();
     expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
     expect(screen.getByText("Status history")).toBeInTheDocument();
     expect(screen.getAllByText("Attempt 2")).toHaveLength(2);
