@@ -39,6 +39,7 @@ async function stubJobs(page: Page, historyJobs = [jobRecord("density-job")]) {
         active_jobs: [],
         history_jobs: historyJobs,
         next_cursor: null,
+        completed_count: historyJobs.filter((job) => job.status === "Completed").length,
       }),
     }),
   );
@@ -188,6 +189,37 @@ for (const viewport of viewports) {
         .locator(".term-map-list-state")
         .evaluate((state) => getComputedStyle(state).minHeight),
     ).toBe("0px");
+  });
+
+  test(`${viewport.name} Job details keep identity controls readable and keyboard reachable`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await stubStatus(page);
+    await stubJobs(page);
+    await page.goto("/jobs");
+    await page.getByRole("button", { name: "Example.mkv" }).click();
+    await expect(page.getByRole("heading", { name: "Example.mkv" })).toBeVisible();
+
+    const identityBoxes = await page
+      .locator(".job-detail-context > *")
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const box = element.getBoundingClientRect();
+          return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+        }),
+      );
+    expect(
+      identityBoxes.every(({ left, right }) => left >= 0 && right <= viewport.width),
+    ).toBe(true);
+    const jobId = page.locator(".job-id-control code");
+    expect(
+      await jobId.evaluate((element) => getComputedStyle(element).overflowWrap),
+    ).toBe("anywhere");
+    await page.getByRole("button", { name: "Copy Job ID" }).focus();
+    expect(await page.evaluate(() => document.activeElement?.textContent)).toContain(
+      "Copy Job ID",
+    );
   });
 
   test(`${viewport.name} Jobs and Term maps retain visible empty-state footprints`, async ({
