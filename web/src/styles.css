@@ -476,6 +476,12 @@ a {
   min-width: 0;
 }
 
+@media (min-width: 768px) {
+  .mobile-browser-restore {
+    display: none;
+  }
+}
+
 .breadcrumbs {
   display: flex;
   min-height: 36px;

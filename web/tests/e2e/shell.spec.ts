@@ -437,8 +437,14 @@ test.describe("responsive Media and Discovery layout", () => {
       if (viewport.name === "mobile") {
         await expect(secondMedia).toBeHidden();
         await expect(firstMedia).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Select another Media" }),
+        ).toBeVisible();
       } else {
         await expect(secondMedia).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Select another Media" }),
+        ).toBeHidden();
       }
     });
   }
@@ -483,7 +489,9 @@ test.describe("batch Translate workflow", () => {
       const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
       const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
       await firstMedia.press("Enter");
-      await page.getByRole("button", { name: "Select another Media" }).click();
+      if (viewport.name === "mobile") {
+        await page.getByRole("button", { name: "Select another Media" }).click();
+      }
       await secondMedia.press("Enter");
       await expect(firstMedia).toHaveAttribute("aria-pressed", "true");
       await expect(secondMedia).toHaveAttribute("aria-pressed", "true");

@@ -473,6 +473,7 @@ function Translate() {
                     <Button
                       type="button"
                       variant="outline"
+                      className="mobile-browser-restore"
                       onClick={() => setMediaBrowserExpanded(true)}
                     >
                       Select another Media
