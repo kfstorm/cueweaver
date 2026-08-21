@@ -4,7 +4,7 @@ import {
   CheckCircleIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
@@ -18,7 +18,6 @@ import {
   useRetryJob,
   type Job,
   type JobNotification,
-  type JobStatusFilter,
   type JobStatusHistoryEntry,
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
@@ -81,10 +80,8 @@ export function JobsPage() {
   const navigate = useNavigate();
   const listTitleRef = useRef<HTMLHeadingElement>(null);
   const focusListOnReturn = useRef(false);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<JobStatusFilter>("all");
-  const jobs = useJobs({ poll: false, search, status });
-  const productStatus = useProductStatus();
+  const jobs = useJobs({ poll: false });
+  const status = useProductStatus();
   const clearCompleted = useClearCompletedJobs();
   const activeJobs = jobs.data?.active_jobs ?? [];
   const historyJobs = jobs.data?.history_jobs ?? [];
@@ -92,18 +89,14 @@ export function JobsPage() {
   const selected = allJobs.find((job) => job.id === jobId) ?? null;
   const detail = useJob(jobId ?? null, jobId !== undefined);
   const displayedJob = detail.data ?? selected;
-  const completedCount =
-    jobs.data?.completed_count ??
-    historyJobs.filter((job) => job.status === "Completed").length;
-  const matchingCount = jobs.data?.matching_count ?? historyJobs.length;
-  const completedCountKnown =
-    jobs.data?.completed_count !== undefined || !jobs.hasNextPage;
+  const completedCount = historyJobs.filter((job) => job.status === "Completed").length;
+  const completedCountKnown = !jobs.hasNextPage;
   const canClearCompleted =
     completedCount > 0 || (jobs.hasNextPage && historyJobs.length > 0);
   const clearCompletedLabel = completedCountKnown
     ? `Clear Completed (${completedCount})`
     : "Clear Completed";
-  const recordHealth = productStatus.data?.job_records;
+  const recordHealth = status.data?.job_records;
   const recordAttention =
     (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
 
@@ -156,43 +149,9 @@ export function JobsPage() {
                 All Jobs
               </h2>
             </div>
-            <div
-              className="job-history-filters"
-              role="search"
-              aria-label="Filter Job history"
-            >
-              <label>
-                Search Jobs
-                <input
-                  type="search"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Media, language, or Job ID"
-                />
-              </label>
-              <label>
-                Status
-                <select
-                  value={status}
-                  onChange={(event) => {
-                    const nextStatus = event.target.value;
-                    if (isJobStatusFilter(nextStatus)) setStatus(nextStatus);
-                  }}
-                >
-                  <option value="all">All statuses</option>
-                  <option value="Queued">Queued status</option>
-                  <option value="Extracting">Extracting status</option>
-                  <option value="Translating">Translating status</option>
-                  <option value="Completed">Completed history</option>
-                  <option value="Failed">Failed history</option>
-                  <option value="Interrupted">Interrupted history</option>
-                  <option value="Cancelled">Cancelled history</option>
-                </select>
-              </label>
-            </div>
             <div className="job-list-actions">
               {jobs.data && (
-                <span className="count-badge">{matchingCount} matching</span>
+                <span className="count-badge">{allJobs.length} loaded</span>
               )}
               <Button
                 variant="outline"
@@ -245,26 +204,8 @@ export function JobsPage() {
                 <span className="empty-icon">
                   <BriefcaseIcon size={22} aria-hidden="true" />
                 </span>
-                <h2>
-                  {hasJobFilters(search, status) ? "No matching Jobs" : "No Jobs yet"}
-                </h2>
-                <p>
-                  {hasJobFilters(search, status)
-                    ? "Try a different search or clear the filters."
-                    : "Submitted translations will appear here with their current state."}
-                </p>
-                {hasJobFilters(search, status) && (
-                  <Button
-                    variant="outline"
-                    type="button"
-                    onClick={() => {
-                      setSearch("");
-                      setStatus("all");
-                    }}
-                  >
-                    Clear filters
-                  </Button>
-                )}
+                <h2>No Jobs yet</h2>
+                <p>Submitted translations will appear here with their current state.</p>
               </div>
             )}
           </div>
@@ -709,21 +650,4 @@ function sourceSummary(job: Job): string {
 
 function isRunningJob(status: Job["status"]): boolean {
   return status === "Extracting" || status === "Translating";
-}
-
-function hasJobFilters(search: string, status: JobStatusFilter): boolean {
-  return search.trim().length > 0 || status !== "all";
-}
-
-function isJobStatusFilter(value: string): value is JobStatusFilter {
-  return [
-    "all",
-    "Queued",
-    "Extracting",
-    "Translating",
-    "Completed",
-    "Failed",
-    "Interrupted",
-    "Cancelled",
-  ].includes(value);
 }

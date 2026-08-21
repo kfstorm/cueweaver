@@ -1001,46 +1001,13 @@ a {
 }
 
 .job-list-heading {
-  display: block;
   margin-bottom: 12px;
-}
-
-.job-history-filters {
-  display: flex;
-  gap: 10px;
-  margin-top: var(--space-3);
-}
-
-.job-history-filters label {
-  display: grid;
-  gap: 4px;
-  color: #667085;
-  font-size: var(--font-meta);
-  font-weight: 650;
-}
-
-.job-history-filters input,
-.job-history-filters select {
-  min-height: 38px;
-  min-width: 0;
-  border: 1px solid #cbd2dc;
-  border-radius: 6px;
-  background: #fff;
-  padding: 7px 10px;
-  color: #1d2939;
-  font: inherit;
-  font-weight: 450;
-}
-
-.job-history-filters input {
-  width: min(30rem, 20vw);
 }
 
 .job-list-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: var(--space-3);
 }
 
 .job-list-actions button {
@@ -1503,10 +1470,6 @@ a {
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-4);
-}
-
-.section-heading.job-list-heading {
-  display: block;
 }
 
 .section-heading h2,
@@ -2069,24 +2032,6 @@ summary:focus-visible {
   .job-list-actions {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .job-history-filters {
-    flex-direction: column;
-  }
-
-  .job-history-filters input,
-  .job-history-filters select {
-    width: 100%;
-    min-height: 44px;
-  }
-
-  .job-list-panel > section {
-    margin-top: 0;
-  }
-
-  .job-list-heading {
-    margin-bottom: 0;
   }
 
   .job-item-select {

@@ -80,7 +80,6 @@ class JobsApplicationFixture(ApplicationFixture):
         self.cancelled_job_id: str | None = None
         self.deleted_job_id: str | None = None
         self.cleared_completed = False
-        self.list_page_arguments: tuple[int, str | None, str, str] | None = None
 
     def create(self, _request: object) -> dict[str, object]:
         return {}
@@ -94,20 +93,9 @@ class JobsApplicationFixture(ApplicationFixture):
         ]
 
     def list_page(
-        self,
-        _limit: int = 50,
-        _cursor: str | None = None,
-        _search: str = "",
-        _status: str = "all",
+        self, _limit: int = 50, _cursor: str | None = None
     ) -> dict[str, object]:
-        self.list_page_arguments = (_limit, _cursor, _search, _status)
-        return {
-            "active_jobs": [],
-            "history_jobs": [],
-            "next_cursor": None,
-            "matching_count": 0,
-            "completed_count": 0,
-        }
+        return {"active_jobs": [], "history_jobs": [], "next_cursor": None}
 
     def get(self, _job_id: str) -> dict[str, object]:
         return {}
@@ -156,25 +144,6 @@ def test_http_queues_ordered_batch_results_with_mixed_item_errors():
         "error_code": "invalid_media_path",
         "message": "bad media",
     }
-
-
-def test_http_lists_jobs_with_search_and_status_filters():
-    application = JobsApplicationFixture()
-    client = TestClient(create_app(application))
-
-    response = client.get(
-        "/api/jobs",
-        params={
-            "limit": 10,
-            "cursor": "opaque",
-            "search": " movie ",
-            "status": "Failed",
-        },
-    )
-
-    assert response.status_code == 200
-    assert application.list_page_arguments == (10, "opaque", " movie ", "Failed")
-    assert response.json()["matching_count"] == 0
 
 
 def test_http_batch_preflight_rejects_invalid_term_map_without_calling_application():
