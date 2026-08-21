@@ -1003,12 +1003,12 @@ test.describe("Job history mutations", () => {
       await expect(
         page.getByRole("button", { name: "Clear Completed (1)" }),
       ).toBeEnabled();
-      await expect(page.getByText("2 loaded")).toBeVisible();
+      await expect(page.getByText("2 matching")).toBeVisible();
       await page.getByRole("button", { name: "Clear Completed (1)" }).click();
       await expect(
         page.getByRole("button", { name: "Clear Completed (0)" }),
       ).toBeDisabled();
-      await expect(page.getByText("1 loaded")).toBeVisible();
+      await expect(page.getByText("1 matching")).toBeVisible();
       await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
 
       await page.getByRole("button", { name: /Example\.mkv/ }).click();
