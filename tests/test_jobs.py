@@ -2698,6 +2698,63 @@ def test_job_history_filters_before_pagination_and_reports_independent_counts(
         assert next_page.json()["error_code"] == "invalid_job_cursor"
 
 
+def test_job_history_paginates_long_unicode_searches(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        search = "你" * 100
+        jobs = [
+            client.post(
+                "/api/jobs",
+                json=job_body(
+                    target_language_code=search,
+                    output_suffix="x",
+                    output_conflict_policy="append-number",
+                ),
+            ).json()
+            for _ in range(2)
+        ]
+        for job in jobs:
+            wait_for_status(client, job["id"], "Completed")
+        first_page = client.get(
+            "/api/jobs", params={"limit": 1, "search": search}
+        ).json()
+
+        assert first_page["next_cursor"] is not None
+
+        second_page = client.get(
+            "/api/jobs",
+            params={
+                "limit": 1,
+                "search": search,
+                "cursor": first_page["next_cursor"],
+            },
+        )
+
+        assert second_page.status_code == 200
+
+
+def test_job_history_search_matches_trimmed_casefolded_fields(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        jobs = create_completed_jobs(client)
+
+        media_match = client.get("/api/jobs", params={"search": "  MOVIE  "}).json()
+        assert {job["id"] for job in media_match["history_jobs"]} == {
+            job["id"] for job in jobs
+        }
+
+        id_match = client.get(
+            "/api/jobs", params={"search": jobs[0]["id"][:8].upper()}
+        ).json()
+        assert [job["id"] for job in id_match["history_jobs"]] == [jobs[0]["id"]]
+
+        language_match = client.get("/api/jobs", params={"search": " JA "}).json()
+        assert [
+            job["request"]["target_language_code"]
+            for job in language_match["history_jobs"]
+        ] == ["ja"]
+
+
 def test_job_history_status_filter_is_server_side(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     with make_client(

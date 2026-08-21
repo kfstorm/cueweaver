@@ -44,6 +44,7 @@ from .model import (
     copy_job_record,
     decode_history_cursor,
     encode_history_cursor,
+    history_cursor_condition,
     normalize_record,
     project_job_summary,
     queue_sequence,
@@ -435,13 +436,14 @@ class Jobs:
             *TERMINAL_JOB_STATUSES,
         }:
             raise ServiceError("invalid_job_status", "Job status filter is invalid")
+        condition_hash = history_cursor_condition(normalized_search, status)
         position: tuple[str, str] | None = None
         if cursor is not None:
             try:
-                created_at, job_id, cursor_search, cursor_status = (
-                    decode_history_cursor(cursor)
+                created_at, job_id, cursor_condition_hash = decode_history_cursor(
+                    cursor
                 )
-                if cursor_search != normalized_search or cursor_status != status:
+                if cursor_condition_hash != condition_hash:
                     raise ValueError("Cursor conditions do not match")
                 position = (created_at, job_id)
             except ValueError as error:
@@ -489,7 +491,7 @@ class Jobs:
             last_job_id = last.get("id")
             if isinstance(last_created_at, str) and isinstance(last_job_id, str):
                 next_cursor = encode_history_cursor(
-                    last_created_at, last_job_id, normalized_search, status
+                    last_created_at, last_job_id, condition_hash
                 )
         with self._lock:
             completed_count = sum(
