@@ -18,6 +18,7 @@ import {
   useState,
   type DragEvent,
   type FormEvent,
+  type MutableRefObject,
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -238,6 +239,7 @@ function Translate() {
   const [expandedBatchMedia, setExpandedBatchMedia] = useState<Set<string>>(
     () => new Set(),
   );
+  const [mediaBrowserExpanded, setMediaBrowserExpanded] = useState(true);
   const [batchSubtitleFilter, setBatchSubtitleFilter] = useState("");
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
@@ -266,6 +268,7 @@ function Translate() {
     useState(true);
   const termMapSelectRef = useRef<HTMLSelectElement>(null);
   const focusTermMapAfterRetry = useRef(false);
+  const mediaButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const termMaps = useTermMaps();
   const directoryTermMap = useDirectoryTermMap(directory);
   const bindDirectoryTermMap = useBindDirectoryTermMap();
@@ -291,6 +294,14 @@ function Translate() {
   const discovery = useMediaDiscovery(selectedMedia);
   const batchPaths = [...selectedBatchMedia];
   const batchDiscoveries = useMediaDiscoveries(batchPaths);
+  const focusBatchMedia = (path: string, fallbackPath?: string) => {
+    queueMicrotask(() => {
+      (
+        mediaButtonRefs.current.get(path) ??
+        (fallbackPath ? mediaButtonRefs.current.get(fallbackPath) : undefined)
+      )?.focus();
+    });
+  };
   const clearDiscovery = (previousMedia: string | null) => {
     if (previousMedia !== null) {
       void queryClient.cancelQueries({ queryKey: ["media-discovery", previousMedia] });
@@ -301,6 +312,7 @@ function Translate() {
     clearDiscovery(previousMedia);
     setSelectedMedia(null);
     setSelectedSubtitle(null);
+    setMediaBrowserExpanded(true);
   };
   const selectedCandidate = discovery.data?.candidates.find(
     (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
@@ -380,6 +392,7 @@ function Translate() {
     setSelectedBatchMedia(new Set());
     setBatchSubtitleSelections(new Map());
     setExpandedBatchMedia(new Set());
+    setMediaBrowserExpanded(true);
     setBatchSubtitleFilter("");
     setBatchMode(false);
     setTermMapMode("follow");
@@ -415,6 +428,7 @@ function Translate() {
                 setSelectedBatchMedia(new Set());
                 setBatchSubtitleSelections(new Map());
                 setExpandedBatchMedia(new Set());
+                setMediaBrowserExpanded(true);
                 setBatchSubtitleFilter("");
                 if (nextBatchMode) {
                   setOutputSuffix(targetLanguage);
@@ -425,128 +439,158 @@ function Translate() {
             />
             Batch mode
           </label>
-          <MediaBrowser
-            directory={directory}
-            filter={filter}
-            onDirectoryChange={(path) => {
-              setDirectory(path);
-              setTermMapMode("follow");
-              setTermMapId(null);
-              setDirectoryTermMapSelection(null);
-              setFilter("");
-              clearMedia(selectedMedia);
-              setSelectedBatchMedia(new Set());
-              setBatchSubtitleSelections(new Map());
-              setExpandedBatchMedia(new Set());
-            }}
-            onFilterChange={setFilter}
-            selectedMedia={selectedMedia}
-            selectedMediaPaths={selectedBatchMedia}
-            batchMode={batchMode}
-            onMediaSelect={(path) => {
-              if (batchMode) {
-                setSelectedBatchMedia((current) => {
-                  const next = new Set(current);
-                  if (next.has(path)) next.delete(path);
-                  else next.add(path);
-                  return next;
-                });
-              } else {
-                clearDiscovery(selectedMedia);
-                setSelectedMedia(path);
-                setSelectedSubtitle(null);
-              }
-            }}
-            query={browser}
-          />
-          {batchMode && (
-            <div className="batch-subtitle-controls">
-              <label htmlFor="batch-subtitle-filter">
-                Search subtitle candidates
-                <Input
-                  id="batch-subtitle-filter"
-                  type="search"
-                  value={batchSubtitleFilter}
-                  onChange={(event) => setBatchSubtitleFilter(event.target.value)}
-                  placeholder="Language, name, path, format, or tags"
-                />
-              </label>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={batchPaths.length === 0}
-                onClick={selectUniqueBatchCandidates}
-              >
-                Select unique
-              </Button>
-            </div>
-          )}
-          {batchMode &&
-            batchPaths.map((path, index) => (
-              <SubtitleDiscovery
-                key={path}
-                mediaPath={path}
-                selected={
-                  batchSubtitleSelections.get(path) ??
-                  (() => {
-                    const candidates = filteredCandidates(
-                      batchDiscoveries[index]?.data?.candidates ?? [],
-                      batchSubtitleFilter,
-                    );
-                    return candidates.length === 1 && isCompleteCandidate(candidates[0])
-                      ? candidateKey(candidates[0], 0)
-                      : null;
-                  })()
-                }
-                candidateFilter={batchSubtitleFilter}
-                batchMode
-                expanded={expandedBatchMedia.has(path)}
-                onToggleExpanded={() =>
-                  setExpandedBatchMedia((current) => {
+          <div className="media-discovery-layout">
+            <MediaBrowser
+              directory={directory}
+              filter={filter}
+              onDirectoryChange={(path) => {
+                setDirectory(path);
+                setTermMapMode("follow");
+                setTermMapId(null);
+                setDirectoryTermMapSelection(null);
+                setFilter("");
+                clearMedia(selectedMedia);
+                setSelectedBatchMedia(new Set());
+                setBatchSubtitleSelections(new Map());
+                setExpandedBatchMedia(new Set());
+              }}
+              onFilterChange={setFilter}
+              selectedMedia={selectedMedia}
+              selectedMediaPaths={selectedBatchMedia}
+              batchMode={batchMode}
+              collapseUnselected={!mediaBrowserExpanded}
+              onMediaSelect={(path) => {
+                if (batchMode) {
+                  setSelectedBatchMedia((current) => {
                     const next = new Set(current);
                     if (next.has(path)) next.delete(path);
                     else next.add(path);
                     return next;
-                  })
+                  });
+                  setMediaBrowserExpanded(false);
+                } else {
+                  clearDiscovery(selectedMedia);
+                  setSelectedMedia(path);
+                  setSelectedSubtitle(null);
+                  setMediaBrowserExpanded(false);
                 }
-                onSelect={(value) =>
-                  setBatchSubtitleSelections((current) => {
-                    const next = new Map(current);
-                    next.set(path, value);
-                    return next;
-                  })
-                }
-                query={batchDiscoveries[index]}
-                onClear={() => {
-                  setSelectedBatchMedia((current) => {
-                    const next = new Set(current);
-                    next.delete(path);
-                    return next;
-                  });
-                  setBatchSubtitleSelections((current) => {
-                    const next = new Map(current);
-                    next.delete(path);
-                    return next;
-                  });
-                  setExpandedBatchMedia((current) => {
-                    const next = new Set(current);
-                    next.delete(path);
-                    return next;
-                  });
-                }}
-              />
-            ))}
-          {selectedMedia && (
-            <SubtitleDiscovery
-              mediaPath={selectedMedia}
-              selected={selectedSubtitle}
-              onSelect={setSelectedSubtitle}
-              query={discovery}
-              onClear={() => {
-                clearMedia(selectedMedia);
               }}
+              mediaButtonRefs={mediaButtonRefs}
+              query={browser}
             />
-          )}
+            <div className="discovery-stack">
+              {batchMode && (
+                <div className="batch-subtitle-controls">
+                  {batchPaths.length > 0 && !mediaBrowserExpanded && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mobile-browser-restore"
+                      onClick={() => setMediaBrowserExpanded(true)}
+                    >
+                      Select another Media
+                    </Button>
+                  )}
+                  <label htmlFor="batch-subtitle-filter">
+                    Search subtitle candidates
+                    <Input
+                      id="batch-subtitle-filter"
+                      type="search"
+                      value={batchSubtitleFilter}
+                      onChange={(event) => setBatchSubtitleFilter(event.target.value)}
+                      placeholder="Language, name, path, format, or tags"
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={batchPaths.length === 0}
+                    onClick={selectUniqueBatchCandidates}
+                  >
+                    Select unique
+                  </Button>
+                </div>
+              )}
+              {batchMode &&
+                batchPaths.map((path, index) => (
+                  <SubtitleDiscovery
+                    key={path}
+                    mediaPath={path}
+                    selected={
+                      batchSubtitleSelections.get(path) ??
+                      (() => {
+                        const candidates = filteredCandidates(
+                          batchDiscoveries[index]?.data?.candidates ?? [],
+                          batchSubtitleFilter,
+                        );
+                        return candidates.length === 1 &&
+                          isCompleteCandidate(candidates[0])
+                          ? candidateKey(candidates[0], 0)
+                          : null;
+                      })()
+                    }
+                    candidateFilter={batchSubtitleFilter}
+                    batchMode
+                    expanded={expandedBatchMedia.has(path)}
+                    onToggleExpanded={() =>
+                      setExpandedBatchMedia((current) => {
+                        const next = new Set(current);
+                        if (next.has(path)) next.delete(path);
+                        else next.add(path);
+                        return next;
+                      })
+                    }
+                    onSelect={(value) =>
+                      setBatchSubtitleSelections((current) => {
+                        const next = new Map(current);
+                        next.set(path, value);
+                        return next;
+                      })
+                    }
+                    query={batchDiscoveries[index]}
+                    onClear={() => {
+                      if (batchPaths.length === 1) {
+                        setFilter("");
+                        setMediaBrowserExpanded(true);
+                      }
+                      setSelectedBatchMedia((current) => {
+                        const next = new Set(current);
+                        next.delete(path);
+                        return next;
+                      });
+                      setBatchSubtitleSelections((current) => {
+                        const next = new Map(current);
+                        next.delete(path);
+                        return next;
+                      });
+                      setExpandedBatchMedia((current) => {
+                        const next = new Set(current);
+                        next.delete(path);
+                        return next;
+                      });
+                      const clearedIndex = batchPaths.indexOf(path);
+                      const focusPath =
+                        batchPaths.length > 1
+                          ? (batchPaths[clearedIndex + 1] ??
+                            batchPaths[clearedIndex - 1])
+                          : path;
+                      focusBatchMedia(focusPath);
+                    }}
+                  />
+                ))}
+              {selectedMedia && (
+                <SubtitleDiscovery
+                  mediaPath={selectedMedia}
+                  selected={selectedSubtitle}
+                  onSelect={setSelectedSubtitle}
+                  query={discovery}
+                  onClear={() => {
+                    clearMedia(selectedMedia);
+                  }}
+                />
+              )}
+            </div>
+          </div>
           <DirectoryTermMapPanel
             directory={directory}
             termMaps={termMaps.data?.term_maps ?? []}
@@ -1312,6 +1356,18 @@ function outputNameParts(mediaPath: string, format: string) {
   };
 }
 
+function sameTermMapContent(
+  left: Record<string, string>,
+  right: Record<string, string>,
+): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
+  );
+}
+
 function validateOutputSuffix(value: string): string | null {
   if (!value) return "Subtitle suffix must be non-empty.";
   const reserved = new Set([
@@ -1613,7 +1669,9 @@ function MediaBrowser({
   selectedMedia,
   selectedMediaPaths,
   batchMode,
+  collapseUnselected,
   onMediaSelect,
+  mediaButtonRefs,
   query,
 }: {
   directory: string;
@@ -1623,14 +1681,24 @@ function MediaBrowser({
   selectedMedia: string | null;
   selectedMediaPaths: Set<string>;
   batchMode: boolean;
+  collapseUnselected: boolean;
   onMediaSelect: (path: string) => void;
+  mediaButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   query: ReturnType<typeof useMediaDirectory>;
 }) {
-  const entries = query.data?.entries.filter((entry) =>
-    entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
+  const selectionActive = batchMode
+    ? selectedMediaPaths.size > 0
+    : selectedMedia !== null;
+  const entries = query.data?.entries.filter(
+    (entry) =>
+      entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) ||
+      (entry.kind === "media" &&
+        (batchMode
+          ? selectedMediaPaths.has(entry.path)
+          : selectedMedia === entry.path)),
   );
   return (
-    <div className="media-browser">
+    <div className="media-browser" role="region" aria-label="Media browser">
       <div className="breadcrumbs" role="group" aria-label="Media breadcrumbs">
         <Button
           type="button"
@@ -1691,6 +1759,22 @@ function MediaBrowser({
             key={entry.path}
             entry={entry}
             onDirectoryChange={onDirectoryChange}
+            buttonRef={
+              entry.kind === "media"
+                ? (button) => {
+                    if (button) mediaButtonRefs.current.set(entry.path, button);
+                    else mediaButtonRefs.current.delete(entry.path);
+                  }
+                : undefined
+            }
+            collapsed={
+              collapseUnselected &&
+              selectionActive &&
+              entry.kind === "media" &&
+              (batchMode
+                ? !selectedMediaPaths.has(entry.path)
+                : selectedMedia !== entry.path)
+            }
             selected={
               batchMode
                 ? selectedMediaPaths.has(entry.path)
@@ -1730,11 +1814,15 @@ function MediaEntry({
   onDirectoryChange,
   selected,
   onMediaSelect,
+  buttonRef,
+  collapsed,
 }: {
   entry: MediaDirectoryEntry;
   onDirectoryChange: (path: string) => void;
   selected: boolean;
   onMediaSelect: (path: string) => void;
+  buttonRef?: (button: HTMLButtonElement | null) => void;
+  collapsed: boolean;
 }) {
   const isDirectory = entry.kind === "directory";
   const episodeLabel =
@@ -1751,7 +1839,9 @@ function MediaEntry({
     <Button
       type="button"
       variant="outline"
-      className="media-entry"
+      className={cn("media-entry", collapsed && "collapsed")}
+      ref={buttonRef}
+      data-media-path={entry.path}
       onClick={() =>
         isDirectory ? onDirectoryChange(entry.path) : onMediaSelect(entry.path)
       }
@@ -1813,19 +1903,23 @@ function TermMapsPage() {
   const replace = useReplaceTermMap();
   const remove = useDeleteTermMap();
   const [name, setName] = useState("");
-  const [content, setContent] = useState('{\n  "Source": "Target"\n}');
+  const [content, setContent] = useState("");
+  const [contentTouched, setContentTouched] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileReadGeneration = useRef(0);
   const [renameName, setRenameName] = useState("");
+  const [loadedName, setLoadedName] = useState("");
   const [replacement, setReplacement] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const selectedIdRef = useRef(selectedId);
   const resetRename = rename.reset;
   const resetReplace = replace.reset;
   const resetRemove = remove.reset;
+  const detailRef = useRef<HTMLElement>(null);
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -1834,8 +1928,26 @@ function TermMapsPage() {
     resetRemove();
   }, [resetRemove, resetRename, resetReplace, selectedId]);
 
+  useEffect(() => {
+    if (!selectedId || selected.data?.id !== selectedId) return;
+    detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    detailHeadingRef.current?.focus({ preventScroll: true });
+  }, [selected.data?.id, selectedId]);
+
   const contentValidation = useMemo(() => validateTermMapContent(content), [content]);
-  const contentError = fileError ?? contentValidation.error;
+  const contentError = fileError ?? (contentTouched ? contentValidation.error : null);
+  const replacementText =
+    replacement ??
+    (selected.data ? JSON.stringify(selected.data.content, null, 2) : "");
+  const replacementValidation = useMemo(
+    () => validateTermMapContent(replacementText),
+    [replacementText],
+  );
+  const replacementDirty =
+    replacement !== null &&
+    replacementValidation.content !== null &&
+    selected.data !== undefined &&
+    !sameTermMapContent(replacementValidation.content, selected.data.content);
 
   async function loadTermMapFile(file: File) {
     const generation = ++fileReadGeneration.current;
@@ -1851,6 +1963,7 @@ function TermMapsPage() {
       const fileContent = await readTextFile(file);
       if (generation !== fileReadGeneration.current) return;
       setContent(fileContent);
+      setContentTouched(true);
       setFileName(file.name);
       setFileError(null);
     } catch {
@@ -1883,7 +1996,8 @@ function TermMapsPage() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (fileLoading || contentError !== null) return;
+    setContentTouched(true);
+    if (fileLoading || fileError !== null || contentValidation.error !== null) return;
     create.mutate(
       { name, content },
       {
@@ -1891,7 +2005,8 @@ function TermMapsPage() {
           fileReadGeneration.current += 1;
           setFileLoading(false);
           setName("");
-          setContent('{\n  "Source": "Target"\n}');
+          setContent("");
+          setContentTouched(false);
           setFileName(null);
           setFileError(null);
           if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1915,6 +2030,7 @@ function TermMapsPage() {
       {
         onSuccess: (summary) => {
           if (selectedIdRef.current === selectedId) setRenameName(summary.name);
+          if (selectedIdRef.current === selectedId) setLoadedName(summary.name);
         },
       },
     );
@@ -1967,7 +2083,7 @@ function TermMapsPage() {
               onDrop={handleFileDrop}
             >
               <strong>Import JSON file</strong>
-              <span>Drop a .json file here, or select one.</span>
+              <span>Use a .json file as one supported input path.</span>
               <Button
                 type="button"
                 variant="outline"
@@ -1989,7 +2105,7 @@ function TermMapsPage() {
               {fileName && <span className="field-help">Loaded {fileName}</span>}
             </div>
             <label htmlFor="term-map-content">
-              Paste JSON
+              Paste JSON directly
               <Textarea
                 id="term-map-content"
                 aria-label="JSON content"
@@ -1998,17 +2114,19 @@ function TermMapsPage() {
                 onChange={(event) => {
                   fileReadGeneration.current += 1;
                   setContent(event.target.value);
+                  setContentTouched(true);
                   setFileName(null);
                   setFileError(null);
                   setFileLoading(false);
                 }}
                 rows={6}
                 spellCheck={false}
+                placeholder={'{\n  "Source": "Target"\n}'}
                 aria-describedby="upload-help"
               />
             </label>
             <p id="upload-help" className="field-help">
-              A non-empty object of Source-to-Target strings, up to 1 MiB.
+              Or paste a non-empty object of Source-to-Target strings, up to 1 MiB.
             </p>
             {fileLoading ? (
               <p className="upload-status" role="status">
@@ -2017,6 +2135,10 @@ function TermMapsPage() {
             ) : contentError ? (
               <p className="form-error" role="alert">
                 {contentError}
+              </p>
+            ) : !content.trim() ? (
+              <p className="field-help" role="status">
+                Add JSON using the file import or paste path to preview its mappings.
               </p>
             ) : (
               <p className="term-map-validation valid" role="status">
@@ -2092,6 +2214,7 @@ function TermMapsPage() {
                   selectedIdRef.current = map.id;
                   setSelectedId(map.id);
                   setRenameName(map.name);
+                  setLoadedName(map.name);
                   setReplacement(null);
                   setConfirmation("");
                 }}
@@ -2115,7 +2238,11 @@ function TermMapsPage() {
       </div>
 
       {selectedId && (
-        <section className="term-map-detail" aria-labelledby="detail-title">
+        <section
+          ref={detailRef}
+          className="term-map-detail"
+          aria-labelledby="detail-title"
+        >
           <div className="detail-header">
             <div>
               <Button
@@ -2126,13 +2253,16 @@ function TermMapsPage() {
                   selectedIdRef.current = null;
                   setSelectedId(null);
                   setRenameName("");
+                  setLoadedName("");
                   setReplacement(null);
                   setConfirmation("");
                 }}
               >
                 <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Term maps
               </Button>
-              <h2 id="detail-title">{selected.data?.name ?? "Term map details"}</h2>
+              <h2 ref={detailHeadingRef} id="detail-title" tabIndex={-1}>
+                {selected.data?.name ?? "Term map details"}
+              </h2>
               {selected.data && (
                 <p>
                   {selected.data.entry_count} entries · Updated{" "}
@@ -2154,7 +2284,11 @@ function TermMapsPage() {
                     type="button"
                     variant="outline"
                     onClick={renameSelected}
-                    disabled={rename.isPending}
+                    disabled={
+                      rename.isPending ||
+                      !renameName.trim() ||
+                      renameName === loadedName
+                    }
                   >
                     Save name
                   </Button>
@@ -2218,14 +2352,17 @@ function TermMapsPage() {
                   <h3>Replace JSON content</h3>
                   <Textarea
                     aria-label="Replacement JSON content"
-                    value={
-                      replacement ?? JSON.stringify(selected.data.content, null, 2)
-                    }
+                    value={replacementText}
                     onChange={(event) => setReplacement(event.target.value)}
                     rows={7}
                     spellCheck={false}
                     disabled={replace.isPending}
                   />
+                  {replacement !== null && replacementValidation.error && (
+                    <p className="form-error" role="alert">
+                      {replacementValidation.error}
+                    </p>
+                  )}
                   {replace.isError && (
                     <p className="form-error" role="alert">
                       {replace.error.message}
@@ -2238,7 +2375,7 @@ function TermMapsPage() {
                       replace.mutate(
                         {
                           id: selected.data.id,
-                          content: replacement ?? JSON.stringify(selected.data.content),
+                          content: replacementText,
                         },
                         {
                           onSuccess: () => {
@@ -2249,7 +2386,7 @@ function TermMapsPage() {
                         },
                       )
                     }
-                    disabled={replace.isPending}
+                    disabled={replace.isPending || !replacementDirty}
                   >
                     {replace.isPending ? "Replacing..." : "Replace content"}
                   </Button>

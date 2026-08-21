@@ -413,6 +413,67 @@ test("Translate source and subtitle selection work with the keyboard", async ({
   await expect(subtitle).toHaveAttribute("aria-pressed", "true");
 });
 
+test.describe("responsive Media and Discovery layout", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} keeps selected Media with its Discovery`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await stubProductStatus(page);
+      await stubBatchTranslate(page);
+      await stubBatchJobs(page);
+      await page.goto("/translate");
+
+      const media = page.getByRole("button", { name: "Select First.mkv" });
+      await media.click();
+      await expect(
+        page.getByRole("region", { name: "Subtitle selection for First.mkv" }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Choose another Media" }),
+      ).toBeVisible();
+
+      if (viewport.name === "desktop") {
+        const browserBox = await page
+          .getByRole("region", { name: "Media browser" })
+          .boundingBox();
+        const discoveryBox = await page
+          .getByRole("region", { name: "Subtitle selection for First.mkv" })
+          .boundingBox();
+        expect(browserBox?.x).toBeLessThan(discoveryBox?.x ?? 0);
+        expect((browserBox?.x ?? 0) + (browserBox?.width ?? 0)).toBeLessThan(
+          discoveryBox?.x ?? 0,
+        );
+      } else {
+        await expect(
+          page.getByRole("button", { name: "Select Second.mkv" }),
+        ).toBeHidden();
+      }
+
+      await page.reload();
+      await page.getByLabel("Batch mode").check();
+      const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
+      const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
+      await firstMedia.click();
+      if (viewport.name === "mobile") {
+        await expect(secondMedia).toBeHidden();
+        await expect(firstMedia).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Select another Media" }),
+        ).toBeVisible();
+      } else {
+        await expect(secondMedia).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Select another Media" }),
+        ).toBeHidden();
+      }
+    });
+  }
+});
+
 test.describe("batch Translate workflow", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
@@ -452,11 +513,17 @@ test.describe("batch Translate workflow", () => {
       const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
       const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
       await firstMedia.press("Enter");
+      if (viewport.name === "mobile") {
+        await page.getByRole("button", { name: "Select another Media" }).click();
+      }
       await secondMedia.press("Enter");
       await expect(firstMedia).toHaveAttribute("aria-pressed", "true");
       await expect(secondMedia).toHaveAttribute("aria-pressed", "true");
 
-      await expect(page.locator(".subtitle-discovery")).toHaveCount(2);
+      const discoveries = page.getByRole("region", {
+        name: /Subtitle selection for/,
+      });
+      await expect(discoveries).toHaveCount(2);
       await page.getByRole("button", { name: "Resolve candidates" }).click();
       const firstExternalCandidate = page.getByRole("button", {
         name: "Select external subtitle en / English (First.en.srt)",
@@ -568,7 +635,9 @@ test("batch Translate creates independent Jobs in request order through the real
   await page.getByLabel("Batch mode").check();
   await page.getByRole("button", { name: "Select Example movie" }).click();
   await page.getByRole("button", { name: "Select Second.mkv" }).click();
-  const discoveries = page.locator(".subtitle-discovery");
+  const discoveries = page.getByRole("region", {
+    name: /Subtitle selection for/,
+  });
   await expect(discoveries).toHaveCount(2);
   await discoveries.nth(0).getByRole("button", { name: "Resolve candidates" }).click();
   await discoveries.nth(1).getByRole("button", { name: "Resolve candidates" }).click();
@@ -1100,8 +1169,12 @@ test("Term maps management works with keyboard and search on desktop and mobile"
       }),
     }),
   );
-  await page.route("/api/term-maps/map-1", (route) =>
-    route.fulfill({
+  let releaseDetails: (() => void) | undefined;
+  await page.route("/api/term-maps/map-1", async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseDetails = resolve;
+    });
+    await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         id: "map-1",
@@ -1110,17 +1183,33 @@ test("Term maps management works with keyboard and search on desktop and mobile"
         updated_at: "2026-08-13T12:00:00Z",
         content: { Captain: "队长", Ship: "舰船" },
       }),
-    }),
-  );
+    });
+  });
 
   for (const viewport of [
     { width: 390, height: 844 },
     { width: 1280, height: 800 },
   ]) {
+    releaseDetails = undefined;
     await page.setViewportSize(viewport);
     await page.goto("/term-maps");
     await page.getByRole("button", { name: /Characters/ }).press("Enter");
-    await expect(page.getByRole("heading", { name: "Characters" })).toBeVisible();
+    const loadingHeading = page.getByRole("heading", { name: "Term map details" });
+    await expect(loadingHeading).toBeVisible();
+    await expect(loadingHeading).not.toBeFocused();
+    await expect.poll(() => releaseDetails).toBeDefined();
+    const releaseCurrentDetails = releaseDetails;
+    releaseDetails = undefined;
+    releaseCurrentDetails?.();
+    const detailHeading = page.getByRole("heading", { name: "Characters" });
+    await expect(detailHeading).toBeVisible();
+    await expect(detailHeading).toBeFocused();
+    await expect
+      .poll(async () => {
+        const box = await detailHeading.boundingBox();
+        return box !== null && box.y >= 0 && box.y + box.height <= viewport.height;
+      })
+      .toBe(true);
     await page.getByLabel("Search Source or Target").fill("ship");
     await expect(page.getByRole("cell", { name: "Ship" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Captain" })).toBeHidden();

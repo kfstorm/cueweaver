@@ -29,6 +29,15 @@ const BATCH_MEDIA: MediaDirectory = {
   ],
 };
 
+const THREE_BATCH_MEDIA: MediaDirectory = {
+  path: "",
+  entries: [
+    { kind: "media", name: "First.mkv", path: "First.mkv" },
+    { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+    { kind: "media", name: "Third.mkv", path: "Third.mkv" },
+  ],
+};
+
 const UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
   {
     path: "Movie.mkv",
@@ -38,6 +47,24 @@ const UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
   {
     path: "Second.mkv",
     candidates: [{ kind: "external", path: "Second.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+];
+
+const THREE_UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  {
+    path: "First.mkv",
+    candidates: [{ kind: "external", path: "First.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+  {
+    path: "Second.mkv",
+    candidates: [{ kind: "external", path: "Second.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+  {
+    path: "Third.mkv",
+    candidates: [{ kind: "external", path: "Third.en.srt", format: "srt" }],
     unsupported_candidates: [],
   },
 ];
@@ -1688,6 +1715,11 @@ describe("product shell", () => {
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
     renderTermMaps();
 
     const map = await screen.findByRole("button", { name: /Characters/ });
@@ -1697,6 +1729,10 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "Characters" }),
     ).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "Characters" }),
+    );
     expect(screen.getByText("Captain")).toBeInTheDocument();
     const termSearch = screen.getByRole("textbox", { name: "Search Source or Target" });
     expect(termSearch).toHaveAttribute("placeholder", "Type to filter");
@@ -1732,10 +1768,12 @@ describe("product shell", () => {
     resolveList(jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] }));
     fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
     expect(screen.getByText("Loading details")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Term map details" })).not.toHaveFocus();
     resolveDetail(
       jsonResponse({ ...CHARACTERS_TERM_MAP, content: { Captain: "队长" } }),
     );
     expect(await screen.findByText("Captain")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Characters" })).toHaveFocus();
   });
 
   it("rejects a Term map whose source JSON exceeds 1 MiB", () => {
@@ -1773,6 +1811,9 @@ describe("product shell", () => {
       await screen.findByRole("heading", { name: "No Term maps yet" }),
     ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Pending" } });
+    fireEvent.change(screen.getByLabelText("JSON content"), {
+      target: { value: '{"Other":"Value"}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
     expect(await screen.findByRole("button", { name: "Uploading..." })).toBeDisabled();
     resolveUpload(
@@ -1879,8 +1920,22 @@ describe("product shell", () => {
     expect(directoryCachesAreStale()).toBe(true);
     setFreshDirectoryCaches();
     fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: '{"Ship":"舰船","Captain":"队长"}' },
+    });
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: "{" },
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("valid JSON");
+    expect(screen.getByLabelText("Replacement JSON content")).toHaveValue("{");
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: '{\n  "Captain": "队长",\n  "Ship": "舰船"\n}' },
+    });
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
       target: { value: '{"Captain":"队长"}' },
     });
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
     await waitFor(() => expect(screen.getByText(/1 entries/)).toBeInTheDocument());
     expect(directoryCachesAreStale()).toBe(true);
@@ -1957,7 +2012,7 @@ describe("product shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
     expect(await screen.findByDisplayValue("Beta")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Save name" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save name" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     resolveRename(jsonResponse(summaries[0]));
@@ -1982,6 +2037,11 @@ describe("product shell", () => {
       "placeholder",
       "Name it by media, season, language pair, and version.",
     );
+    expect(screen.getByLabelText("JSON content")).toHaveAttribute(
+      "placeholder",
+      '{\n  "Source": "Target"\n}',
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("file import or paste path");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New terms" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: '{"Captain":"队长"}' },
@@ -2046,9 +2106,7 @@ describe("product shell", () => {
       }),
     );
     expect(screen.getByLabelText("Name")).toHaveValue("");
-    expect(screen.getByLabelText("JSON content")).toHaveValue(
-      '{\n  "Source": "Target"\n}',
-    );
+    expect(screen.getByLabelText("JSON content")).toHaveValue("");
   });
 
   it("uses the same validation for dropped JSON and blocks folded duplicate keys", async () => {
@@ -2105,6 +2163,9 @@ describe("product shell", () => {
 
     await screen.findByRole("heading", { name: "No Term maps yet" });
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Names" } });
+    fireEvent.change(screen.getByLabelText("JSON content"), {
+      target: { value: '{"Source":"Target"}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
@@ -2179,6 +2240,82 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: /Select external subtitle.*Second/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps selected batch Media reachable through filtering and restores focus", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter this directory" }), {
+      target: { value: "Second" },
+    });
+
+    const clearMovie = within(
+      screen.getByRole("region", { name: "Subtitle selection for Movie.mkv" }),
+    ).getByRole("button", { name: "Choose another Media" });
+    fireEvent.click(clearMovie);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Second.mkv" })).toHaveFocus(),
+    );
+  });
+
+  it("restores the filtered Media browser when clearing its only batch item", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter this directory" }), {
+      target: { value: "Second" },
+    });
+    fireEvent.click(
+      within(
+        screen.getByRole("region", { name: "Subtitle selection for Movie.mkv" }),
+      ).getByRole("button", { name: "Choose another Media" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toHaveFocus(),
+    );
+  });
+
+  it("focuses the next selected Media when clearing a middle batch item", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      THREE_BATCH_MEDIA,
+      undefined,
+      false,
+      THREE_UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select First.mkv" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Third.mkv" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("region", { name: "Subtitle selection for Second.mkv" }),
+      ).getByRole("button", { name: "Choose another Media" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Third.mkv" })).toHaveFocus(),
+    );
   });
 
   it("filters and manually resolves an ambiguous Embedded subtitle", async () => {
