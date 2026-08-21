@@ -151,6 +151,8 @@ function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) 
     active_jobs: jobs.filter((job) => activeStatuses.includes(job.status)),
     history_jobs: jobs.filter((job) => !activeStatuses.includes(job.status)),
     next_cursor,
+    matching_count: jobs.length,
+    completed_count: jobs.filter((job) => job.status === "Completed").length,
   });
 }
 
@@ -696,6 +698,63 @@ describe("product shell", () => {
           element.textContent?.includes("1 record in jobs/unsupported") === true,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("searches Job history, exposes every status filter, and clears no-match filters", async () => {
+    const job = embeddedJob("filter-job", "Failed");
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input.includes("search=missing")) return jobListResponse([]);
+      if (input.startsWith("/api/jobs")) return jobListResponse([job]);
+      return jsonResponse({ term_maps: [] });
+    });
+
+    renderWithFetch("/jobs", fetchMock);
+    expect(await screen.findByText("Movie.mkv")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Queued status" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Extracting status" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Translating status" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Completed history" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Failed history" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Interrupted history" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Cancelled history" }),
+    ).toBeInTheDocument();
+
+    const statusSelect = screen.getByRole("combobox", { name: "Status" });
+    for (const status of [
+      "Queued",
+      "Extracting",
+      "Translating",
+      "Completed",
+      "Failed",
+      "Interrupted",
+      "Cancelled",
+    ]) {
+      fireEvent.change(statusSelect, { target: { value: status } });
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(([input]) =>
+            String(input).includes(`status=${status}`),
+          ),
+        ).toBe(true),
+      );
+    }
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Jobs" }), {
+      target: { value: "missing" },
+    });
+    expect(await screen.findByText("No matching Jobs")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(await screen.findByText("Movie.mkv")).toBeInTheDocument();
   });
 
   it("shows Media loading, empty, and retryable error states", async () => {
