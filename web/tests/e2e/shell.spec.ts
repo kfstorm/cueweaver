@@ -483,7 +483,10 @@ test.describe("batch Translate workflow", () => {
       await expect(firstMedia).toHaveAttribute("aria-pressed", "true");
       await expect(secondMedia).toHaveAttribute("aria-pressed", "true");
 
-      await expect(page.locator(".subtitle-discovery")).toHaveCount(2);
+      const discoveries = page.getByRole("region", {
+        name: /Subtitle selection for/,
+      });
+      await expect(discoveries).toHaveCount(2);
       await page.getByRole("button", { name: "Resolve candidates" }).click();
       const firstExternalCandidate = page.getByRole("button", {
         name: "Select external subtitle en / English (First.en.srt)",
@@ -595,7 +598,9 @@ test("batch Translate creates independent Jobs in request order through the real
   await page.getByLabel("Batch mode").check();
   await page.getByRole("button", { name: "Select Example movie" }).click();
   await page.getByRole("button", { name: "Select Second.mkv" }).click();
-  const discoveries = page.locator(".subtitle-discovery");
+  const discoveries = page.getByRole("region", {
+    name: /Subtitle selection for/,
+  });
   await expect(discoveries).toHaveCount(2);
   await discoveries.nth(0).getByRole("button", { name: "Resolve candidates" }).click();
   await discoveries.nth(1).getByRole("button", { name: "Resolve candidates" }).click();
