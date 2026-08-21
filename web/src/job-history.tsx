@@ -2,6 +2,7 @@ import {
   ArrowLeftIcon,
   BriefcaseIcon,
   CheckCircleIcon,
+  CopyIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -108,9 +109,7 @@ export function JobsPage() {
     (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
 
   const clearCompletedJobs = () => {
-    const prompt = completedCountKnown
-      ? `Clear ${completedCount} completed Job${completedCount === 1 ? "" : "s"}? This removes their history and residual Work data.`
-      : "Clear all completed Jobs? This removes their history and residual Work data.";
+    const prompt = `Clear all completed Job history? This removes ${completedCount} completed Job${completedCount === 1 ? "" : "s"} and residual Work data. Media and published output are preserved.`;
     if (!window.confirm(prompt)) {
       return;
     }
@@ -153,7 +152,7 @@ export function JobsPage() {
             <div>
               <p className="eyebrow">History</p>
               <h2 id="job-list-title" ref={listTitleRef} tabIndex={-1}>
-                All Jobs
+                Job history
               </h2>
             </div>
             <div
@@ -224,7 +223,8 @@ export function JobsPage() {
           <div
             className={cn(
               "job-list-state",
-              (jobs.isPending || jobs.isError || allJobs.length === 0) && "has-state",
+              (jobs.isPending || jobs.isError || allJobs.length === 0) &&
+                "has-state",
             )}
           >
             {jobs.isPending && (
@@ -271,13 +271,21 @@ export function JobsPage() {
           {activeJobs.length > 0 && (
             <section aria-labelledby="active-jobs-title">
               <h3 id="active-jobs-title">Active Jobs</h3>
-              <JobList jobs={activeJobs} selectedId={jobId} onSelect={navigate} />
+              <JobList
+                jobs={activeJobs}
+                selectedId={jobId}
+                onSelect={navigate}
+              />
             </section>
           )}
           {historyJobs.length > 0 && (
             <section aria-labelledby="history-jobs-title">
-              <h3 id="history-jobs-title">History</h3>
-              <JobList jobs={historyJobs} selectedId={jobId} onSelect={navigate} />
+              <h3 id="history-jobs-title">Completed and past Jobs</h3>
+              <JobList
+                jobs={historyJobs}
+                selectedId={jobId}
+                onSelect={navigate}
+              />
             </section>
           )}
           {jobs.hasNextPage && (
@@ -311,10 +319,11 @@ export function JobsPage() {
             </DetailState>
           )}
           {jobId &&
-            displayedJob &&
+              displayedJob &&
             !detail.isError &&
             (selected || !detail.isPending) && (
               <JobDetail
+                key={displayedJob.id}
                 job={displayedJob}
                 onBack={() => navigate("/jobs")}
                 onDeleted={returnToJobList}
@@ -400,7 +409,9 @@ function JobListItem({
         aria-current={selected ? "true" : undefined}
         onClick={onSelect}
       >
-        <strong title={job.request.media_path}>{job.request.media_path}</strong>
+        <strong title={job.request.media_path}>
+          {mediaBasename(job.request.media_path)}
+        </strong>
         <span className="job-source">
           {sourceSummary(job)} to {job.request.target_language_code}
         </span>
@@ -463,6 +474,7 @@ function JobDetail({
     job.status === "Interrupted" ||
     job.status === "Cancelled";
   const termMap = job.request.term_map;
+  const [copyFeedback, setCopyFeedback] = useState<"success" | "fallback" | null>(null);
 
   useEffect(() => {
     titleRef.current?.focus();
@@ -480,15 +492,35 @@ function JobDetail({
           <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Jobs
         </Button>
         <div className="job-detail-title">
-          <p className="eyebrow">Job {job.id}</p>
           <h2 id="job-detail-title" ref={titleRef} tabIndex={-1}>
-            {job.request.media_path}
+            {mediaBasename(job.request.media_path)}
           </h2>
           <p>
             {sourceSummary(job)} to {job.request.target_language_code}
           </p>
         </div>
-        <JobStatus status={job.status} />
+        <div className="job-detail-context">
+          <JobStatus status={job.status} />
+          <div className="job-id-control">
+            <code title={job.id}>{job.id}</code>
+            <Button
+              type="button"
+              variant="outline"
+              aria-label="Copy Job ID"
+              onClick={() => {
+                void copyJobId(job.id).then((copied) =>
+                  setCopyFeedback(copied ? "success" : "fallback"),
+                );
+              }}
+            >
+              <CopyIcon size={16} aria-hidden="true" /> Copy Job ID
+            </Button>
+            {copyFeedback === "success" && <span role="status">Copied</span>}
+            {copyFeedback === "fallback" && (
+              <span role="status">Select the Job ID and copy it manually.</span>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="job-detail-actions">
@@ -524,7 +556,7 @@ function JobDetail({
             onClick={() => {
               if (
                 window.confirm(
-                  `Delete Job ${job.id.slice(0, 8)}? This removes its history and residual Work data but preserves Media and published output.`,
+                  `Delete Job ${job.id.slice(0, 8)}? This removes its Job history and residual Work data. Media and published output are preserved.`,
                 )
               ) {
                 deleteJob.mutate(job.id, { onSuccess: onDeleted });
@@ -571,8 +603,41 @@ function JobDetail({
             label="Output format"
             value={job.request.source_format.toUpperCase()}
           />
-          <SummaryItem label="Term map snapshot" value={termMap?.name ?? "None"} />
+          <SummaryItem
+            label="Term map policy"
+            value={termMapPolicy(job.request.term_map_mode)}
+          />
+          <SummaryItem
+            label="Term map snapshot"
+            value={termMap?.name ?? "Not recorded"}
+          />
           <SummaryItem label="Attempt" value={String(job.attempt)} />
+          {job.request.dynamic_terminology_enabled !== undefined && (
+            <SummaryItem
+              label="Dynamic terminology"
+              value={job.request.dynamic_terminology_enabled ? "Enabled" : "Disabled"}
+            />
+          )}
+          {job.request.subtitle_terminology_filter_enabled !== undefined && (
+            <SummaryItem
+              label="Subtitle terminology filter"
+              value={
+                job.request.subtitle_terminology_filter_enabled ? "Enabled" : "Disabled"
+              }
+            />
+          )}
+          {job.request.output_suffix !== undefined && (
+            <SummaryItem
+              label="Output suffix"
+              value={job.request.output_suffix || "None"}
+            />
+          )}
+          {job.request.output_conflict_policy !== undefined && (
+            <SummaryItem
+              label="Conflict policy"
+              value={job.request.output_conflict_policy}
+            />
+          )}
         </dl>
       </section>
 
@@ -705,6 +770,31 @@ function sourceSummary(job: Job): string {
     job.request.subtitle_path ??
     `Embedded subtitle · Stream ${job.request.stream_index}`
   );
+}
+
+function mediaBasename(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function termMapPolicy(mode: Job["request"]["term_map_mode"]): string {
+  switch (mode) {
+    case "selected":
+      return "Explicit Term map";
+    case "none":
+      return "Explicitly disabled";
+    case "follow":
+      return "Follow directory default";
+  }
+}
+
+async function copyJobId(jobId: string): Promise<boolean> {
+  try {
+    if (!navigator.clipboard?.writeText) return false;
+    await navigator.clipboard.writeText(jobId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRunningJob(status: Job["status"]): boolean {

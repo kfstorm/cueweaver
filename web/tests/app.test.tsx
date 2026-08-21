@@ -154,14 +154,18 @@ async function selectDirectoryTermMap(id: string, optionName: string) {
 
 type JobFixture = { status: string; [key: string]: unknown };
 
-function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) {
+function jobListResponse(
+  jobs: JobFixture[],
+  next_cursor: string | null = null,
+  completedCount = jobs.filter((job) => job.status === "Completed").length,
+) {
   const activeStatuses = ["Queued", "Extracting", "Translating"];
   return jsonResponse({
     active_jobs: jobs.filter((job) => activeStatuses.includes(job.status)),
     history_jobs: jobs.filter((job) => !activeStatuses.includes(job.status)),
     next_cursor,
     matching_count: jobs.length,
-    completed_count: jobs.filter((job) => job.status === "Completed").length,
+    completed_count: completedCount,
   });
 }
 
@@ -971,12 +975,15 @@ describe("product shell", () => {
     });
 
     renderWithFetch("/jobs", fetchMock);
-    fireEvent.click(await screen.findByRole("button", { name: /Shows\/Movie\.mkv/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
 
     expect(
       await screen.findByRole("heading", { name: "Request summary" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Shows/Movie.mkv" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Movie.mkv" })).toHaveFocus();
+    expect(screen.getByText("Shows/Movie.mkv")).toBeInTheDocument();
+    expect(screen.getByText("job-detail-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Job ID" })).toBeInTheDocument();
     expect(screen.getByText("Characters")).toBeInTheDocument();
     expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
     expect(screen.getByText("Status history")).toBeInTheDocument();
@@ -1696,7 +1703,7 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Jobs yet" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "All Jobs" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Job history" })).toHaveFocus();
   });
 
   it("clears only Completed Jobs and reports partial cleanup failures", async () => {
@@ -1734,16 +1741,38 @@ describe("product shell", () => {
           currentJobs = [retained];
           return jsonResponse({ id: second.id, deleted: true });
         }
+        if (input.includes("search=missing")) {
+          return jobListResponse(
+            [],
+            null,
+            currentJobs.filter((job) => job.status === "Completed").length,
+          );
+        }
         if (input.startsWith("/api/jobs")) return jobListResponse(currentJobs);
         return jsonResponse({ term_maps: [] });
       });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderWithFetch("/jobs", fetchMock);
 
     expect(
       await screen.findByRole("button", { name: "Clear Completed (2)" }),
     ).toBeEnabled();
-    fireEvent.click(screen.getAllByRole("button", { name: "Clear Completed (2)" })[0]);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Jobs" }), {
+      target: { value: "missing" },
+    });
+    expect(
+      await screen.findByRole("heading", { name: "No matching Jobs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Clear Completed (2)" }),
+    ).toBeEnabled();
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Clear Completed (2)" })[0],
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      "Clear all completed Job history? This removes 2 completed Jobs and residual Work data. Media and published output are preserved.",
+    );
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/jobs/completed", {
@@ -1757,8 +1786,10 @@ describe("product shell", () => {
       "Job clear-jo: Job Work data could not be cleaned up",
     );
     expect(screen.getByText("Clear Completed (1)")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Jobs" }), {
+      target: { value: "" },
+    });
     expect(screen.getAllByText("Movie.mkv")).not.toHaveLength(0);
-
     fireEvent.click(screen.getAllByRole("button", { name: /Job clear-jo/ })[0]);
     fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
     await waitFor(() =>
