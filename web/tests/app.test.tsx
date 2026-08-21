@@ -1647,10 +1647,12 @@ describe("product shell", () => {
     resolveList(jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] }));
     fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
     expect(screen.getByText("Loading details")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Term map details" })).not.toHaveFocus();
     resolveDetail(
       jsonResponse({ ...CHARACTERS_TERM_MAP, content: { Captain: "队长" } }),
     );
     expect(await screen.findByText("Captain")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Characters" })).toHaveFocus();
   });
 
   it("rejects a Term map whose source JSON exceeds 1 MiB", () => {

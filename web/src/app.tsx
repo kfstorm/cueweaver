@@ -1750,10 +1750,10 @@ function TermMapsPage() {
   }, [resetRemove, resetRename, resetReplace, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || selected.data?.id !== selectedId) return;
     detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     detailHeadingRef.current?.focus({ preventScroll: true });
-  }, [selectedId]);
+  }, [selected.data?.id, selectedId]);
 
   const contentValidation = useMemo(() => validateTermMapContent(content), [content]);
   const contentError = fileError ?? (contentTouched ? contentValidation.error : null);

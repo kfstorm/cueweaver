@@ -1069,8 +1069,12 @@ test("Term maps management works with keyboard and search on desktop and mobile"
       }),
     }),
   );
-  await page.route("/api/term-maps/map-1", (route) =>
-    route.fulfill({
+  let releaseDetails: (() => void) | undefined;
+  await page.route("/api/term-maps/map-1", async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseDetails = resolve;
+    });
+    await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         id: "map-1",
@@ -1079,8 +1083,8 @@ test("Term maps management works with keyboard and search on desktop and mobile"
         updated_at: "2026-08-13T12:00:00Z",
         content: { Captain: "队长", Ship: "舰船" },
       }),
-    }),
-  );
+    });
+  });
 
   for (const viewport of [
     { width: 390, height: 844 },
@@ -1089,7 +1093,20 @@ test("Term maps management works with keyboard and search on desktop and mobile"
     await page.setViewportSize(viewport);
     await page.goto("/term-maps");
     await page.getByRole("button", { name: /Characters/ }).press("Enter");
-    await expect(page.getByRole("heading", { name: "Characters" })).toBeVisible();
+    const loadingHeading = page.getByRole("heading", { name: "Term map details" });
+    await expect(loadingHeading).toBeVisible();
+    await expect(loadingHeading).not.toBeFocused();
+    await expect.poll(() => Boolean(releaseDetails)).toBe(true);
+    releaseDetails?.();
+    const detailHeading = page.getByRole("heading", { name: "Characters" });
+    await expect(detailHeading).toBeVisible();
+    await expect(detailHeading).toBeFocused();
+    await expect
+      .poll(async () => {
+        const box = await detailHeading.boundingBox();
+        return box !== null && box.y >= 0 && box.y + box.height <= viewport.height;
+      })
+      .toBe(true);
     await page.getByLabel("Search Source or Target").fill("ship");
     await expect(page.getByRole("cell", { name: "Ship" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Captain" })).toBeHidden();
