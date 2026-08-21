@@ -169,6 +169,8 @@ async function fulfillJobList(
       active_jobs: jobs.filter((job) => activeStatuses.has(job.status)),
       history_jobs: jobs.filter((job) => !activeStatuses.has(job.status)),
       next_cursor: null,
+      matching_count: jobs.length,
+      completed_count: jobs.filter((job) => job.status === "Completed").length,
     }),
   });
 }
