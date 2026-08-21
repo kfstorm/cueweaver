@@ -1211,6 +1211,18 @@ function outputNameParts(mediaPath: string, format: string) {
   };
 }
 
+function sameTermMapContent(
+  left: Record<string, string>,
+  right: Record<string, string>,
+): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
+  );
+}
+
 function validateOutputSuffix(value: string): string | null {
   if (!value) return "Subtitle suffix must be non-empty.";
   const reserved = new Set([
@@ -1712,19 +1724,23 @@ function TermMapsPage() {
   const replace = useReplaceTermMap();
   const remove = useDeleteTermMap();
   const [name, setName] = useState("");
-  const [content, setContent] = useState('{\n  "Source": "Target"\n}');
+  const [content, setContent] = useState("");
+  const [contentTouched, setContentTouched] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileReadGeneration = useRef(0);
   const [renameName, setRenameName] = useState("");
+  const [loadedName, setLoadedName] = useState("");
   const [replacement, setReplacement] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const selectedIdRef = useRef(selectedId);
   const resetRename = rename.reset;
   const resetReplace = replace.reset;
   const resetRemove = remove.reset;
+  const detailRef = useRef<HTMLElement>(null);
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -1733,8 +1749,26 @@ function TermMapsPage() {
     resetRemove();
   }, [resetRemove, resetRename, resetReplace, selectedId]);
 
+  useEffect(() => {
+    if (!selectedId) return;
+    detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    detailHeadingRef.current?.focus({ preventScroll: true });
+  }, [selectedId]);
+
   const contentValidation = useMemo(() => validateTermMapContent(content), [content]);
-  const contentError = fileError ?? contentValidation.error;
+  const contentError = fileError ?? (contentTouched ? contentValidation.error : null);
+  const replacementText =
+    replacement ??
+    (selected.data ? JSON.stringify(selected.data.content, null, 2) : "");
+  const replacementValidation = useMemo(
+    () => validateTermMapContent(replacementText),
+    [replacementText],
+  );
+  const replacementDirty =
+    replacement !== null &&
+    replacementValidation.content !== null &&
+    selected.data !== undefined &&
+    !sameTermMapContent(replacementValidation.content, selected.data.content);
 
   async function loadTermMapFile(file: File) {
     const generation = ++fileReadGeneration.current;
@@ -1750,6 +1784,7 @@ function TermMapsPage() {
       const fileContent = await readTextFile(file);
       if (generation !== fileReadGeneration.current) return;
       setContent(fileContent);
+      setContentTouched(true);
       setFileName(file.name);
       setFileError(null);
     } catch {
@@ -1782,7 +1817,8 @@ function TermMapsPage() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (fileLoading || contentError !== null) return;
+    setContentTouched(true);
+    if (fileLoading || fileError !== null || contentValidation.error !== null) return;
     create.mutate(
       { name, content },
       {
@@ -1790,7 +1826,8 @@ function TermMapsPage() {
           fileReadGeneration.current += 1;
           setFileLoading(false);
           setName("");
-          setContent('{\n  "Source": "Target"\n}');
+          setContent("");
+          setContentTouched(false);
           setFileName(null);
           setFileError(null);
           if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1814,6 +1851,7 @@ function TermMapsPage() {
       {
         onSuccess: (summary) => {
           if (selectedIdRef.current === selectedId) setRenameName(summary.name);
+          if (selectedIdRef.current === selectedId) setLoadedName(summary.name);
         },
       },
     );
@@ -1866,7 +1904,7 @@ function TermMapsPage() {
               onDrop={handleFileDrop}
             >
               <strong>Import JSON file</strong>
-              <span>Drop a .json file here, or select one.</span>
+              <span>Use a .json file as one supported input path.</span>
               <Button
                 type="button"
                 variant="outline"
@@ -1888,7 +1926,7 @@ function TermMapsPage() {
               {fileName && <span className="field-help">Loaded {fileName}</span>}
             </div>
             <label htmlFor="term-map-content">
-              Paste JSON
+              Paste JSON directly
               <Textarea
                 id="term-map-content"
                 aria-label="JSON content"
@@ -1897,17 +1935,19 @@ function TermMapsPage() {
                 onChange={(event) => {
                   fileReadGeneration.current += 1;
                   setContent(event.target.value);
+                  setContentTouched(true);
                   setFileName(null);
                   setFileError(null);
                   setFileLoading(false);
                 }}
                 rows={6}
                 spellCheck={false}
+                placeholder={'{\n  "Source": "Target"\n}'}
                 aria-describedby="upload-help"
               />
             </label>
             <p id="upload-help" className="field-help">
-              A non-empty object of Source-to-Target strings, up to 1 MiB.
+              Or paste a non-empty object of Source-to-Target strings, up to 1 MiB.
             </p>
             {fileLoading ? (
               <p className="upload-status" role="status">
@@ -1916,6 +1956,10 @@ function TermMapsPage() {
             ) : contentError ? (
               <p className="form-error" role="alert">
                 {contentError}
+              </p>
+            ) : !content.trim() ? (
+              <p className="field-help" role="status">
+                Add JSON using the file import or paste path to preview its mappings.
               </p>
             ) : (
               <p className="term-map-validation valid" role="status">
@@ -1991,6 +2035,7 @@ function TermMapsPage() {
                   selectedIdRef.current = map.id;
                   setSelectedId(map.id);
                   setRenameName(map.name);
+                  setLoadedName(map.name);
                   setReplacement(null);
                   setConfirmation("");
                 }}
@@ -2014,7 +2059,11 @@ function TermMapsPage() {
       </div>
 
       {selectedId && (
-        <section className="term-map-detail" aria-labelledby="detail-title">
+        <section
+          ref={detailRef}
+          className="term-map-detail"
+          aria-labelledby="detail-title"
+        >
           <div className="detail-header">
             <div>
               <Button
@@ -2025,13 +2074,16 @@ function TermMapsPage() {
                   selectedIdRef.current = null;
                   setSelectedId(null);
                   setRenameName("");
+                  setLoadedName("");
                   setReplacement(null);
                   setConfirmation("");
                 }}
               >
                 <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Term maps
               </Button>
-              <h2 id="detail-title">{selected.data?.name ?? "Term map details"}</h2>
+              <h2 ref={detailHeadingRef} id="detail-title" tabIndex={-1}>
+                {selected.data?.name ?? "Term map details"}
+              </h2>
               {selected.data && (
                 <p>
                   {selected.data.entry_count} entries · Updated{" "}
@@ -2053,7 +2105,11 @@ function TermMapsPage() {
                     type="button"
                     variant="outline"
                     onClick={renameSelected}
-                    disabled={rename.isPending}
+                    disabled={
+                      rename.isPending ||
+                      !renameName.trim() ||
+                      renameName === loadedName
+                    }
                   >
                     Save name
                   </Button>
@@ -2117,14 +2173,17 @@ function TermMapsPage() {
                   <h3>Replace JSON content</h3>
                   <Textarea
                     aria-label="Replacement JSON content"
-                    value={
-                      replacement ?? JSON.stringify(selected.data.content, null, 2)
-                    }
+                    value={replacementText}
                     onChange={(event) => setReplacement(event.target.value)}
                     rows={7}
                     spellCheck={false}
                     disabled={replace.isPending}
                   />
+                  {replacement !== null && replacementValidation.error && (
+                    <p className="form-error" role="alert">
+                      {replacementValidation.error}
+                    </p>
+                  )}
                   {replace.isError && (
                     <p className="form-error" role="alert">
                       {replace.error.message}
@@ -2137,7 +2196,7 @@ function TermMapsPage() {
                       replace.mutate(
                         {
                           id: selected.data.id,
-                          content: replacement ?? JSON.stringify(selected.data.content),
+                          content: replacementText,
                         },
                         {
                           onSuccess: () => {
@@ -2148,7 +2207,7 @@ function TermMapsPage() {
                         },
                       )
                     }
-                    disabled={replace.isPending}
+                    disabled={replace.isPending || !replacementDirty}
                   >
                     {replace.isPending ? "Replacing..." : "Replace content"}
                   </Button>

@@ -1594,6 +1594,11 @@ describe("product shell", () => {
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
     renderTermMaps();
 
     const map = await screen.findByRole("button", { name: /Characters/ });
@@ -1603,6 +1608,10 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "Characters" }),
     ).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "Characters" }),
+    );
     expect(screen.getByText("Captain")).toBeInTheDocument();
     const termSearch = screen.getByRole("textbox", { name: "Search Source or Target" });
     expect(termSearch).toHaveAttribute("placeholder", "Type to filter");
@@ -1679,6 +1688,9 @@ describe("product shell", () => {
       await screen.findByRole("heading", { name: "No Term maps yet" }),
     ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Pending" } });
+    fireEvent.change(screen.getByLabelText("JSON content"), {
+      target: { value: '{"Other":"Value"}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
     expect(await screen.findByRole("button", { name: "Uploading..." })).toBeDisabled();
     resolveUpload(
@@ -1785,8 +1797,22 @@ describe("product shell", () => {
     expect(directoryCachesAreStale()).toBe(true);
     setFreshDirectoryCaches();
     fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: '{"Ship":"舰船","Captain":"队长"}' },
+    });
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: "{" },
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("valid JSON");
+    expect(screen.getByLabelText("Replacement JSON content")).toHaveValue("{");
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
+      target: { value: '{\n  "Captain": "队长",\n  "Ship": "舰船"\n}' },
+    });
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
       target: { value: '{"Captain":"队长"}' },
     });
+    expect(screen.getByRole("button", { name: "Replace content" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
     await waitFor(() => expect(screen.getByText(/1 entries/)).toBeInTheDocument());
     expect(directoryCachesAreStale()).toBe(true);
@@ -1863,7 +1889,7 @@ describe("product shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
     expect(await screen.findByDisplayValue("Beta")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Save name" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save name" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     resolveRename(jsonResponse(summaries[0]));
@@ -1888,6 +1914,11 @@ describe("product shell", () => {
       "placeholder",
       "Name it by media, season, language pair, and version.",
     );
+    expect(screen.getByLabelText("JSON content")).toHaveAttribute(
+      "placeholder",
+      '{\n  "Source": "Target"\n}',
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("file import or paste path");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New terms" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: '{"Captain":"队长"}' },
@@ -1952,9 +1983,7 @@ describe("product shell", () => {
       }),
     );
     expect(screen.getByLabelText("Name")).toHaveValue("");
-    expect(screen.getByLabelText("JSON content")).toHaveValue(
-      '{\n  "Source": "Target"\n}',
-    );
+    expect(screen.getByLabelText("JSON content")).toHaveValue("");
   });
 
   it("uses the same validation for dropped JSON and blocks folded duplicate keys", async () => {
@@ -2011,6 +2040,9 @@ describe("product shell", () => {
 
     await screen.findByRole("heading", { name: "No Term maps yet" });
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Names" } });
+    fireEvent.change(screen.getByLabelText("JSON content"), {
+      target: { value: '{"Source":"Target"}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("already exists");

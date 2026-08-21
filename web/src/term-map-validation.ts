@@ -10,6 +10,11 @@ export interface TermMapContentValidation {
 }
 
 export function validateTermMapContent(text: string): TermMapContentValidation {
+  if (!text.trim()) {
+    return invalidTermMapContent(
+      'Enter a Term map JSON object, such as {"Source":"Target"}.',
+    );
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
