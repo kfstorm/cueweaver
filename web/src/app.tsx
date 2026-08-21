@@ -167,10 +167,7 @@ function OutputConflictPolicy({
 }) {
   return (
     <fieldset className="output-conflict-policy">
-      <legend>If the final name already exists</legend>
-      <p className="field-hint">
-        If the output already exists, no Job will be created.
-      </p>
+      <legend>If the output filename already exists</legend>
       <label>
         <input
           type="radio"
@@ -179,7 +176,15 @@ function OutputConflictPolicy({
           checked={value === "skip"}
           onChange={() => onChange("skip")}
         />
-        Skip existing output (recommended)
+        <span>
+          Skip existing output
+          {value === "skip" && (
+            <span className="output-conflict-policy-hint">
+              {" "}
+              (No Job if output exists)
+            </span>
+          )}
+        </span>
       </label>
       <label>
         <input
@@ -722,39 +727,20 @@ function Translate() {
               selectedCandidate &&
               outputParts && (
                 <div className="output-name-section">
-                  <span id="output-name-label" className="field-label">
-                    Output filename
-                  </span>
-                  <div
-                    className="output-name-control"
-                    role="group"
-                    aria-labelledby="output-name-label"
-                  >
-                    <output
-                      aria-label="Media stem"
-                      className="form-control output-name-stem"
-                    >
-                      {`${outputParts.stem}.`}
-                    </output>
-                    <Input
-                      aria-label="Subtitle suffix"
-                      aria-describedby="output-suffix-help"
-                      className="output-name-suffix"
-                      value={outputSuffix}
-                      onChange={(event) => {
-                        suffixEdited.current = true;
-                        setOutputSuffix(event.target.value);
-                      }}
-                    />
-                    <output
-                      aria-label="Source format extension"
-                      className="form-control output-name-extension"
-                    >
-                      {`.${outputParts.format}`}
-                    </output>
-                  </div>
+                  <label htmlFor="output-suffix" className="field-label">
+                    Subtitle suffix
+                  </label>
+                  <Input
+                    id="output-suffix"
+                    aria-describedby="output-suffix-help"
+                    value={outputSuffix}
+                    onChange={(event) => {
+                      suffixEdited.current = true;
+                      setOutputSuffix(event.target.value);
+                    }}
+                  />
                   <p id="output-suffix-help" className="field-help" aria-live="polite">
-                    Final name: <strong>{outputParts.name(outputSuffix)}</strong>
+                    Output filename: <strong>{outputParts.name(outputSuffix)}</strong>
                   </p>
                   <OutputSuffixError error={outputSuffixError} />
                   <OutputConflictPolicy
