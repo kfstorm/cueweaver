@@ -1092,6 +1092,50 @@ describe("product shell", () => {
     }
   });
 
+  it("copies a Job ID successfully when the browser clipboard is available", async () => {
+    const originalClipboard = navigator.clipboard;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const job = embeddedJob("copy-success-job", "Failed");
+      renderWithFetch("/jobs", jobsFetch(job));
+      fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Copy Job ID" }));
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      expect(writeText).toHaveBeenCalledWith("copy-success-job");
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("distinguishes all Term map policies and an absent snapshot", async () => {
+    for (const [mode, policy] of [
+      ["follow", "Follow directory default"],
+      ["none", "Explicitly disabled"],
+      ["selected", "Explicit Term map"],
+    ] as const) {
+      const job = {
+        ...embeddedJob(`term-map-${mode}`, "Failed"),
+        request: {
+          ...embeddedJob(`term-map-${mode}`, "Failed").request,
+          term_map_mode: mode,
+          term_map: null,
+        },
+      };
+      renderWithFetch("/jobs", jobsFetch(job));
+      fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+      expect(await screen.findByText(policy)).toBeInTheDocument();
+      expect(screen.getByText("Not recorded")).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
   it("refreshes a Job detail after an out-of-band retry", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const failed = {
@@ -1694,6 +1738,9 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
     expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(
+      "Delete Job delete-j? This removes its Job history and residual Work data. Media and published output are preserved.",
+    );
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/jobs/delete-job-1",
       expect.objectContaining({ method: "DELETE" }),
