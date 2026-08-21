@@ -56,6 +56,7 @@ from .store import FileJobRecordStore, JobRecordHealth, JobRecordStore
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
 MAX_HISTORY_PAGE_LIMIT = 100
+MAX_HISTORY_SEARCH_LENGTH = 200
 APPROVED_ERROR_CONTEXT_KEYS = frozenset(
     {"field", "media_path", "output_path", "path", "stream_index"}
 )
@@ -408,7 +409,11 @@ class Jobs:
         )
 
     def list_page(
-        self, limit: int = 50, cursor: str | None = None
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        search: str = "",
+        status: str = "all",
     ) -> dict[str, object]:
         """Return active Jobs and one bounded page of terminal history."""
         if (
@@ -419,10 +424,26 @@ class Jobs:
             raise ServiceError(
                 "invalid_job_limit", "Job history limit must be between 1 and 100"
             )
+        normalized_search = search.strip().casefold()
+        if len(normalized_search) > MAX_HISTORY_SEARCH_LENGTH:
+            raise ServiceError("invalid_job_search", "Job search is too long")
+        if status not in {
+            "all",
+            "Queued",
+            "Extracting",
+            "Translating",
+            *TERMINAL_JOB_STATUSES,
+        }:
+            raise ServiceError("invalid_job_status", "Job status filter is invalid")
         position: tuple[str, str] | None = None
         if cursor is not None:
             try:
-                position = decode_history_cursor(cursor)
+                created_at, job_id, cursor_search, cursor_status = (
+                    decode_history_cursor(cursor)
+                )
+                if cursor_search != normalized_search or cursor_status != status:
+                    raise ValueError("Cursor conditions do not match")
+                position = (created_at, job_id)
             except ValueError as error:
                 raise ServiceError(
                     "invalid_job_cursor", "Job history cursor is invalid"
@@ -433,14 +454,19 @@ class Jobs:
                 record
                 for record in self._records.values()
                 if record.get("status") in {"Queued", "Extracting", "Translating"}
+                and (status == "all" or record.get("status") == status)
+                and _job_matches_search(record, normalized_search)
             ]
             active_records.sort(key=_active_sort_key)
             history_records = [
                 record
                 for record in self._records.values()
                 if record.get("status") in TERMINAL_JOB_STATUSES
+                and (status == "all" or record.get("status") == status)
+                and _job_matches_search(record, normalized_search)
             ]
             history_records.sort(key=_history_sort_key, reverse=True)
+            matching_count = len(active_records) + len(history_records)
             if position is not None:
                 history_records = [
                     record
@@ -459,14 +485,22 @@ class Jobs:
         next_cursor = None
         if has_more:
             last = page_records[-1]
-            created_at = last.get("created_at")
-            job_id = last.get("id")
-            if isinstance(created_at, str) and isinstance(job_id, str):
-                next_cursor = encode_history_cursor(created_at, job_id)
+            last_created_at = last.get("created_at")
+            last_job_id = last.get("id")
+            if isinstance(last_created_at, str) and isinstance(last_job_id, str):
+                next_cursor = encode_history_cursor(
+                    last_created_at, last_job_id, normalized_search, status
+                )
+        with self._lock:
+            completed_count = sum(
+                record.get("status") == "Completed" for record in self._records.values()
+            )
         return {
             "active_jobs": active_jobs,
             "history_jobs": history_jobs,
             "next_cursor": next_cursor,
+            "matching_count": matching_count,
+            "completed_count": completed_count,
         }
 
     def get(self, job_id: str) -> dict[str, object]:
@@ -1223,6 +1257,26 @@ def _history_sort_key(record: dict[str, object]) -> tuple[str, str]:
     return (
         created_at if isinstance(created_at, str) else "",
         job_id if isinstance(job_id, str) else "",
+    )
+
+
+def _job_matches_search(record: dict[str, object], search: str) -> bool:
+    if not search:
+        return True
+    request = record.get("request")
+    values = [record.get("id")]
+    if isinstance(request, dict):
+        values.extend(
+            request.get(field)
+            for field in (
+                "media_path",
+                "subtitle_path",
+                "target_language_code",
+                "output_path",
+            )
+        )
+    return any(
+        isinstance(value, str) and search in value.casefold() for value in values
     )
 
 
