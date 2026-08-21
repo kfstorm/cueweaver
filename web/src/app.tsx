@@ -281,9 +281,12 @@ function Translate() {
   const discovery = useMediaDiscovery(selectedMedia);
   const batchPaths = [...selectedBatchMedia];
   const batchDiscoveries = useMediaDiscoveries(batchPaths);
-  const focusBatchMedia = (path: string) => {
+  const focusBatchMedia = (path: string, fallbackPath?: string) => {
     queueMicrotask(() => {
-      mediaButtonRefs.current.get(path)?.focus();
+      (
+        mediaButtonRefs.current.get(path) ??
+        (fallbackPath ? mediaButtonRefs.current.get(fallbackPath) : undefined)
+      )?.focus();
     });
   };
   const clearDiscovery = (previousMedia: string | null) => {
@@ -532,7 +535,10 @@ function Translate() {
                         next.delete(path);
                         return next;
                       });
-                      focusBatchMedia(path);
+                      focusBatchMedia(
+                        path,
+                        batchPaths.find((item) => item !== path),
+                      );
                     }}
                   />
                 ))}
@@ -1544,8 +1550,13 @@ function MediaBrowser({
   const selectionActive = batchMode
     ? selectedMediaPaths.size > 0
     : selectedMedia !== null;
-  const entries = query.data?.entries.filter((entry) =>
-    entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
+  const entries = query.data?.entries.filter(
+    (entry) =>
+      entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) ||
+      (entry.kind === "media" &&
+        (batchMode
+          ? selectedMediaPaths.has(entry.path)
+          : selectedMedia === entry.path)),
   );
   return (
     <div className="media-browser">

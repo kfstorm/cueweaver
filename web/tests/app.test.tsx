@@ -2087,6 +2087,31 @@ describe("product shell", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps selected batch Media reachable through filtering and restores focus", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter this directory" }), {
+      target: { value: "Second" },
+    });
+
+    const clearMovie = within(
+      screen.getByRole("region", { name: "Subtitle selection for Movie.mkv" }),
+    ).getByRole("button", { name: "Choose another Media" });
+    fireEvent.click(clearMovie);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Second.mkv" })).toHaveFocus(),
+    );
+  });
+
   it("filters and manually resolves an ambiguous Embedded subtitle", async () => {
     renderRoute(
       "/translate",
