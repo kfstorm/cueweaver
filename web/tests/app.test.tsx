@@ -1829,9 +1829,14 @@ describe("product shell", () => {
       screen.getByRole("button", { name: "Clear completed history (2)" }),
     ).toBeEnabled();
     expect(
+      screen.getByText(
+        "Applies to all completed Jobs, regardless of the current filters.",
+      ),
+    ).toBeVisible();
+    expect(
       screen.getByRole("button", { name: "Clear completed history (2)" }),
     ).toHaveAccessibleDescription(
-      "Global action: removes all completed Job history regardless of the current filters.",
+      "Applies to all completed Jobs, regardless of the current filters.",
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Clear completed history (2)" }),

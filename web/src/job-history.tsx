@@ -197,9 +197,8 @@ export function JobsPage() {
               >
                 {clearCompleted.isPending ? "Clearing..." : clearCompletedLabel}
               </Button>
-              <span id="clear-completed-scope" className="sr-only">
-                Global action: removes all completed Job history regardless of the
-                current filters.
+              <span id="clear-completed-scope" className="clear-completed-scope">
+                Applies to all completed Jobs, regardless of the current filters.
               </span>
             </div>
           </div>

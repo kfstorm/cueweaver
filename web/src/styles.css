@@ -1058,6 +1058,12 @@ a {
   min-height: 36px;
 }
 
+.clear-completed-scope {
+  color: var(--text-muted);
+  font-size: var(--font-help);
+  line-height: 1.4;
+}
+
 .job-list-panel > section {
   margin-top: var(--space-5);
 }
@@ -1204,7 +1210,7 @@ a {
 
 .job-detail-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, min-content);
   gap: var(--space-2) var(--space-3);
   align-items: start;
 }
@@ -1225,6 +1231,7 @@ a {
 
 .job-detail-context {
   display: grid;
+  min-width: 0;
   justify-items: end;
   gap: 8px;
   align-self: start;
@@ -2136,14 +2143,6 @@ summary:focus-visible {
 
   .job-layout.has-selection .job-detail {
     display: block;
-  }
-
-  .job-detail-header {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .job-detail-context {
-    justify-items: end;
   }
 
   .job-detail-title h2 {
