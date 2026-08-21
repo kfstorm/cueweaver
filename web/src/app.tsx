@@ -242,13 +242,15 @@ function Translate() {
   const [targetLanguage, setTargetLanguage] = useState(
     () => window.localStorage.getItem("cueweaver.target-language") ?? "",
   );
+  const [targetLanguageChoice, setTargetLanguageChoice] = useState(() => {
+    const remembered = window.localStorage.getItem("cueweaver.target-language") ?? "";
+    if (remembered === "") return "";
+    return COMMON_TARGET_LANGUAGES.some(({ code }) => code === remembered)
+      ? remembered
+      : "custom";
+  });
   const [outputSuffix, setOutputSuffix] = useState(() => targetLanguage);
-  const commonTargetLanguage = COMMON_TARGET_LANGUAGES.some(
-    ({ code }) => code === targetLanguage,
-  )
-    ? targetLanguage
-    : "custom";
-  const customTargetLanguage = commonTargetLanguage === "custom";
+  const customTargetLanguage = targetLanguageChoice === "custom";
   const [outputConflictPolicy, setOutputConflictPolicy] =
     useState<OutputConflictPolicy>("skip");
   const suffixEdited = useRef(false);
@@ -575,12 +577,14 @@ function Translate() {
             Common target language
             <Select
               id="common-target-language"
-              value={commonTargetLanguage}
+              value={targetLanguageChoice}
               onChange={(event) => {
                 const value = event.target.value;
                 if (value === "custom") {
+                  setTargetLanguageChoice("custom");
                   updateTargetLanguage("");
                 } else {
+                  setTargetLanguageChoice(value);
                   updateTargetLanguage(value);
                 }
               }}
@@ -618,11 +622,12 @@ function Translate() {
           <span id="target-language-help" className="field-help">
             Choose a common language or select Custom language code.
           </span>
-          <label className="term-map-field">
-            Term map
+          <label className="term-map-field" htmlFor="term-map-select">
+            Term map for this translation
             <Select
               id="term-map-select"
-              aria-label="Term map"
+              aria-label="Term map for this translation"
+              aria-describedby="term-map-policy-help"
               value={
                 termMapMode === "follow"
                   ? DIRECTORY_TERM_MAP_VALUE
@@ -647,8 +652,8 @@ function Translate() {
             >
               <option value={DIRECTORY_TERM_MAP_VALUE}>
                 {directoryTermMap.data?.effective
-                  ? `Use directory default (${directoryTermMap.data.effective.name})`
-                  : "Use directory default (none)"}
+                  ? `Follow Directory default (${directoryTermMap.data.effective.name})`
+                  : "Follow Directory default (none)"}
               </option>
               <option value="">No Term map for this Job</option>
               {(termMaps.data?.term_maps ?? []).map((termMap) => (
@@ -657,6 +662,10 @@ function Translate() {
                 </option>
               ))}
             </Select>
+            <span id="term-map-policy-help" className="field-help">
+              Follow the Directory default, explicitly use no Term map, or choose a
+              specific Term map for this translation.
+            </span>
             {termMaps.isPending && (
               <span className="field-help" role="status">
                 Loading Term maps
@@ -897,11 +906,15 @@ function DirectoryTermMapPanel({
     <section className="directory-term-map" aria-labelledby="directory-term-map-title">
       <div className="directory-term-map-heading">
         <div>
-          <h3 id="directory-term-map-title">Directory Term map</h3>
+          <h3 id="directory-term-map-title">Directory default</h3>
           <p className="field-help">
             {directory
               ? `Current directory: ${directory}`
               : "Current directory: Media root"}
+          </p>
+          <p id="directory-default-help" className="field-help">
+            Applies to Media beneath the current directory unless a Job overrides or
+            disables it.
           </p>
         </div>
         {query.isPending && <span role="status">Loading binding...</span>}
@@ -931,7 +944,8 @@ function DirectoryTermMapPanel({
           </dl>
           <div className="directory-term-map-controls">
             <Select
-              aria-label="Directory Term map"
+              aria-label="Directory default"
+              aria-describedby="directory-default-help"
               value={selectedId}
               onChange={(event) => onSelectedIdChange(event.target.value)}
               disabled={

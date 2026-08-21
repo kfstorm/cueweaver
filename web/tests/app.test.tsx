@@ -354,7 +354,19 @@ async function selectExternalSubtitle() {
 
 async function selectExternalSubtitleWithLanguage(language = "zh-Hans") {
   await selectExternalSubtitle();
-  fireEvent.change(screen.getByLabelText("Target language code"), {
+  fireEvent.change(screen.getByLabelText("Common target language"), {
+    target: { value: "custom" },
+  });
+  fireEvent.change(await screen.findByLabelText("Target language code"), {
+    target: { value: language },
+  });
+}
+
+async function enterCustomTargetLanguage(language: string) {
+  fireEvent.change(screen.getByLabelText("Common target language"), {
+    target: { value: "custom" },
+  });
+  fireEvent.change(await screen.findByLabelText("Target language code"), {
     target: { value: language },
   });
 }
@@ -371,9 +383,7 @@ function mockBatchRequest(response: unknown) {
 }
 
 async function submitBatch() {
-  fireEvent.change(await screen.findByLabelText("Target language code"), {
-    target: { value: "zh-Hans" },
-  });
+  await enterCustomTargetLanguage("zh-Hans");
   fireEvent.click(screen.getByRole("button", { name: "Queue selected translations" }));
 }
 
@@ -2272,9 +2282,7 @@ describe("product shell", () => {
 
     await selectBatchMedia();
     fireEvent.click(screen.getByRole("button", { name: "Select unique" }));
-    fireEvent.change(await screen.findByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     expect(
       await screen.findByRole("button", {
         name: "Select embedded subtitle stream 3 Metadata unavailable",
@@ -2532,9 +2540,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
 
     expect(screen.getByText("Movie.zh-Hans.srt")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -2591,12 +2597,69 @@ describe("product shell", () => {
     );
   });
 
+  it("starts new translations at an explicit language choice", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    const commonLanguage = screen.getByLabelText("Common target language");
+    expect(commonLanguage).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Choose a language" })).toBeDisabled();
+    expect(screen.queryByLabelText("Target language code")).not.toBeInTheDocument();
+
+    fireEvent.change(commonLanguage, { target: { value: "custom" } });
+
+    expect(screen.getByLabelText("Target language code")).toHaveValue("");
+  });
+
+  it("restores a remembered common language as its friendly choice", async () => {
+    window.localStorage.setItem("cueweaver.target-language", "zh-Hans");
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    expect(screen.getByLabelText("Common target language")).toHaveValue("zh-Hans");
+    expect(screen.queryByLabelText("Target language code")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+  });
+
+  it("restores a remembered custom language on the custom path", async () => {
+    window.localStorage.setItem("cueweaver.target-language", "x-custom");
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    expect(screen.getByLabelText("Common target language")).toHaveValue("custom");
+    expect(screen.getByLabelText("Target language code")).toHaveValue("x-custom");
+  });
+
+  it("explains the Directory default and Job-level Term map scopes", async () => {
+    renderRoute("/translate");
+
+    await selectExternalSubtitle();
+
+    expect(
+      screen.getByRole("region", { name: "Directory default" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Applies to Media beneath the current directory unless a Job overrides or disables it.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Term map for this translation" }),
+    ).toHaveAttribute("aria-describedby", "term-map-policy-help");
+    expect(
+      screen.getByText(
+        "Follow the Directory default, explicitly use no Term map, or choose a specific Term map for this translation.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("announces queueing while Job creation is pending and after success", async () => {
     renderRoute("/translate");
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     let resolveCreate!: (value: unknown) => void;
     const createPending = new Promise((resolve) => {
       resolveCreate = resolve;
@@ -2683,9 +2746,7 @@ describe("product shell", () => {
     const job = queuedEmbeddedJob("queued-detail-1");
     renderRoute("/translate");
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     mockQueuedJobCreation(job);
 
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -2716,14 +2777,12 @@ describe("product shell", () => {
     );
     await selectExternalSubtitle();
     fireEvent.click(screen.getByText("Advanced settings"));
-    fireEvent.change(await screen.findByLabelText("Term map"), {
+    fireEvent.change(await screen.findByLabelText("Term map for this translation"), {
       target: { value: "map-1" },
     });
     fireEvent.click(screen.getByLabelText("Dynamic terminology"));
     fireEvent.click(screen.getByLabelText("Subtitle terminology filtering"));
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     mockQueuedJobCreation(job, [CHARACTERS_TERM_MAP]);
 
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -2731,7 +2790,7 @@ describe("product shell", () => {
     expect(
       screen.getByRole("button", { name: "Choose another Media" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Term map")).toHaveValue("map-1");
+    expect(screen.getByLabelText("Term map for this translation")).toHaveValue("map-1");
     expect(screen.getByLabelText("Dynamic terminology")).not.toBeChecked();
     expect(
       screen.queryByRole("button", { name: "Start translation" }),
@@ -2745,7 +2804,9 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: "Choose another Media" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Term map")).toHaveValue("__directory_default__");
+    expect(screen.getByLabelText("Term map for this translation")).toHaveValue(
+      "__directory_default__",
+    );
     expect(screen.getByLabelText("Dynamic terminology")).toBeChecked();
     expect(screen.getByLabelText("Subtitle terminology filtering")).toBeChecked();
   });
@@ -2754,9 +2815,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectEmbeddedSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await expectQueuedJob({
@@ -2844,7 +2903,9 @@ describe("product shell", () => {
     renderWithFetch("/translate", fetchMock);
     await selectExternalSubtitle();
     expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Term map" })).toBeDisabled();
+    expect(
+      screen.getByRole("combobox", { name: "Term map for this translation" }),
+    ).toBeDisabled();
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {
@@ -2860,15 +2921,13 @@ describe("product shell", () => {
 
     await selectExternalSubtitle();
     fireEvent.click(screen.getByText("Advanced settings"));
-    const termMap = screen.getByLabelText("Term map");
+    const termMap = screen.getByLabelText("Term map for this translation");
     expect(
       screen.getByRole("option", { name: "No Term map for this Job" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Characters" })).toBeInTheDocument();
     fireEvent.change(termMap, { target: { value: "map-1" } });
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await expectQueuedJobRequest("zh-Hans", "map-1", true, true);
@@ -2886,10 +2945,10 @@ describe("product shell", () => {
     );
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Term map"), { target: { value: "" } });
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
+    fireEvent.change(screen.getByLabelText("Term map for this translation"), {
+      target: { value: "" },
     });
+    await enterCustomTargetLanguage("zh-Hans");
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await waitFor(() =>
@@ -2920,7 +2979,7 @@ describe("product shell", () => {
     );
 
     await screen.findByRole("option", { name: "Characters" });
-    const termMap = screen.getByLabelText("Term map");
+    const termMap = screen.getByLabelText("Term map for this translation");
     await waitFor(() => expect(termMap).toBeEnabled());
     fireEvent.change(termMap, {
       target: { value: "map-1" },
@@ -2929,7 +2988,9 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open Series" }));
 
     await waitFor(() =>
-      expect(screen.getByLabelText("Term map")).toHaveValue("__directory_default__"),
+      expect(screen.getByLabelText("Term map for this translation")).toHaveValue(
+        "__directory_default__",
+      ),
     );
   });
 
@@ -2947,7 +3008,7 @@ describe("product shell", () => {
 
     fireEvent.click(screen.getByText("Advanced settings"));
     await screen.findByRole("option", { name: "Characters" });
-    const termMap = screen.getByLabelText("Term map");
+    const termMap = screen.getByLabelText("Term map for this translation");
     fireEvent.change(termMap, { target: { value: "map-1" } });
     expect(termMap).toHaveValue("map-1");
 
@@ -2961,9 +3022,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
     expect(
       screen.getByText(
@@ -3016,9 +3075,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "x-custom" },
-    });
+    await enterCustomTargetLanguage("x-custom");
     fireEvent.click(screen.getByText("Advanced settings"));
     fireEvent.click(screen.getByLabelText("Dynamic terminology"));
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
@@ -3055,9 +3112,7 @@ describe("product shell", () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
-    fireEvent.change(screen.getByLabelText("Target language code"), {
-      target: { value: "zh-Hans" },
-    });
+    await enterCustomTargetLanguage("zh-Hans");
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));

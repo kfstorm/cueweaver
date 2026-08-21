@@ -598,7 +598,7 @@ test("batch Translate creates independent Jobs in request order through the real
   );
 });
 
-test("Translate manages the current Directory Term map binding", async ({ page }) => {
+test("Translate manages the current Directory default binding", async ({ page }) => {
   const termMap = {
     id: "map-directory",
     name: "Series terms",
@@ -698,7 +698,7 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   const expectEffectiveTermMap = async (name: string) => {
     await expect(
       page
-        .getByRole("region", { name: "Directory Term map" })
+        .getByRole("region", { name: "Directory default" })
         .locator(".directory-term-map-state dd")
         .filter({ hasText: name })
         .first(),
@@ -709,7 +709,7 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await page.getByRole("button", { name: "Open Series" }).click();
   await expect(page.getByText("Effective Term map")).toBeVisible();
   await page
-    .getByRole("combobox", { name: "Directory Term map" })
+    .getByRole("combobox", { name: "Directory default" })
     .selectOption(termMap.id);
   await page.getByRole("button", { name: "Bind Term map" }).click();
   await expectEffectiveTermMap("Series terms");
@@ -719,13 +719,13 @@ test("Translate manages the current Directory Term map binding", async ({ page }
   await page.getByRole("button", { name: "Open Season 1" }).click();
   await expectEffectiveTermMap("Series terms");
   await page
-    .getByRole("combobox", { name: "Directory Term map" })
+    .getByRole("combobox", { name: "Directory default" })
     .selectOption(childTermMap.id);
   await page.getByRole("button", { name: "Bind Term map" }).click();
   await expectEffectiveTermMap("Season terms");
   await page.getByRole("button", { name: "alias", exact: true }).click();
   await page
-    .getByRole("combobox", { name: "Directory Term map" })
+    .getByRole("combobox", { name: "Directory default" })
     .selectOption(replacementTermMap.id);
   await page.getByRole("button", { name: "Replace local binding" }).click();
   await expectEffectiveTermMap("Replacement terms");
