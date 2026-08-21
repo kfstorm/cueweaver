@@ -2089,7 +2089,7 @@ function TermMapsPage() {
                     aria-label="Search Source or Target"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search Source or Target"
+                    placeholder="Type to filter"
                   />
                 </label>
                 <div className="term-table-wrap">
