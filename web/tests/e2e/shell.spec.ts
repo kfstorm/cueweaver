@@ -1357,28 +1357,16 @@ test.describe("subtitle submission", () => {
         await page.getByRole("button", { name: source.subtitleName }).click();
         await expect(page.locator("#common-target-language option")).toHaveCount(31);
         await page.getByLabel("Target language code").fill("zh-Hans");
-        const outputGroup = page.getByRole("group", { name: "Output filename" });
-        await expect(outputGroup).toBeVisible();
-        await expect(page.getByLabel("Media stem")).toHaveText("Example.");
-        await expect(page.getByLabel("Media stem")).not.toHaveAttribute("readonly");
         await expect(page.getByLabel("Subtitle suffix")).toHaveValue("zh-Hans");
-        await expect(page.getByLabel("Source format extension")).toHaveText(".srt");
-        await expect(page.getByText("Example.zh-Hans.srt")).toBeVisible();
-        await expect(
-          page.getByLabel("Skip existing output (recommended)"),
-        ).toBeChecked();
-        await expect(page.getByLabel("Overwrite existing output")).not.toBeChecked();
-        const outputFits = await outputGroup.evaluate(
-          (element) => element.scrollWidth <= element.clientWidth,
+        await expect(page.locator("#output-suffix-help")).toHaveText(
+          "Output filename: Example.zh-Hans.srt",
         );
-        expect(outputFits).toBe(true);
+        await expect(page.getByLabel(/Skip existing output/u)).toBeChecked();
+        await expect(page.getByLabel("Overwrite existing output")).not.toBeChecked();
         if (viewport.name === "mobile") {
           const suffixBox = await page.getByLabel("Subtitle suffix").boundingBox();
           expect(suffixBox?.height).toBeGreaterThanOrEqual(44);
-          for (const label of [
-            "Skip existing output (recommended)",
-            "Overwrite existing output",
-          ]) {
+          for (const label of ["Skip existing output", "Overwrite existing output"]) {
             const box = await page
               .locator(".output-conflict-policy label")
               .filter({ hasText: label })

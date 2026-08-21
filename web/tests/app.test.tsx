@@ -2520,10 +2520,9 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Select Movie.mkv" }));
 
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
-    expect(screen.getByLabelText("Skip existing output (recommended)")).toBeChecked();
-    expect(
-      screen.getByText("If the output already exists, no Job will be created."),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Skip existing output/u)).toBeChecked();
+    expect(screen.getByText("(No Job if output exists)")).toBeInTheDocument();
+    expect(screen.queryByText(/Output filename:/u)).not.toBeInTheDocument();
     expect(screen.queryByText("single-only")).not.toBeInTheDocument();
   });
 
@@ -2963,16 +2962,24 @@ describe("product shell", () => {
     fireEvent.change(screen.getByLabelText("Target language code"), {
       target: { value: "zh-Hans" },
     });
-    expect(screen.getByLabelText("Media stem")).toHaveTextContent("Movie.");
-    expect(screen.getByLabelText("Media stem")).not.toHaveAttribute("readonly");
-    expect(screen.getByLabelText("Source format extension")).toHaveTextContent(".srt");
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
+    expect(
+      screen.getByText(
+        (_, element) => element?.textContent === "Output filename: Movie.zh-Hans.srt",
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
       target: { value: "zh-Hans.forced" },
     });
-    expect(screen.getByText("Movie.zh-Hans.forced.srt")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Output filename: Movie.zh-Hans.forced.srt",
+      ),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+    expect(screen.queryByText("(No Job if output exists)")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
 
     await waitFor(() =>

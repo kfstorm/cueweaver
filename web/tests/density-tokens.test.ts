@@ -33,7 +33,6 @@ describe("CSS density tokens", () => {
 
   it("uses spacing tokens at the main layout seams", () => {
     for (const [contract, expectedMatches] of [
-      [/\.output-name-control\s*\{[^}]*?gap: var\(--space-2\);/gu, 1],
       [/\.job-list\s*\{[^}]*?gap: var\(--space-3\);/gu, 1],
       [/\.term-map-upload form\s*\{[^}]*?gap: var\(--space-4\);/gu, 1],
       [/\.term-map-layout\s*\{[^}]*?gap: var\(--space-5\);/gu, 2],
