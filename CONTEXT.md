@@ -31,9 +31,18 @@ Writing a selected Embedded text subtitle stream losslessly to an explicit path.
 _Avoid_: demux
 
 **Term map**:
-An explicit JSON object mapping non-empty source terms to non-empty target
-terms for one translation request.
+An explicit, reusable JSON object mapping non-empty source terms to non-empty
+target terms. A Job can select one, follow a Directory default, or explicitly
+disable terminology mapping.
 _Avoid_: glossary
+
+**Directory default**:
+The Term map associated with a Media directory for translations beneath it,
+unless a Job explicitly selects or disables its Term map.
+
+**Term map for this translation**:
+The Term map policy selected for one Job: follow the Directory default, use a
+specific Term map, or use none.
 
 **Work directory**:
 The explicit per-request directory used for PySubtrans translation state.

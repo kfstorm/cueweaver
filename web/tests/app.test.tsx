@@ -1604,12 +1604,14 @@ describe("product shell", () => {
       await screen.findByRole("heading", { name: "Characters" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Captain")).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("Search Source or Target"), {
+    const termSearch = screen.getByRole("textbox", { name: "Search Source or Target" });
+    expect(termSearch).toHaveAttribute("placeholder", "Type to filter");
+    fireEvent.change(termSearch, {
       target: { value: "ship" },
     });
     expect(screen.getByText("Ship")).toBeInTheDocument();
     expect(screen.queryByText("Captain")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("Search Source or Target"), {
+    fireEvent.change(termSearch, {
       target: { value: "missing" },
     });
     expect(screen.getByText("No matching terms.")).toBeInTheDocument();

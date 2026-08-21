@@ -1161,6 +1161,10 @@ a {
   font-size: var(--font-small);
 }
 
+.job-detail-title .eyebrow {
+  overflow-wrap: anywhere;
+}
+
 .job-detail-header > .job-status {
   align-self: start;
 }
