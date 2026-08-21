@@ -1090,14 +1090,17 @@ test("Term maps management works with keyboard and search on desktop and mobile"
     { width: 390, height: 844 },
     { width: 1280, height: 800 },
   ]) {
+    releaseDetails = undefined;
     await page.setViewportSize(viewport);
     await page.goto("/term-maps");
     await page.getByRole("button", { name: /Characters/ }).press("Enter");
     const loadingHeading = page.getByRole("heading", { name: "Term map details" });
     await expect(loadingHeading).toBeVisible();
     await expect(loadingHeading).not.toBeFocused();
-    await expect.poll(() => Boolean(releaseDetails)).toBe(true);
-    releaseDetails?.();
+    await expect.poll(() => releaseDetails).toBeDefined();
+    const releaseCurrentDetails = releaseDetails;
+    releaseDetails = undefined;
+    releaseCurrentDetails?.();
     const detailHeading = page.getByRole("heading", { name: "Characters" });
     await expect(detailHeading).toBeVisible();
     await expect(detailHeading).toBeFocused();
