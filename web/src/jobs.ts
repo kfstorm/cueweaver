@@ -287,6 +287,14 @@ async function fetchJobsPage(path: string, signal?: AbortSignal): Promise<JobLis
     active_jobs: body.active_jobs,
     history_jobs: body.history_jobs,
     next_cursor: body.next_cursor,
+    matching_count:
+      typeof body.matching_count === "number" && body.matching_count >= 0
+        ? body.matching_count
+        : undefined,
+    completed_count:
+      typeof body.completed_count === "number" && body.completed_count >= 0
+        ? body.completed_count
+        : undefined,
   };
 }
 
