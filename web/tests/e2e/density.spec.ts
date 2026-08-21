@@ -161,10 +161,10 @@ for (const viewport of viewports) {
 
     const jobsGap = await page.locator("#history-jobs-title").evaluate((heading) => {
       const headingBox = heading.getBoundingClientRect();
-      const controls = document
-        .querySelector(".job-list-heading")!
+      const actions = document
+        .querySelector(".job-list-actions")!
         .getBoundingClientRect();
-      return headingBox.top - controls.bottom;
+      return headingBox.top - actions.bottom;
     });
     expect(jobsGap).toBeLessThanOrEqual(64);
     expect(

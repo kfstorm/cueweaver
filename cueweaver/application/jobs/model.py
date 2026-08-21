@@ -124,21 +124,16 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
     return projected
 
 
-def encode_history_cursor(
-    created_at: str,
-    job_id: str,
-    search: str = "",
-    status: str = "all",
-) -> str:
+def encode_history_cursor(created_at: str, job_id: str) -> str:
     payload = json.dumps(
-        {"created_at": created_at, "id": job_id, "search": search, "status": status},
+        {"created_at": created_at, "id": job_id},
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("utf-8")
     return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def decode_history_cursor(cursor: str) -> tuple[str, str, str, str]:
+def decode_history_cursor(cursor: str) -> tuple[str, str]:
     if (
         not cursor
         or len(cursor) > HISTORY_CURSOR_LENGTH_LIMIT
@@ -160,16 +155,14 @@ def decode_history_cursor(cursor: str) -> tuple[str, str, str, str]:
         raise ValueError("Invalid history cursor") from error
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"created_at", "id", "search", "status"}
+        or set(payload) != {"created_at", "id"}
         or not isinstance(payload["created_at"], str)
         or not payload["created_at"]
         or not isinstance(payload["id"], str)
         or not payload["id"]
-        or not isinstance(payload["search"], str)
-        or not isinstance(payload["status"], str)
     ):
         raise ValueError("Invalid history cursor")
-    return payload["created_at"], payload["id"], payload["search"], payload["status"]
+    return payload["created_at"], payload["id"]
 
 
 def copy_job_record(record: Mapping[str, object]) -> JobRecord:
