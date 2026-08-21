@@ -423,6 +423,10 @@ test.describe("responsive Media and Discovery layout", () => {
         expect((browserBox?.x ?? 0) + (browserBox?.width ?? 0)).toBeLessThan(
           discoveryBox?.x ?? 0,
         );
+      } else {
+        await expect(
+          page.getByRole("button", { name: "Select Second.mkv" }),
+        ).toBeHidden();
       }
 
       await page.reload();

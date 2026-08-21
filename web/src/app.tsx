@@ -238,7 +238,7 @@ function Translate() {
   const [expandedBatchMedia, setExpandedBatchMedia] = useState<Set<string>>(
     () => new Set(),
   );
-  const [batchBrowserExpanded, setBatchBrowserExpanded] = useState(true);
+  const [mediaBrowserExpanded, setMediaBrowserExpanded] = useState(true);
   const [batchSubtitleFilter, setBatchSubtitleFilter] = useState("");
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState(
@@ -300,6 +300,7 @@ function Translate() {
     clearDiscovery(previousMedia);
     setSelectedMedia(null);
     setSelectedSubtitle(null);
+    setMediaBrowserExpanded(true);
   };
   const selectedCandidate = discovery.data?.candidates.find(
     (candidate, index) => candidateKey(candidate, index) === selectedSubtitle,
@@ -379,7 +380,7 @@ function Translate() {
     setSelectedBatchMedia(new Set());
     setBatchSubtitleSelections(new Map());
     setExpandedBatchMedia(new Set());
-    setBatchBrowserExpanded(true);
+    setMediaBrowserExpanded(true);
     setBatchSubtitleFilter("");
     setBatchMode(false);
     setTermMapMode("follow");
@@ -415,7 +416,7 @@ function Translate() {
                 setSelectedBatchMedia(new Set());
                 setBatchSubtitleSelections(new Map());
                 setExpandedBatchMedia(new Set());
-                setBatchBrowserExpanded(true);
+                setMediaBrowserExpanded(true);
                 setBatchSubtitleFilter("");
                 if (nextBatchMode) {
                   setOutputSuffix(targetLanguage);
@@ -445,7 +446,7 @@ function Translate() {
               selectedMedia={selectedMedia}
               selectedMediaPaths={selectedBatchMedia}
               batchMode={batchMode}
-              collapseUnselectedBatch={!batchBrowserExpanded}
+              collapseUnselected={!mediaBrowserExpanded}
               onMediaSelect={(path) => {
                 if (batchMode) {
                   setSelectedBatchMedia((current) => {
@@ -454,11 +455,12 @@ function Translate() {
                     else next.add(path);
                     return next;
                   });
-                  setBatchBrowserExpanded(false);
+                  setMediaBrowserExpanded(false);
                 } else {
                   clearDiscovery(selectedMedia);
                   setSelectedMedia(path);
                   setSelectedSubtitle(null);
+                  setMediaBrowserExpanded(false);
                 }
               }}
               mediaButtonRefs={mediaButtonRefs}
@@ -467,11 +469,11 @@ function Translate() {
             <div className="discovery-stack">
               {batchMode && (
                 <div className="batch-subtitle-controls">
-                  {batchPaths.length > 0 && !batchBrowserExpanded && (
+                  {batchPaths.length > 0 && !mediaBrowserExpanded && (
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => setBatchBrowserExpanded(true)}
+                      onClick={() => setMediaBrowserExpanded(true)}
                     >
                       Select another Media
                     </Button>
@@ -534,7 +536,10 @@ function Translate() {
                     }
                     query={batchDiscoveries[index]}
                     onClear={() => {
-                      if (batchPaths.length === 1) setFilter("");
+                      if (batchPaths.length === 1) {
+                        setFilter("");
+                        setMediaBrowserExpanded(true);
+                      }
                       setSelectedBatchMedia((current) => {
                         const next = new Set(current);
                         next.delete(path);
@@ -550,10 +555,13 @@ function Translate() {
                         next.delete(path);
                         return next;
                       });
-                      focusBatchMedia(
-                        path,
-                        batchPaths.find((item) => item !== path),
-                      );
+                      const clearedIndex = batchPaths.indexOf(path);
+                      const focusPath =
+                        batchPaths.length > 1
+                          ? (batchPaths[clearedIndex + 1] ??
+                            batchPaths[clearedIndex - 1])
+                          : path;
+                      focusBatchMedia(focusPath);
                     }}
                   />
                 ))}
@@ -1547,7 +1555,7 @@ function MediaBrowser({
   selectedMedia,
   selectedMediaPaths,
   batchMode,
-  collapseUnselectedBatch,
+  collapseUnselected,
   onMediaSelect,
   mediaButtonRefs,
   query,
@@ -1559,7 +1567,7 @@ function MediaBrowser({
   selectedMedia: string | null;
   selectedMediaPaths: Set<string>;
   batchMode: boolean;
-  collapseUnselectedBatch: boolean;
+  collapseUnselected: boolean;
   onMediaSelect: (path: string) => void;
   mediaButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   query: ReturnType<typeof useMediaDirectory>;
@@ -1646,7 +1654,7 @@ function MediaBrowser({
                 : undefined
             }
             collapsed={
-              collapseUnselectedBatch &&
+              collapseUnselected &&
               selectionActive &&
               entry.kind === "media" &&
               (batchMode
