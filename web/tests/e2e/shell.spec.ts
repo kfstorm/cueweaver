@@ -1103,13 +1103,13 @@ test.describe("Job history mutations", () => {
       await page.goto("/jobs");
 
       await expect(
-        page.getByRole("button", { name: "Clear Completed (1)" }),
+        page.getByRole("button", { name: "Clear completed history (1)" }),
       ).toBeEnabled();
       await expect(page.getByText("2 matching")).toBeVisible();
-      await page.getByRole("button", { name: "Clear Completed (1)" }).click();
+      await page.getByRole("button", { name: "Clear completed history (1)" }).click();
       await expect(page.getByText("1 matching")).toBeVisible();
       await expect(
-        page.getByRole("button", { name: "Clear Completed (0)" }),
+        page.getByRole("button", { name: "Clear completed history (0)" }),
       ).toBeDisabled();
       await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
 
@@ -1117,7 +1117,7 @@ test.describe("Job history mutations", () => {
       await page.getByRole("button", { name: "Delete Job" }).click();
       await expect(page.getByRole("heading", { name: "No Jobs yet" })).toBeVisible();
       await expect(page).toHaveURL(/\/jobs$/);
-      await expect(page.getByRole("heading", { name: "All Jobs" })).toBeFocused();
+      await expect(page.getByRole("heading", { name: "Job history" })).toBeFocused();
       if (viewport.name === "mobile") {
         await expect(page.getByRole("heading", { name: "No Jobs yet" })).toBeVisible();
       }

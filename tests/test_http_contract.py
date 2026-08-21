@@ -177,6 +177,49 @@ def test_http_lists_jobs_with_search_and_status_filters():
     assert response.json()["matching_count"] == 0
 
 
+@pytest.mark.parametrize(
+    ("term_map_mode", "term_map"),
+    [
+        ("follow", None),
+        ("none", None),
+        ("selected", {"id": "map-1", "name": "Characters"}),
+    ],
+)
+def test_http_projects_each_job_detail_term_map_policy(
+    term_map_mode: str, term_map: dict[str, str] | None
+):
+    class DetailJobs(JobsApplicationFixture):
+        def get(self, _job_id: str) -> dict[str, object]:
+            return {
+                "id": "detail-job",
+                "status": "Completed",
+                "attempt": 1,
+                "created_at": "2026-08-13T12:00:00Z",
+                "started_at": "2026-08-13T12:00:01Z",
+                "finished_at": "2026-08-13T12:00:02Z",
+                "queue_position": None,
+                "request": {
+                    "media_path": "Movie.mkv",
+                    "subtitle_path": "Movie.en.srt",
+                    "target_language_code": "zh-Hans",
+                    "term_map_mode": term_map_mode,
+                    "term_map": term_map,
+                    "output_path": "Movie.zh-Hans.srt",
+                    "source_format": "srt",
+                },
+                "error": None,
+            }
+
+    response = TestClient(create_app(DetailJobs())).get("/api/jobs/detail-job")
+
+    assert response.status_code == 200
+    request = response.json()["request"]
+    assert request["term_map_mode"] == term_map_mode
+    assert request["term_map"] == term_map
+    if request["term_map"] is not None:
+        assert "content" not in request["term_map"]
+
+
 def test_http_batch_preflight_rejects_invalid_term_map_without_calling_application():
     application = JobsApplicationFixture()
     client = TestClient(create_app(application))

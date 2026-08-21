@@ -2620,6 +2620,33 @@ def test_job_list_separates_active_jobs_and_redacts_term_map_content(tmp_path: P
     assert persisted["request"]["term_map"]["content"] == {"Captain": "队长"}
 
 
+@pytest.mark.parametrize("term_map_mode", ["follow", "none", "selected"])
+def test_job_detail_preserves_term_map_policy_and_valid_snapshot(
+    tmp_path: Path, term_map_mode: str
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        term_map_id = None
+        if term_map_mode == "selected":
+            term_map_id = client.post(
+                "/api/term-maps",
+                json={"name": "Characters", "content": {"Captain": "队长"}},
+            ).json()["id"]
+
+        created = client.post(
+            "/api/jobs",
+            json=job_body(term_map_mode=term_map_mode, term_map_id=term_map_id),
+        ).json()
+        detail = client.get(f"/api/jobs/{created['id']}").json()
+
+    request = detail["request"]
+    assert request["term_map_mode"] == term_map_mode
+    if term_map_mode == "selected":
+        assert request["term_map"] == {"id": term_map_id, "name": "Characters"}
+    else:
+        assert request["term_map"] is None
+
+
 def test_job_history_uses_bounded_stable_cursor_pagination(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     with make_client(media_root, work_root, FakeTranslator()) as client:

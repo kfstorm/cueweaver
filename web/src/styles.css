@@ -1223,18 +1223,37 @@ a {
   letter-spacing: -0.025em;
 }
 
-.job-detail-title p:last-child {
-  margin: 5px 0 0;
-  color: var(--text-muted);
-  font-size: var(--font-small);
-}
-
-.job-detail-title .eyebrow {
-  overflow-wrap: anywhere;
-}
-
-.job-detail-header > .job-status {
+.job-detail-context {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
   align-self: start;
+}
+
+.job-id-control {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.job-id-control code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-meta);
+  user-select: text;
+}
+
+.job-id-control button {
+  min-height: 36px;
+}
+
+.job-id-control span {
+  max-width: 220px;
+  color: var(--text-muted);
+  font-size: var(--font-meta);
+  text-align: right;
 }
 
 .job-detail-actions {
@@ -2121,6 +2140,10 @@ summary:focus-visible {
 
   .job-detail-header {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .job-detail-context {
+    justify-items: end;
   }
 
   .job-detail-title h2 {

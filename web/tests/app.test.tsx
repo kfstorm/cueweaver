@@ -154,14 +154,18 @@ async function selectDirectoryTermMap(id: string, optionName: string) {
 
 type JobFixture = { status: string; [key: string]: unknown };
 
-function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) {
+function jobListResponse(
+  jobs: JobFixture[],
+  next_cursor: string | null = null,
+  completedCount = jobs.filter((job) => job.status === "Completed").length,
+) {
   const activeStatuses = ["Queued", "Extracting", "Translating"];
   return jsonResponse({
     active_jobs: jobs.filter((job) => activeStatuses.includes(job.status)),
     history_jobs: jobs.filter((job) => !activeStatuses.includes(job.status)),
     next_cursor,
     matching_count: jobs.length,
-    completed_count: jobs.filter((job) => job.status === "Completed").length,
+    completed_count: completedCount,
   });
 }
 
@@ -952,6 +956,7 @@ describe("product shell", () => {
         media_path: "Shows/Movie.mkv",
         subtitle_path: "Shows/Movie.en.srt",
         target_language_code: "zh-Hans",
+        term_map_mode: "selected",
         term_map: {
           id: "map-1",
           name: "Characters",
@@ -971,13 +976,25 @@ describe("product shell", () => {
     });
 
     renderWithFetch("/jobs", fetchMock);
-    fireEvent.click(await screen.findByRole("button", { name: /Shows\/Movie\.mkv/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
 
     expect(
       await screen.findByRole("heading", { name: "Request summary" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Shows/Movie.mkv" })).toHaveFocus();
+    const detailRegion = screen.getByRole("region", { name: "Job details" });
+    expect(screen.getByRole("heading", { name: "Movie.mkv" })).toHaveFocus();
+    expect(
+      within(detailRegion).queryByText("Movie.en.srt to zh-Hans"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Shows/Movie.mkv")).toBeInTheDocument();
+    expect(screen.getByText("job-detail-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Job ID" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy Job ID" }));
+    expect(
+      await screen.findByText("Select the Job ID and copy it manually."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Characters")).toBeInTheDocument();
+    expect(screen.getByText("Explicit Term map")).toBeInTheDocument();
     expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
     expect(screen.getByText("Status history")).toBeInTheDocument();
     expect(screen.getAllByText("Attempt 2")).toHaveLength(2);
@@ -1076,6 +1093,54 @@ describe("product shell", () => {
       ).toHaveLength(2);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("copies a Job ID successfully when the browser clipboard is available", async () => {
+    const originalClipboard = navigator.clipboard;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      const job = embeddedJob("copy-success-job", "Failed");
+      renderWithFetch("/jobs", jobsFetch(job));
+      fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Copy Job ID" }));
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      expect(writeText).toHaveBeenCalledWith("copy-success-job");
+    } finally {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard,
+      });
+    }
+  });
+
+  it("distinguishes all Term map policies and an absent snapshot", async () => {
+    for (const [mode, policy] of [
+      ["follow", "Follow directory default"],
+      ["none", "Explicitly disabled"],
+      ["selected", "Explicit Term map"],
+    ] as const) {
+      const job = {
+        ...embeddedJob(`term-map-${mode}`, "Failed"),
+        request: {
+          ...embeddedJob(`term-map-${mode}`, "Failed").request,
+          term_map_mode: mode,
+          term_map: mode === "selected" ? { id: "map-1", name: "Characters" } : null,
+        },
+      };
+      renderWithFetch("/jobs", jobsFetch(job));
+      fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+      expect(await screen.findByText(policy)).toBeInTheDocument();
+      if (mode === "selected") {
+        expect(screen.getByText("Characters")).toBeInTheDocument();
+      } else {
+        expect(screen.getByText("Not recorded")).toBeInTheDocument();
+      }
+      cleanup();
     }
   });
 
@@ -1681,6 +1746,9 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
     expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(
+      "Delete Job delete-j? This removes its Job history and residual Work data. Media and published output are preserved.",
+    );
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/jobs/delete-job-1",
       expect.objectContaining({ method: "DELETE" }),
@@ -1696,7 +1764,7 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Jobs yet" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "All Jobs" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Job history" })).toHaveFocus();
   });
 
   it("clears only Completed Jobs and reports partial cleanup failures", async () => {
@@ -1734,16 +1802,53 @@ describe("product shell", () => {
           currentJobs = [retained];
           return jsonResponse({ id: second.id, deleted: true });
         }
+        if (input.includes("search=missing")) {
+          return jobListResponse(
+            [],
+            null,
+            currentJobs.filter((job) => job.status === "Completed").length,
+          );
+        }
         if (input.startsWith("/api/jobs")) return jobListResponse(currentJobs);
         return jsonResponse({ term_maps: [] });
       });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderWithFetch("/jobs", fetchMock);
 
+    expect(screen.queryByText("History", { exact: true })).not.toBeInTheDocument();
     expect(
-      await screen.findByRole("button", { name: "Clear Completed (2)" }),
+      await screen.findByRole("button", { name: "Clear completed history (2)" }),
     ).toBeEnabled();
-    fireEvent.click(screen.getAllByRole("button", { name: "Clear Completed (2)" })[0]);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Jobs" }), {
+      target: { value: "missing" },
+    });
+    expect(
+      await screen.findByRole("heading", { name: "No matching Jobs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Clear completed history (2)" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Clear completed history (2)" }),
+    ).toHaveAccessibleDescription(
+      "Global action: removes all completed Job history regardless of the current filters.",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear completed history (2)" }),
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/jobs/completed", {
+      method: "DELETE",
+    });
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear completed history (2)" }),
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      "Clear all completed Job history? This removes 2 completed Jobs and residual Work data. Media and published output are preserved.",
+    );
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("/api/jobs/completed", {
@@ -1756,9 +1861,11 @@ describe("product shell", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Job clear-jo: Job Work data could not be cleaned up",
     );
-    expect(screen.getByText("Clear Completed (1)")).toBeInTheDocument();
+    expect(screen.getByText("Clear completed history (1)")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Jobs" }), {
+      target: { value: "" },
+    });
     expect(screen.getAllByText("Movie.mkv")).not.toHaveLength(0);
-
     fireEvent.click(screen.getAllByRole("button", { name: /Job clear-jo/ })[0]);
     fireEvent.click(screen.getByRole("button", { name: "Delete Job" }));
     await waitFor(() =>
@@ -1771,6 +1878,24 @@ describe("product shell", () => {
         screen.queryByText("Some Completed Jobs could not be cleared."),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  it("keeps global cleanup disabled when filtered rows have no Completed Jobs", async () => {
+    const failed = embeddedJob("clear-filtered-failed", "Failed");
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input.startsWith("/api/jobs")) {
+        return jobListResponse([failed], "more-history", 0);
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+
+    renderWithFetch("/jobs", fetchMock);
+
+    const clearButton = await screen.findByRole("button", {
+      name: "Clear completed history (0)",
+    });
+    expect(clearButton).toBeDisabled();
   });
 
   it("lists a Term map and supports keyboard inspection and search", async () => {
