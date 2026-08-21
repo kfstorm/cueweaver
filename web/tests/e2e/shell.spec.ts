@@ -389,6 +389,57 @@ test("Translate source and subtitle selection work with the keyboard", async ({
   await expect(subtitle).toHaveAttribute("aria-pressed", "true");
 });
 
+test.describe("responsive Media and Discovery layout", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} keeps selected Media with its Discovery`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await stubProductStatus(page);
+      await stubBatchTranslate(page);
+      await stubBatchJobs(page);
+      await page.goto("/translate");
+
+      const media = page.getByRole("button", { name: "Select Example movie" });
+      await media.click();
+      await expect(
+        page.getByRole("region", { name: "Subtitle selection for Example movie" }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Choose another Media" }),
+      ).toBeVisible();
+
+      if (viewport.name === "desktop") {
+        const browserBox = await page
+          .getByRole("region", { name: "Media browser" })
+          .boundingBox();
+        const discoveryBox = await page
+          .getByRole("region", { name: "Subtitle selection for Example movie" })
+          .boundingBox();
+        expect(browserBox?.x).toBeLessThan(discoveryBox?.x ?? 0);
+        expect((browserBox?.x ?? 0) + (browserBox?.width ?? 0)).toBeLessThan(
+          discoveryBox?.x ?? 0,
+        );
+      }
+
+      await page.reload();
+      await page.getByLabel("Batch mode").check();
+      const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
+      const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
+      await firstMedia.click();
+      if (viewport.name === "mobile") {
+        await expect(secondMedia).toBeHidden();
+        await expect(firstMedia).toBeVisible();
+      } else {
+        await expect(secondMedia).toBeVisible();
+      }
+    });
+  }
+});
+
 test.describe("batch Translate workflow", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },

@@ -520,6 +520,7 @@ function Translate() {
                     }
                     query={batchDiscoveries[index]}
                     onClear={() => {
+                      if (batchPaths.length === 1) setFilter("");
                       setSelectedBatchMedia((current) => {
                         const next = new Set(current);
                         next.delete(path);
@@ -1559,7 +1560,7 @@ function MediaBrowser({
           : selectedMedia === entry.path)),
   );
   return (
-    <div className="media-browser">
+    <div className="media-browser" role="region" aria-label="Media browser">
       <div className="breadcrumbs" role="group" aria-label="Media breadcrumbs">
         <Button
           type="button"

@@ -2112,6 +2112,32 @@ describe("product shell", () => {
     );
   });
 
+  it("restores the filtered Media browser when clearing its only batch item", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter this directory" }), {
+      target: { value: "Second" },
+    });
+    fireEvent.click(
+      within(
+        screen.getByRole("region", { name: "Subtitle selection for Movie.mkv" }),
+      ).getByRole("button", { name: "Choose another Media" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toHaveFocus(),
+    );
+  });
+
   it("filters and manually resolves an ambiguous Embedded subtitle", async () => {
     renderRoute(
       "/translate",
