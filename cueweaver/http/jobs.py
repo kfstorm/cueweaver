@@ -72,7 +72,11 @@ class JobsOperation(Protocol):
     def clear_completed(self) -> dict[str, object]: ...
 
     def list_page(
-        self, limit: int = 50, cursor: str | None = None
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        search: str = "",
+        status: str = "all",
     ) -> dict[str, object]: ...
 
     def get(self, job_id: str) -> dict[str, object]: ...
@@ -131,9 +135,12 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
 
     @app.get("/api/jobs")
     def list_jobs(
-        limit: int = Query(default=50, ge=1, le=100), cursor: str | None = None
+        limit: int = Query(default=50, ge=1, le=100),
+        cursor: str | None = None,
+        search: str = Query(default="", max_length=200),
+        status: str = Query(default="all"),
     ) -> dict[str, object]:
-        return application.jobs.list_page(limit, cursor)
+        return application.jobs.list_page(limit, cursor, search, status)
 
     @app.delete("/api/jobs/completed")
     def clear_completed_jobs() -> dict[str, object]:

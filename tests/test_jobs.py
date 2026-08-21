@@ -712,6 +712,13 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
     )
 
 
+def create_completed_jobs(client: TestClient):
+    jobs = [create_job(client, target).json() for target in ("zh", "ja", "ko")]
+    for job in jobs:
+        wait_for_status(client, job["id"], "Completed")
+    return jobs
+
+
 def job_body(**overrides: object) -> dict[str, object]:
     return {
         "media_path": "Movie.mkv",
@@ -2559,6 +2566,8 @@ def test_job_rejects_missing_term_map_before_queueing(tmp_path: Path):
             "active_jobs": [],
             "history_jobs": [],
             "next_cursor": None,
+            "matching_count": 0,
+            "completed_count": 0,
         }
         assert list((work_root / "jobs").glob("*.json")) == []
 
@@ -2614,9 +2623,7 @@ def test_job_list_separates_active_jobs_and_redacts_term_map_content(tmp_path: P
 def test_job_history_uses_bounded_stable_cursor_pagination(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     with make_client(media_root, work_root, FakeTranslator()) as client:
-        jobs = [create_job(client, target).json() for target in ("zh", "ja", "ko")]
-        for job in jobs:
-            wait_for_status(client, job["id"], "Completed")
+        jobs = create_completed_jobs(client)
 
         first_page = client.get("/api/jobs?limit=2").json()
         assert first_page["active_jobs"] == []
@@ -2642,6 +2649,152 @@ def test_job_history_uses_bounded_stable_cursor_pagination(tmp_path: Path):
             job["id"]
             for job in first_page["history_jobs"] + second_page["history_jobs"]
         } == {job["id"] for job in jobs}
+
+
+def test_job_history_filters_before_pagination_and_reports_independent_counts(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        create_completed_jobs(client)
+        page = client.get(
+            "/api/jobs",
+            params={"limit": 1, "search": "Movie.mkv", "status": "Completed"},
+        ).json()
+
+        assert len(page["history_jobs"]) == 1
+        assert page["matching_count"] == 3
+        assert page["completed_count"] == 3
+        assert page["next_cursor"] is not None
+
+        failed_filter = client.get(
+            "/api/jobs",
+            params={"search": "Movie.mkv", "status": "Failed"},
+        ).json()
+        assert failed_filter["matching_count"] == 0
+        assert failed_filter["completed_count"] == 3
+
+        second_page = client.get(
+            "/api/jobs",
+            params={
+                "limit": 1,
+                "search": "Movie.mkv",
+                "status": "Completed",
+                "cursor": page["next_cursor"],
+            },
+        ).json()
+        assert second_page["matching_count"] == 3
+
+        next_page = client.get(
+            "/api/jobs",
+            params={
+                "limit": 10,
+                "search": "different",
+                "status": "Completed",
+                "cursor": page["next_cursor"],
+            },
+        )
+        assert next_page.status_code == 400
+        assert next_page.json()["error_code"] == "invalid_job_cursor"
+
+
+def test_job_history_paginates_long_unicode_searches(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        search = "你" * 100
+        jobs = [
+            client.post(
+                "/api/jobs",
+                json=job_body(
+                    target_language_code=search,
+                    output_suffix="x",
+                    output_conflict_policy="append-number",
+                ),
+            ).json()
+            for _ in range(2)
+        ]
+        for job in jobs:
+            wait_for_status(client, job["id"], "Completed")
+        first_page = client.get(
+            "/api/jobs", params={"limit": 1, "search": search}
+        ).json()
+
+        assert first_page["next_cursor"] is not None
+
+        second_page = client.get(
+            "/api/jobs",
+            params={
+                "limit": 1,
+                "search": search,
+                "cursor": first_page["next_cursor"],
+            },
+        )
+
+        assert second_page.status_code == 200
+
+
+def test_job_history_search_matches_trimmed_casefolded_fields(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        jobs = create_completed_jobs(client)
+
+        media_match = client.get("/api/jobs", params={"search": "  MOVIE  "}).json()
+        assert {job["id"] for job in media_match["history_jobs"]} == {
+            job["id"] for job in jobs
+        }
+
+        id_match = client.get(
+            "/api/jobs", params={"search": jobs[0]["id"][:8].upper()}
+        ).json()
+        assert [job["id"] for job in id_match["history_jobs"]] == [jobs[0]["id"]]
+
+        language_match = client.get("/api/jobs", params={"search": " JA "}).json()
+        assert [
+            job["request"]["target_language_code"]
+            for job in language_match["history_jobs"]
+        ] == ["ja"]
+
+
+def test_job_history_status_filter_is_server_side(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(
+        media_root, work_root, FakeTranslator(error=RuntimeError("boom"))
+    ) as client:
+        failed = create_job(client).json()
+        wait_for_status(client, failed["id"], "Failed")
+        page = client.get("/api/jobs", params={"status": "Completed"}).json()
+        assert page["history_jobs"] == []
+        assert page["matching_count"] == 0
+        assert page["completed_count"] == 0
+
+
+def test_job_history_rejects_invalid_status_filter(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.get("/api/jobs", params={"status": "running"})
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "invalid_job_status"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "Queued",
+        "Extracting",
+        "Translating",
+        "Completed",
+        "Failed",
+        "Interrupted",
+        "Cancelled",
+    ],
+)
+def test_job_history_accepts_each_job_status_filter(tmp_path: Path, status: str):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        response = client.get("/api/jobs", params={"status": status})
+
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize("query", ["?limit=0", "?limit=101", "?cursor=malformed"])

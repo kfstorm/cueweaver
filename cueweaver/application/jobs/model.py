@@ -8,6 +8,7 @@ from binascii import Error as Base64Error
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Literal
 
 from ...work import is_safe_job_identifier
@@ -124,16 +125,24 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
     return projected
 
 
-def encode_history_cursor(created_at: str, job_id: str) -> str:
+def encode_history_cursor(
+    created_at: str,
+    job_id: str,
+    condition_hash: str,
+) -> str:
     payload = json.dumps(
-        {"created_at": created_at, "id": job_id},
+        {
+            "created_at": created_at,
+            "id": job_id,
+            "condition_hash": condition_hash,
+        },
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("utf-8")
     return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def decode_history_cursor(cursor: str) -> tuple[str, str]:
+def decode_history_cursor(cursor: str) -> tuple[str, str, str]:
     if (
         not cursor
         or len(cursor) > HISTORY_CURSOR_LENGTH_LIMIT
@@ -155,14 +164,20 @@ def decode_history_cursor(cursor: str) -> tuple[str, str]:
         raise ValueError("Invalid history cursor") from error
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"created_at", "id"}
+        or set(payload) != {"created_at", "id", "condition_hash"}
         or not isinstance(payload["created_at"], str)
         or not payload["created_at"]
         or not isinstance(payload["id"], str)
         or not payload["id"]
+        or not isinstance(payload["condition_hash"], str)
+        or not payload["condition_hash"]
     ):
         raise ValueError("Invalid history cursor")
-    return payload["created_at"], payload["id"]
+    return payload["created_at"], payload["id"], payload["condition_hash"]
+
+
+def history_cursor_condition(search: str, status: str) -> str:
+    return sha256(f"{search}\0{status}".encode()).hexdigest()
 
 
 def copy_job_record(record: Mapping[str, object]) -> JobRecord:
@@ -485,6 +500,7 @@ __all__ = [
     "copy_job_record",
     "decode_history_cursor",
     "encode_history_cursor",
+    "history_cursor_condition",
     "migrate_record",
     "normalize_record",
     "project_job_detail",

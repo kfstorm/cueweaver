@@ -188,6 +188,8 @@ async function fulfillJobList(
       active_jobs: jobs.filter((job) => activeStatuses.has(job.status)),
       history_jobs: jobs.filter((job) => !activeStatuses.has(job.status)),
       next_cursor: null,
+      matching_count: jobs.length,
+      completed_count: jobs.filter((job) => job.status === "Completed").length,
     }),
   });
 }
@@ -1103,12 +1105,12 @@ test.describe("Job history mutations", () => {
       await expect(
         page.getByRole("button", { name: "Clear Completed (1)" }),
       ).toBeEnabled();
-      await expect(page.getByText("2 loaded")).toBeVisible();
+      await expect(page.getByText("2 matching")).toBeVisible();
       await page.getByRole("button", { name: "Clear Completed (1)" }).click();
+      await expect(page.getByText("1 matching")).toBeVisible();
       await expect(
         page.getByRole("button", { name: "Clear Completed (0)" }),
       ).toBeDisabled();
-      await expect(page.getByText("1 loaded")).toBeVisible();
       await expect(page.getByRole("button", { name: /Example\.mkv/ })).toBeVisible();
 
       await page.getByRole("button", { name: /Example\.mkv/ }).click();
