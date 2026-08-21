@@ -622,8 +622,8 @@ function Translate() {
           <span id="target-language-help" className="field-help">
             Choose a common language or select Custom language code.
           </span>
-          <label className="term-map-field" htmlFor="term-map-select">
-            Term map for this translation
+          <div className="term-map-field">
+            <label htmlFor="term-map-select">Term map for this translation</label>
             <Select
               id="term-map-select"
               aria-label="Term map for this translation"
@@ -672,11 +672,20 @@ function Translate() {
               </span>
             )}
             {termMaps.isError && (
-              <span className="form-error" role="alert">
-                {termMaps.error.message}
-              </span>
+              <div className="field-recovery">
+                <span className="form-error" role="alert">
+                  {termMaps.error.message}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void termMaps.refetch()}
+                >
+                  Try again
+                </Button>
+              </div>
             )}
-          </label>
+          </div>
           <details className="advanced-settings">
             <summary>Advanced settings</summary>
             <div className="advanced-fields">
@@ -920,9 +929,14 @@ function DirectoryTermMapPanel({
         {query.isPending && <span role="status">Loading binding...</span>}
       </div>
       {query.isError ? (
-        <p className="form-error" role="alert">
-          {query.error.message}
-        </p>
+        <div className="field-recovery">
+          <p className="form-error" role="alert">
+            {query.error.message}
+          </p>
+          <Button type="button" variant="outline" onClick={() => void query.refetch()}>
+            Try again
+          </Button>
+        </div>
       ) : (
         <>
           <dl className="directory-term-map-state">

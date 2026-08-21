@@ -141,6 +141,30 @@ function emptyMediaResponse() {
   return jsonResponse({ path: "", entries: [] });
 }
 
+function singleExternalMediaResponse(input: string) {
+  if (input === "/api/media/browse") {
+    return jsonResponse({
+      path: "",
+      entries: [{ kind: "media", name: "Movie.mkv", path: "Movie.mkv" }],
+    });
+  }
+  if (input === "/api/media/discover") {
+    return jsonResponse({
+      path: "Movie.mkv",
+      candidates: [
+        {
+          kind: "external",
+          path: "Movie.en.srt",
+          format: "srt",
+          tags: { language: "en", title: "" },
+        },
+      ],
+      unsupported_candidates: [],
+    });
+  }
+  return null;
+}
+
 function statusResponse(
   providerReady = true,
   jobRecords?: {
@@ -354,12 +378,7 @@ async function selectExternalSubtitle() {
 
 async function selectExternalSubtitleWithLanguage(language = "zh-Hans") {
   await selectExternalSubtitle();
-  fireEvent.change(screen.getByLabelText("Common target language"), {
-    target: { value: "custom" },
-  });
-  fireEvent.change(await screen.findByLabelText("Target language code"), {
-    target: { value: language },
-  });
+  await enterCustomTargetLanguage(language);
 }
 
 async function enterCustomTargetLanguage(language: string) {
@@ -1683,7 +1702,7 @@ describe("product shell", () => {
       });
     renderTermMapsWithFetch(fetchMock);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Term maps unavailable");
+    expect(await screen.findByText("Term maps unavailable")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(
       await screen.findByRole("heading", { name: "No Term maps yet" }),
@@ -2878,26 +2897,8 @@ describe("product shell", () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") return pending;
-      if (input === "/api/media/browse") {
-        return jsonResponse({
-          path: "",
-          entries: [{ kind: "media", name: "Movie.mkv", path: "Movie.mkv" }],
-        });
-      }
-      if (input === "/api/media/discover") {
-        return jsonResponse({
-          path: "Movie.mkv",
-          candidates: [
-            {
-              kind: "external",
-              path: "Movie.en.srt",
-              format: "srt",
-              tags: { language: "en", title: "" },
-            },
-          ],
-          unsupported_candidates: [],
-        });
-      }
+      const mediaResponse = singleExternalMediaResponse(input);
+      if (mediaResponse) return mediaResponse;
       return jobListResponse([]);
     });
     renderWithFetch("/translate", fetchMock);
@@ -2906,6 +2907,80 @@ describe("product shell", () => {
     expect(
       screen.getByRole("combobox", { name: "Term map for this translation" }),
     ).toBeDisabled();
+  });
+
+  it("recovers the Term map control after its list request fails", async () => {
+    let termMapCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") {
+        termMapCalls += 1;
+        return termMapCalls === 1
+          ? jsonResponse({ message: "Term maps unavailable" }, false)
+          : jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
+      }
+      const mediaResponse = singleExternalMediaResponse(input);
+      if (mediaResponse) return mediaResponse;
+      return jsonResponse({
+        directory: "",
+        local: null,
+        effective: null,
+        source_directory: null,
+      });
+    });
+    renderWithFetch("/translate", fetchMock);
+
+    await selectExternalSubtitle();
+    expect(await screen.findByText("Term maps unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(
+      await screen.findByRole("option", { name: "Characters" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Term map for this translation" }),
+    ).toBeEnabled();
+  });
+
+  it("recovers the Directory default after its binding request fails", async () => {
+    let directoryCalls = 0;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+      if (input.startsWith("/api/term-maps/directory")) {
+        directoryCalls += 1;
+        return directoryCalls === 1
+          ? jsonResponse({ message: "Directory binding unavailable" }, false)
+          : jsonResponse({
+              directory: "",
+              local: null,
+              effective: null,
+              source_directory: null,
+            });
+      }
+      if (input === "/api/media/browse") {
+        return jsonResponse({
+          path: "",
+          entries: [{ kind: "media", name: "Movie.mkv", path: "Movie.mkv" }],
+        });
+      }
+      return jsonResponse({
+        path: "Movie.mkv",
+        candidates: [],
+        unsupported_candidates: [],
+      });
+    });
+    renderWithFetch("/translate", fetchMock);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Directory binding unavailable",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("No default")).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Directory default" }),
+    ).toBeInTheDocument();
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {
