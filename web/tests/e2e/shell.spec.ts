@@ -389,6 +389,67 @@ test("Translate source and subtitle selection work with the keyboard", async ({
   await expect(subtitle).toHaveAttribute("aria-pressed", "true");
 });
 
+test.describe("responsive Media and Discovery layout", () => {
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ]) {
+    test(`${viewport.name} keeps selected Media with its Discovery`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await stubProductStatus(page);
+      await stubBatchTranslate(page);
+      await stubBatchJobs(page);
+      await page.goto("/translate");
+
+      const media = page.getByRole("button", { name: "Select First.mkv" });
+      await media.click();
+      await expect(
+        page.getByRole("region", { name: "Subtitle selection for First.mkv" }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Choose another Media" }),
+      ).toBeVisible();
+
+      if (viewport.name === "desktop") {
+        const browserBox = await page
+          .getByRole("region", { name: "Media browser" })
+          .boundingBox();
+        const discoveryBox = await page
+          .getByRole("region", { name: "Subtitle selection for First.mkv" })
+          .boundingBox();
+        expect(browserBox?.x).toBeLessThan(discoveryBox?.x ?? 0);
+        expect((browserBox?.x ?? 0) + (browserBox?.width ?? 0)).toBeLessThan(
+          discoveryBox?.x ?? 0,
+        );
+      } else {
+        await expect(
+          page.getByRole("button", { name: "Select Second.mkv" }),
+        ).toBeHidden();
+      }
+
+      await page.reload();
+      await page.getByLabel("Batch mode").check();
+      const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
+      const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
+      await firstMedia.click();
+      if (viewport.name === "mobile") {
+        await expect(secondMedia).toBeHidden();
+        await expect(firstMedia).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Select another Media" }),
+        ).toBeVisible();
+      } else {
+        await expect(secondMedia).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Select another Media" }),
+        ).toBeHidden();
+      }
+    });
+  }
+});
+
 test.describe("batch Translate workflow", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
@@ -428,11 +489,17 @@ test.describe("batch Translate workflow", () => {
       const firstMedia = page.getByRole("button", { name: "Select First.mkv" });
       const secondMedia = page.getByRole("button", { name: "Select Second.mkv" });
       await firstMedia.press("Enter");
+      if (viewport.name === "mobile") {
+        await page.getByRole("button", { name: "Select another Media" }).click();
+      }
       await secondMedia.press("Enter");
       await expect(firstMedia).toHaveAttribute("aria-pressed", "true");
       await expect(secondMedia).toHaveAttribute("aria-pressed", "true");
 
-      await expect(page.locator(".subtitle-discovery")).toHaveCount(2);
+      const discoveries = page.getByRole("region", {
+        name: /Subtitle selection for/,
+      });
+      await expect(discoveries).toHaveCount(2);
       await page.getByRole("button", { name: "Resolve candidates" }).click();
       const firstExternalCandidate = page.getByRole("button", {
         name: "Select external subtitle en / English (First.en.srt)",
@@ -544,7 +611,9 @@ test("batch Translate creates independent Jobs in request order through the real
   await page.getByLabel("Batch mode").check();
   await page.getByRole("button", { name: "Select Example movie" }).click();
   await page.getByRole("button", { name: "Select Second.mkv" }).click();
-  const discoveries = page.locator(".subtitle-discovery");
+  const discoveries = page.getByRole("region", {
+    name: /Subtitle selection for/,
+  });
   await expect(discoveries).toHaveCount(2);
   await discoveries.nth(0).getByRole("button", { name: "Resolve candidates" }).click();
   await discoveries.nth(1).getByRole("button", { name: "Resolve candidates" }).click();

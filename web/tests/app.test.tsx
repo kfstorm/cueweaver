@@ -29,6 +29,15 @@ const BATCH_MEDIA: MediaDirectory = {
   ],
 };
 
+const THREE_BATCH_MEDIA: MediaDirectory = {
+  path: "",
+  entries: [
+    { kind: "media", name: "First.mkv", path: "First.mkv" },
+    { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+    { kind: "media", name: "Third.mkv", path: "Third.mkv" },
+  ],
+};
+
 const UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
   {
     path: "Movie.mkv",
@@ -38,6 +47,24 @@ const UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
   {
     path: "Second.mkv",
     candidates: [{ kind: "external", path: "Second.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+];
+
+const THREE_UNIQUE_BATCH_DISCOVERIES: MediaDiscovery[] = [
+  {
+    path: "First.mkv",
+    candidates: [{ kind: "external", path: "First.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+  {
+    path: "Second.mkv",
+    candidates: [{ kind: "external", path: "Second.en.srt", format: "srt" }],
+    unsupported_candidates: [],
+  },
+  {
+    path: "Third.mkv",
+    candidates: [{ kind: "external", path: "Third.en.srt", format: "srt" }],
     unsupported_candidates: [],
   },
 ];
@@ -2085,6 +2112,82 @@ describe("product shell", () => {
     expect(
       screen.queryByRole("button", { name: /Select external subtitle.*Second/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps selected batch Media reachable through filtering and restores focus", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    await selectBatchMedia();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter this directory" }), {
+      target: { value: "Second" },
+    });
+
+    const clearMovie = within(
+      screen.getByRole("region", { name: "Subtitle selection for Movie.mkv" }),
+    ).getByRole("button", { name: "Choose another Media" });
+    fireEvent.click(clearMovie);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Second.mkv" })).toHaveFocus(),
+    );
+  });
+
+  it("restores the filtered Media browser when clearing its only batch item", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter this directory" }), {
+      target: { value: "Second" },
+    });
+    fireEvent.click(
+      within(
+        screen.getByRole("region", { name: "Subtitle selection for Movie.mkv" }),
+      ).getByRole("button", { name: "Choose another Media" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Movie.mkv" })).toHaveFocus(),
+    );
+  });
+
+  it("focuses the next selected Media when clearing a middle batch item", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      THREE_BATCH_MEDIA,
+      undefined,
+      false,
+      THREE_UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select First.mkv" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Third.mkv" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("region", { name: "Subtitle selection for Second.mkv" }),
+      ).getByRole("button", { name: "Choose another Media" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Select Third.mkv" })).toHaveFocus(),
+    );
   });
 
   it("filters and manually resolves an ambiguous Embedded subtitle", async () => {
