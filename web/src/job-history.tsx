@@ -223,8 +223,7 @@ export function JobsPage() {
           <div
             className={cn(
               "job-list-state",
-              (jobs.isPending || jobs.isError || allJobs.length === 0) &&
-                "has-state",
+              (jobs.isPending || jobs.isError || allJobs.length === 0) && "has-state",
             )}
           >
             {jobs.isPending && (
@@ -271,21 +270,13 @@ export function JobsPage() {
           {activeJobs.length > 0 && (
             <section aria-labelledby="active-jobs-title">
               <h3 id="active-jobs-title">Active Jobs</h3>
-              <JobList
-                jobs={activeJobs}
-                selectedId={jobId}
-                onSelect={navigate}
-              />
+              <JobList jobs={activeJobs} selectedId={jobId} onSelect={navigate} />
             </section>
           )}
           {historyJobs.length > 0 && (
             <section aria-labelledby="history-jobs-title">
               <h3 id="history-jobs-title">Completed and past Jobs</h3>
-              <JobList
-                jobs={historyJobs}
-                selectedId={jobId}
-                onSelect={navigate}
-              />
+              <JobList jobs={historyJobs} selectedId={jobId} onSelect={navigate} />
             </section>
           )}
           {jobs.hasNextPage && (
@@ -319,7 +310,7 @@ export function JobsPage() {
             </DetailState>
           )}
           {jobId &&
-              displayedJob &&
+            displayedJob &&
             !detail.isError &&
             (selected || !detail.isPending) && (
               <JobDetail

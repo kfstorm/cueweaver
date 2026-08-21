@@ -198,7 +198,7 @@ for (const viewport of viewports) {
     await stubStatus(page);
     await stubJobs(page);
     await page.goto("/jobs");
-    const clearHistory = page.getByRole("button", { name: /Clear completed history/ });
+    const clearHistory = page.getByRole("button", { name: /Clear Completed/ });
     await clearHistory.focus();
     await expect(clearHistory).toBeFocused();
     await page.getByRole("button", { name: "Example.mkv" }).click();

@@ -1816,12 +1816,8 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No matching Jobs" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Clear Completed (2)" }),
-    ).toBeEnabled();
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Clear Completed (2)" })[0],
-    );
+    expect(screen.getByRole("button", { name: "Clear Completed (2)" })).toBeEnabled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear Completed (2)" })[0]);
 
     expect(confirm).toHaveBeenCalledWith(
       "Clear all completed Job history? This removes 2 completed Jobs and residual Work data. Media and published output are preserved.",
