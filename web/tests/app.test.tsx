@@ -116,6 +116,15 @@ async function selectBatchMedia() {
   fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
 }
 
+async function selectDirectoryTermMap(id: string, optionName: string) {
+  const directorySelect = await screen.findByRole("combobox", {
+    name: "Directory default",
+  });
+  await screen.findByRole("option", { name: optionName });
+  fireEvent.change(directorySelect, { target: { value: id } });
+  return directorySelect;
+}
+
 type JobFixture = { status: string; [key: string]: unknown };
 
 function jobListResponse(jobs: JobFixture[], next_cursor: string | null = null) {
@@ -163,6 +172,62 @@ function singleExternalMediaResponse(input: string) {
     });
   }
   return null;
+}
+
+function createDirectoryMutationFetchMock(
+  termMaps: TermMapSummary[],
+  handlers: {
+    bind?: (
+      scenario: {
+        localTermMap: TermMapSummary | null;
+        bindCalls: number;
+        removeCalls: number;
+      },
+      state: () => Record<string, unknown>,
+    ) => unknown;
+    remove?: (
+      scenario: {
+        localTermMap: TermMapSummary | null;
+        bindCalls: number;
+        removeCalls: number;
+      },
+      state: () => Record<string, unknown>,
+    ) => unknown;
+  } = {},
+  initialLocalTermMap: TermMapSummary | null = termMaps[0] ?? null,
+) {
+  const scenario = {
+    localTermMap: initialLocalTermMap,
+    bindCalls: 0,
+    removeCalls: 0,
+  };
+  const fetchMock = vi
+    .fn()
+    .mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/term-maps") {
+        return jsonResponse({ term_maps: termMaps });
+      }
+      if (input.startsWith("/api/term-maps/directory")) {
+        const state = () => ({
+          directory: "",
+          local: scenario.localTermMap,
+          effective: scenario.localTermMap,
+          source_directory: scenario.localTermMap ? "" : null,
+        });
+        if (init?.method === "PUT") {
+          scenario.bindCalls += 1;
+          return handlers.bind?.(scenario, state) ?? jsonResponse(state());
+        }
+        if (init?.method === "DELETE") {
+          scenario.removeCalls += 1;
+          return handlers.remove?.(scenario, state) ?? jsonResponse(state());
+        }
+        return jsonResponse(state());
+      }
+      return singleExternalMediaResponse(input) ?? jobListResponse([]);
+    });
+  return { fetchMock, scenario };
 }
 
 function statusResponse(
@@ -2986,35 +3051,21 @@ describe("product shell", () => {
   });
 
   it("retries a failed Directory default binding and restores focus", async () => {
-    let bindCalls = 0;
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
-        if (input === "/api/term-maps") {
-          return jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
-        }
-        if (input.startsWith("/api/term-maps/directory")) {
-          if (init?.method === "PUT") {
-            bindCalls += 1;
-            return bindCalls === 1
-              ? jsonResponse({ message: "Directory binding failed" }, false)
-              : jsonResponse({
-                  directory: "",
-                  local: CHARACTERS_TERM_MAP,
-                  effective: CHARACTERS_TERM_MAP,
-                  source_directory: "",
-                });
-          }
-          return jsonResponse({
-            directory: "",
-            local: null,
-            effective: null,
-            source_directory: null,
-          });
-        }
-        return singleExternalMediaResponse(input) ?? jobListResponse([]);
-      });
+    const { fetchMock, scenario } = createDirectoryMutationFetchMock(
+      [CHARACTERS_TERM_MAP],
+      {
+        bind: (current, state) =>
+          current.bindCalls === 1
+            ? jsonResponse({ message: "Directory binding failed" }, false)
+            : jsonResponse({
+                ...state(),
+                local: CHARACTERS_TERM_MAP,
+                effective: CHARACTERS_TERM_MAP,
+                source_directory: "",
+              }),
+      },
+      null,
+    );
     renderWithFetch("/translate", fetchMock);
 
     const directorySelect = await screen.findByRole("combobox", {
@@ -3023,12 +3074,85 @@ describe("product shell", () => {
     await screen.findByRole("option", { name: "Characters" });
     fireEvent.change(directorySelect, { target: { value: "map-1" } });
     fireEvent.click(screen.getByRole("button", { name: "Bind Term map" }));
-    await waitFor(() => expect(bindCalls).toBe(1));
+    await waitFor(() => expect(scenario.bindCalls).toBe(1));
     expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(directorySelect).toHaveFocus());
-    expect(bindCalls).toBe(2);
+    expect(scenario.bindCalls).toBe(2);
+  });
+
+  it("clears a failed binding when removing the existing Directory default", async () => {
+    const settingsTermMap: TermMapSummary = {
+      id: "map-settings",
+      name: "Settings",
+      entry_count: 1,
+      updated_at: "2026-08-13T12:00:00Z",
+    };
+    const { fetchMock, scenario } = createDirectoryMutationFetchMock(
+      [CHARACTERS_TERM_MAP, settingsTermMap],
+      {
+        bind: () => jsonResponse({ message: "Directory binding failed" }, false),
+        remove: (current) => {
+          current.localTermMap = null;
+          return jsonResponse({
+            directory: "",
+            local: null,
+            effective: null,
+            source_directory: null,
+          });
+        },
+      },
+    );
+    renderWithFetch("/translate", fetchMock);
+
+    await selectDirectoryTermMap("map-settings", "Directory: Settings");
+    fireEvent.click(screen.getByRole("button", { name: "Replace local binding" }));
+    expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove local binding" }));
+    await waitFor(() => expect(scenario.removeCalls).toBe(1));
+    await waitFor(() => expect(screen.getByText("No default")).toBeInTheDocument());
+
+    expect(scenario.bindCalls).toBe(1);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("clears a failed removal when replacing the Directory default", async () => {
+    const settingsTermMap: TermMapSummary = {
+      id: "map-settings",
+      name: "Settings",
+      entry_count: 1,
+      updated_at: "2026-08-13T12:00:00Z",
+    };
+    const { fetchMock, scenario } = createDirectoryMutationFetchMock(
+      [CHARACTERS_TERM_MAP, settingsTermMap],
+      {
+        bind: (current, state) => {
+          current.localTermMap = settingsTermMap;
+          return jsonResponse(state());
+        },
+        remove: (current, state) =>
+          current.removeCalls === 1
+            ? jsonResponse({ message: "Directory removal failed" }, false)
+            : jsonResponse(state()),
+      },
+    );
+    renderWithFetch("/translate", fetchMock);
+
+    const directorySelect = await selectDirectoryTermMap(
+      "map-settings",
+      "Directory: Settings",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove local binding" }));
+    expect(await screen.findByText("Directory removal failed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Replace local binding" }));
+    await waitFor(() => expect(scenario.bindCalls).toBe(1));
+    await waitFor(() => expect(directorySelect).toHaveValue("map-settings"));
+
+    expect(scenario.removeCalls).toBe(1);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
   it("lists and submits a selected Term map with the default terminology flags", async () => {

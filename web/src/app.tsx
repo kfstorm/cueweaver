@@ -560,6 +560,8 @@ function Translate() {
             }}
             onBind={() => {
               if (selectedDirectoryTermMapId) {
+                bindDirectoryTermMap.reset();
+                removeDirectoryTermMap.reset();
                 bindDirectoryTermMap.mutate(
                   {
                     path: directory,
@@ -571,11 +573,13 @@ function Translate() {
                 );
               }
             }}
-            onRemove={() =>
+            onRemove={() => {
+              bindDirectoryTermMap.reset();
+              removeDirectoryTermMap.reset();
               removeDirectoryTermMap.mutate(directory, {
                 onSuccess: () => directorySelectRef.current?.focus(),
-              })
-            }
+              });
+            }}
             onRetry={() => {
               if (bindDirectoryTermMap.error && selectedDirectoryTermMapId) {
                 bindDirectoryTermMap.mutate(
