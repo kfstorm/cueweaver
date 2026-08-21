@@ -20,14 +20,7 @@ function updateJobAfterMutation(queryClient: QueryClient, job: Job, jobId: strin
 export interface Job {
   id: string;
   attempt: number;
-  status:
-    | "Queued"
-    | "Extracting"
-    | "Translating"
-    | "Completed"
-    | "Failed"
-    | "Interrupted"
-    | "Cancelled";
+  status: JobStatus;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -53,6 +46,17 @@ export interface Job {
   error: { code: string; message: string; [key: string]: unknown } | null;
 }
 
+export type JobStatus =
+  | "Queued"
+  | "Extracting"
+  | "Translating"
+  | "Completed"
+  | "Failed"
+  | "Interrupted"
+  | "Cancelled";
+
+export type JobStatusFilter = "all" | JobStatus;
+
 export type OutputConflictPolicy = "append-number" | "overwrite" | "skip";
 
 export interface SkippedJobResult {
@@ -75,6 +79,8 @@ export interface JobListPage {
   active_jobs: Job[];
   history_jobs: Job[];
   next_cursor: string | null;
+  matching_count?: number;
+  completed_count?: number;
 }
 
 export type TermMapMode = "follow" | "selected" | "none";
@@ -139,24 +145,36 @@ export interface ClearCompletedJobsResult {
   failed: JobCleanupFailure[];
 }
 
-export function useJobs({ poll = true }: { poll?: boolean } = {}) {
+export function useJobs({
+  poll = true,
+  search = "",
+  status = "all",
+}: { poll?: boolean; search?: string; status?: JobStatusFilter } = {}) {
+  const condition = `search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}`;
+  const conditionSuffix = search || status !== "all" ? `?${condition}` : "";
   const activeQuery = useQuery({
-    queryKey: ["jobs", "active"],
-    queryFn: ({ signal }) => fetchJobsPage("/api/jobs?limit=1", signal),
+    queryKey: ["jobs", "active", condition],
+    queryFn: ({ signal }) =>
+      fetchJobsPage(
+        `/api/jobs?limit=1${conditionSuffix ? `&${condition}` : ""}`,
+        signal,
+      ),
     staleTime: 0,
     refetchInterval: poll ? 2000 : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
   });
   const historyQuery = useInfiniteQuery({
-    queryKey: HISTORY_QUERY_KEY,
+    queryKey: [...HISTORY_QUERY_KEY, search, status],
     enabled: activeQuery.isSuccess,
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) =>
       fetchJobsPage(
         pageParam
-          ? `/api/jobs?limit=50&cursor=${encodeURIComponent(pageParam)}`
-          : "/api/jobs",
+          ? `/api/jobs?limit=50&cursor=${encodeURIComponent(pageParam)}${
+              conditionSuffix ? `&${condition}` : ""
+            }`
+          : `/api/jobs${conditionSuffix}`,
         signal,
       ),
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
@@ -179,7 +197,7 @@ export function useJobs({ poll = true }: { poll?: boolean } = {}) {
     );
     if (!completedJobLeftActive) return;
 
-    const refreshVersionKey = ["jobs", "history-refresh-version"];
+    const refreshVersionKey = ["jobs", "history-refresh-version", search, status];
     const refreshVersion =
       (queryClient.getQueryData<number>(refreshVersionKey) ?? 0) + 1;
     queryClient.setQueryData(refreshVersionKey, refreshVersion);
@@ -188,8 +206,8 @@ export function useJobs({ poll = true }: { poll?: boolean } = {}) {
       .then(() => queryClient.cancelQueries({ queryKey: HISTORY_REFRESH_QUERY_KEY }))
       .then(() =>
         queryClient.fetchQuery({
-          queryKey: [...HISTORY_REFRESH_QUERY_KEY, refreshVersion],
-          queryFn: ({ signal }) => fetchJobsPage("/api/jobs", signal),
+          queryKey: [...HISTORY_REFRESH_QUERY_KEY, search, status, refreshVersion],
+          queryFn: ({ signal }) => fetchJobsPage(`/api/jobs${conditionSuffix}`, signal),
         }),
       )
       .then((page) => {
@@ -197,7 +215,7 @@ export function useJobs({ poll = true }: { poll?: boolean } = {}) {
           return;
         }
         queryClient.setQueryData<InfiniteData<JobListPage, string | null>>(
-          HISTORY_QUERY_KEY,
+          [...HISTORY_QUERY_KEY, search, status],
           (current) =>
             current
               ? { ...current, pages: [page], pageParams: [null] }
@@ -209,7 +227,7 @@ export function useJobs({ poll = true }: { poll?: boolean } = {}) {
           previousActiveStatuses.current = previousStatuses;
         }
       });
-  }, [activeQuery.data, poll, queryClient]);
+  }, [activeQuery.data, conditionSuffix, poll, queryClient, search, status]);
 
   const refetch = async () => {
     const activeResult = await activeQuery.refetch();
@@ -232,6 +250,8 @@ export function useJobs({ poll = true }: { poll?: boolean } = {}) {
         active_jobs: activeQuery.data?.active_jobs ?? [],
         history_jobs: pages.flatMap((page) => page.history_jobs),
         next_cursor: pages.at(-1)?.next_cursor ?? null,
+        matching_count: pages[0]?.matching_count,
+        completed_count: pages[0]?.completed_count,
       }
     : undefined;
 
