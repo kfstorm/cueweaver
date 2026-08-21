@@ -18,6 +18,7 @@ import {
   useState,
   type DragEvent,
   type FormEvent,
+  type MutableRefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -260,6 +261,7 @@ function Translate() {
   const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useState(true);
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
     useState(true);
+  const mediaButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const termMaps = useTermMaps();
   const directoryTermMap = useDirectoryTermMap(directory);
   const bindDirectoryTermMap = useBindDirectoryTermMap();
@@ -279,6 +281,11 @@ function Translate() {
   const discovery = useMediaDiscovery(selectedMedia);
   const batchPaths = [...selectedBatchMedia];
   const batchDiscoveries = useMediaDiscoveries(batchPaths);
+  const focusBatchMedia = (path: string) => {
+    queueMicrotask(() => {
+      mediaButtonRefs.current.get(path)?.focus();
+    });
+  };
   const clearDiscovery = (previousMedia: string | null) => {
     if (previousMedia !== null) {
       void queryClient.cancelQueries({ queryKey: ["media-discovery", previousMedia] });
@@ -413,128 +420,135 @@ function Translate() {
             />
             Batch mode
           </label>
-          <MediaBrowser
-            directory={directory}
-            filter={filter}
-            onDirectoryChange={(path) => {
-              setDirectory(path);
-              setTermMapMode("follow");
-              setTermMapId(null);
-              setDirectoryTermMapSelection(null);
-              setFilter("");
-              clearMedia(selectedMedia);
-              setSelectedBatchMedia(new Set());
-              setBatchSubtitleSelections(new Map());
-              setExpandedBatchMedia(new Set());
-            }}
-            onFilterChange={setFilter}
-            selectedMedia={selectedMedia}
-            selectedMediaPaths={selectedBatchMedia}
-            batchMode={batchMode}
-            onMediaSelect={(path) => {
-              if (batchMode) {
-                setSelectedBatchMedia((current) => {
-                  const next = new Set(current);
-                  if (next.has(path)) next.delete(path);
-                  else next.add(path);
-                  return next;
-                });
-              } else {
-                clearDiscovery(selectedMedia);
-                setSelectedMedia(path);
-                setSelectedSubtitle(null);
-              }
-            }}
-            query={browser}
-          />
-          {batchMode && (
-            <div className="batch-subtitle-controls">
-              <label htmlFor="batch-subtitle-filter">
-                Search subtitle candidates
-                <Input
-                  id="batch-subtitle-filter"
-                  type="search"
-                  value={batchSubtitleFilter}
-                  onChange={(event) => setBatchSubtitleFilter(event.target.value)}
-                  placeholder="Language, name, path, format, or tags"
-                />
-              </label>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={batchPaths.length === 0}
-                onClick={selectUniqueBatchCandidates}
-              >
-                Select unique
-              </Button>
-            </div>
-          )}
-          {batchMode &&
-            batchPaths.map((path, index) => (
-              <SubtitleDiscovery
-                key={path}
-                mediaPath={path}
-                selected={
-                  batchSubtitleSelections.get(path) ??
-                  (() => {
-                    const candidates = filteredCandidates(
-                      batchDiscoveries[index]?.data?.candidates ?? [],
-                      batchSubtitleFilter,
-                    );
-                    return candidates.length === 1 && isCompleteCandidate(candidates[0])
-                      ? candidateKey(candidates[0], 0)
-                      : null;
-                  })()
-                }
-                candidateFilter={batchSubtitleFilter}
-                batchMode
-                expanded={expandedBatchMedia.has(path)}
-                onToggleExpanded={() =>
-                  setExpandedBatchMedia((current) => {
+          <div className="media-discovery-layout">
+            <MediaBrowser
+              directory={directory}
+              filter={filter}
+              onDirectoryChange={(path) => {
+                setDirectory(path);
+                setTermMapMode("follow");
+                setTermMapId(null);
+                setDirectoryTermMapSelection(null);
+                setFilter("");
+                clearMedia(selectedMedia);
+                setSelectedBatchMedia(new Set());
+                setBatchSubtitleSelections(new Map());
+                setExpandedBatchMedia(new Set());
+              }}
+              onFilterChange={setFilter}
+              selectedMedia={selectedMedia}
+              selectedMediaPaths={selectedBatchMedia}
+              batchMode={batchMode}
+              onMediaSelect={(path) => {
+                if (batchMode) {
+                  setSelectedBatchMedia((current) => {
                     const next = new Set(current);
                     if (next.has(path)) next.delete(path);
                     else next.add(path);
                     return next;
-                  })
+                  });
+                } else {
+                  clearDiscovery(selectedMedia);
+                  setSelectedMedia(path);
+                  setSelectedSubtitle(null);
                 }
-                onSelect={(value) =>
-                  setBatchSubtitleSelections((current) => {
-                    const next = new Map(current);
-                    next.set(path, value);
-                    return next;
-                  })
-                }
-                query={batchDiscoveries[index]}
-                onClear={() => {
-                  setSelectedBatchMedia((current) => {
-                    const next = new Set(current);
-                    next.delete(path);
-                    return next;
-                  });
-                  setBatchSubtitleSelections((current) => {
-                    const next = new Map(current);
-                    next.delete(path);
-                    return next;
-                  });
-                  setExpandedBatchMedia((current) => {
-                    const next = new Set(current);
-                    next.delete(path);
-                    return next;
-                  });
-                }}
-              />
-            ))}
-          {selectedMedia && (
-            <SubtitleDiscovery
-              mediaPath={selectedMedia}
-              selected={selectedSubtitle}
-              onSelect={setSelectedSubtitle}
-              query={discovery}
-              onClear={() => {
-                clearMedia(selectedMedia);
               }}
+              mediaButtonRefs={mediaButtonRefs}
+              query={browser}
             />
-          )}
+            <div className="discovery-stack">
+              {batchMode && (
+                <div className="batch-subtitle-controls">
+                  <label htmlFor="batch-subtitle-filter">
+                    Search subtitle candidates
+                    <Input
+                      id="batch-subtitle-filter"
+                      type="search"
+                      value={batchSubtitleFilter}
+                      onChange={(event) => setBatchSubtitleFilter(event.target.value)}
+                      placeholder="Language, name, path, format, or tags"
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={batchPaths.length === 0}
+                    onClick={selectUniqueBatchCandidates}
+                  >
+                    Select unique
+                  </Button>
+                </div>
+              )}
+              {batchMode &&
+                batchPaths.map((path, index) => (
+                  <SubtitleDiscovery
+                    key={path}
+                    mediaPath={path}
+                    selected={
+                      batchSubtitleSelections.get(path) ??
+                      (() => {
+                        const candidates = filteredCandidates(
+                          batchDiscoveries[index]?.data?.candidates ?? [],
+                          batchSubtitleFilter,
+                        );
+                        return candidates.length === 1 &&
+                          isCompleteCandidate(candidates[0])
+                          ? candidateKey(candidates[0], 0)
+                          : null;
+                      })()
+                    }
+                    candidateFilter={batchSubtitleFilter}
+                    batchMode
+                    expanded={expandedBatchMedia.has(path)}
+                    onToggleExpanded={() =>
+                      setExpandedBatchMedia((current) => {
+                        const next = new Set(current);
+                        if (next.has(path)) next.delete(path);
+                        else next.add(path);
+                        return next;
+                      })
+                    }
+                    onSelect={(value) =>
+                      setBatchSubtitleSelections((current) => {
+                        const next = new Map(current);
+                        next.set(path, value);
+                        return next;
+                      })
+                    }
+                    query={batchDiscoveries[index]}
+                    onClear={() => {
+                      setSelectedBatchMedia((current) => {
+                        const next = new Set(current);
+                        next.delete(path);
+                        return next;
+                      });
+                      setBatchSubtitleSelections((current) => {
+                        const next = new Map(current);
+                        next.delete(path);
+                        return next;
+                      });
+                      setExpandedBatchMedia((current) => {
+                        const next = new Set(current);
+                        next.delete(path);
+                        return next;
+                      });
+                      focusBatchMedia(path);
+                    }}
+                  />
+                ))}
+              {selectedMedia && (
+                <SubtitleDiscovery
+                  mediaPath={selectedMedia}
+                  selected={selectedSubtitle}
+                  onSelect={setSelectedSubtitle}
+                  query={discovery}
+                  onClear={() => {
+                    clearMedia(selectedMedia);
+                  }}
+                />
+              )}
+            </div>
+          </div>
           <DirectoryTermMapPanel
             directory={directory}
             termMaps={termMaps.data?.term_maps ?? []}
@@ -1513,6 +1527,7 @@ function MediaBrowser({
   selectedMediaPaths,
   batchMode,
   onMediaSelect,
+  mediaButtonRefs,
   query,
 }: {
   directory: string;
@@ -1523,8 +1538,12 @@ function MediaBrowser({
   selectedMediaPaths: Set<string>;
   batchMode: boolean;
   onMediaSelect: (path: string) => void;
+  mediaButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   query: ReturnType<typeof useMediaDirectory>;
 }) {
+  const selectionActive = batchMode
+    ? selectedMediaPaths.size > 0
+    : selectedMedia !== null;
   const entries = query.data?.entries.filter((entry) =>
     entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
   );
@@ -1590,6 +1609,21 @@ function MediaBrowser({
             key={entry.path}
             entry={entry}
             onDirectoryChange={onDirectoryChange}
+            buttonRef={
+              entry.kind === "media"
+                ? (button) => {
+                    if (button) mediaButtonRefs.current.set(entry.path, button);
+                    else mediaButtonRefs.current.delete(entry.path);
+                  }
+                : undefined
+            }
+            collapsed={
+              selectionActive &&
+              entry.kind === "media" &&
+              (batchMode
+                ? !selectedMediaPaths.has(entry.path)
+                : selectedMedia !== entry.path)
+            }
             selected={
               batchMode
                 ? selectedMediaPaths.has(entry.path)
@@ -1629,11 +1663,15 @@ function MediaEntry({
   onDirectoryChange,
   selected,
   onMediaSelect,
+  buttonRef,
+  collapsed,
 }: {
   entry: MediaDirectoryEntry;
   onDirectoryChange: (path: string) => void;
   selected: boolean;
   onMediaSelect: (path: string) => void;
+  buttonRef?: (button: HTMLButtonElement | null) => void;
+  collapsed: boolean;
 }) {
   const isDirectory = entry.kind === "directory";
   const episodeLabel =
@@ -1650,7 +1688,9 @@ function MediaEntry({
     <Button
       type="button"
       variant="outline"
-      className="media-entry"
+      className={cn("media-entry", collapsed && "collapsed")}
+      ref={buttonRef}
+      data-media-path={entry.path}
       onClick={() =>
         isDirectory ? onDirectoryChange(entry.path) : onMediaSelect(entry.path)
       }
