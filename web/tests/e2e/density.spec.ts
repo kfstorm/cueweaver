@@ -198,6 +198,9 @@ for (const viewport of viewports) {
     await stubStatus(page);
     await stubJobs(page);
     await page.goto("/jobs");
+    const clearHistory = page.getByRole("button", { name: /Clear completed history/ });
+    await clearHistory.focus();
+    await expect(clearHistory).toBeFocused();
     await page.getByRole("button", { name: "Example.mkv" }).click();
     await expect(page.getByRole("heading", { name: "Example.mkv" })).toBeVisible();
 
@@ -220,6 +223,11 @@ for (const viewport of viewports) {
     expect(await page.evaluate(() => document.activeElement?.textContent)).toContain(
       "Copy Job ID",
     );
+    for (const name of ["Back to Jobs", "Copy Job ID", "Delete Job"]) {
+      const control = page.getByRole("button", { name });
+      await control.focus();
+      await expect(control).toBeFocused();
+    }
   });
 
   test(`${viewport.name} Jobs and Term maps retain visible empty-state footprints`, async ({

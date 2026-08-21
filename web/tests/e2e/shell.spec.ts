@@ -1117,7 +1117,7 @@ test.describe("Job history mutations", () => {
       await page.getByRole("button", { name: "Delete Job" }).click();
       await expect(page.getByRole("heading", { name: "No Jobs yet" })).toBeVisible();
       await expect(page).toHaveURL(/\/jobs$/);
-      await expect(page.getByRole("heading", { name: "All Jobs" })).toBeFocused();
+      await expect(page.getByRole("heading", { name: "Job history" })).toBeFocused();
       if (viewport.name === "mobile") {
         await expect(page.getByRole("heading", { name: "No Jobs yet" })).toBeVisible();
       }
