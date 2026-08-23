@@ -3,14 +3,13 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 export const UI_LOCALE_STORAGE_KEY = "cueweaver.ui-locale";
 
-export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW"] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-CN"] as const;
 
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
   { code: "en", label: "English" },
   { code: "zh-CN", label: "简体中文" },
-  { code: "zh-TW", label: "繁體中文" },
 ];
 
 const ENGLISH = {
@@ -259,6 +258,10 @@ const ENGLISH = {
   "jobs.clearCompleted": "Clear completed history",
   "jobs.clearConfirmation":
     "Clear all completed Job history? This removes {count} completed Job{plural} and residual Work data. Media and published output are preserved.",
+  "jobs.clearConfirmationSingular":
+    "Clear all completed Job history? This removes {count} completed Job and residual Work data. Media and published output are preserved.",
+  "jobs.clearConfirmationPlural":
+    "Clear all completed Job history? This removes {count} completed Jobs and residual Work data. Media and published output are preserved.",
   "jobs.clearing": "Clearing...",
   "jobs.clearScope":
     "Applies to all completed Jobs, regardless of the current filters.",
@@ -861,6 +864,10 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "translate.emptyDirectory": "此目录为空。",
       "jobs.clearConfirmation":
         "清除所有已完成任务历史？这将移除 {count} 个已完成任务{plural}及残留 Work 数据。Media 和已发布输出会保留。",
+      "jobs.clearConfirmationSingular":
+        "清除所有已完成任务历史？这将移除 {count} 个已完成任务及残留 Work 数据。Media 和已发布输出会保留。",
+      "jobs.clearConfirmationPlural":
+        "清除所有已完成任务历史？这将移除 {count} 个已完成任务及残留 Work 数据。Media 和已发布输出会保留。",
       "jobs.actionNeeded": "需要处理",
       "jobs.someCompletedFailed": "部分已完成任务无法清除。",
       "jobs.jobPrefix": "任务 {id}",
@@ -1465,19 +1472,6 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
   ),
 };
 
-// The Traditional Chinese table keeps its dedicated overrides and inherits the
-// complete Chinese coverage for shared UI keys instead of falling back to English.
-const simplifiedChinese = TRANSLATIONS["zh-CN"];
-const traditionalChinese = TRANSLATIONS["zh-TW"];
-TRANSLATIONS["zh-TW"] = Object.fromEntries(
-  getTranslationKeys().map((key) => [
-    key,
-    traditionalChinese[key] === ENGLISH[key]
-      ? simplifiedChinese[key]
-      : traditionalChinese[key],
-  ]),
-) as TranslationTable;
-
 let activeLocale: Locale = "en";
 
 function readStoredLocale(): string | null {
@@ -1509,7 +1503,7 @@ export function resolveLocale(value: string | null | undefined): Locale {
     normalized.startsWith("zh-hk") ||
     normalized.startsWith("zh-mo")
   )
-    return "zh-TW";
+    return "zh-CN";
   if (normalized.startsWith("zh")) return "zh-CN";
   const base = normalized.split("-")[0];
   return SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === base) ?? "en";
@@ -1521,7 +1515,14 @@ export function detectLocale(
     ? []
     : navigator.languages,
 ): Locale {
-  if (storedValue) return resolveLocale(storedValue);
+  if (
+    storedValue &&
+    SUPPORTED_LOCALES.some(
+      (locale) => locale.toLowerCase() === storedValue.toLowerCase(),
+    )
+  ) {
+    return resolveLocale(storedValue);
+  }
   for (const value of browserValues) {
     const locale = resolveLocale(value);
     if (locale !== "en" || value.toLowerCase().startsWith("en")) return locale;

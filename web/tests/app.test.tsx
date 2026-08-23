@@ -806,20 +806,22 @@ describe("product shell", () => {
     expect(document.documentElement.lang).toBe("zh-CN");
 
     fireEvent.change(screen.getAllByLabelText("切换界面语言")[0], {
-      target: { value: "zh-TW" },
+      target: { value: "en" },
     });
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "翻譯" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Translate" })).toBeInTheDocument(),
     );
-    expect(document.documentElement.lang).toBe("zh-TW");
-    expect(window.localStorage.getItem("cueweaver.ui-locale")).toBe("zh-TW");
+    expect(document.documentElement.lang).toBe("en");
+    expect(window.localStorage.getItem("cueweaver.ui-locale")).toBe("en");
     expect(window.localStorage.getItem("cueweaver.target-language")).toBe("zh-Hans");
 
     view.unmount();
     cleanup();
     renderWithFetch("/translate", fetchMock);
-    expect(await screen.findByRole("heading", { name: "翻譯" })).toBeInTheDocument();
-    expect(document.documentElement.lang).toBe("zh-TW");
+    expect(
+      await screen.findByRole("heading", { name: "Translate" }),
+    ).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("en");
   });
 
   it.each([

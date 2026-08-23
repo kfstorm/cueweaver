@@ -125,10 +125,12 @@ export function JobsPage() {
   const [clearFeedback, setClearFeedback] = useState<ClearFeedback | null>(null);
 
   const clearCompletedJobs = () => {
-    const prompt = t("jobs.clearConfirmation", {
-      count: completedCount,
-      plural: completedCount === 1 ? "" : "s",
-    });
+    const prompt = t(
+      completedCount === 1
+        ? "jobs.clearConfirmationSingular"
+        : "jobs.clearConfirmationPlural",
+      { count: completedCount },
+    );
     if (!window.confirm(prompt)) {
       return;
     }
@@ -188,10 +190,7 @@ export function JobsPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("jobs.title")}
-        detail={t("jobs.detail")}
-      />
+      <PageHeader title={t("jobs.title")} detail={t("jobs.detail")} />
       {recordAttention && recordHealth && <RecordHealthNotice health={recordHealth} />}
       <div className={cn("job-layout", jobId && "has-selection")}>
         <section className="job-list-panel" aria-labelledby="job-list-title">

@@ -65,12 +65,7 @@ import {
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
 import { ThemeProvider } from "./theme-provider";
 import { ThemeToggle } from "./theme-toggle";
-import {
-  formatError,
-  I18nProvider,
-  useI18n,
-  type TranslationKey,
-} from "./i18n";
+import { formatError, I18nProvider, useI18n, type TranslationKey } from "./i18n";
 import { COMMON_TARGET_LANGUAGES, localizedLanguageLabel } from "./languages";
 import {
   useCreateTermMap,
