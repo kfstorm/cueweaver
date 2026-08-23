@@ -2687,6 +2687,7 @@ function TermMapsPage() {
                 </div>
                 <div className="term-map-management">
                   <h3>{t("termMaps.replaceJson")}</h3>
+                  <p className="field-help">{t("termMaps.replaceHelp")}</p>
                   <Textarea
                     aria-label={t("termMaps.replacementJson")}
                     value={replacementText}

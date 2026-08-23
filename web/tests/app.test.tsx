@@ -2273,6 +2273,19 @@ describe("product shell", () => {
       screen.getByRole("heading", { name: "Characters" }),
     );
     expect(screen.getByText("Captain")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Replace all JSON content" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This removes all current mappings and fully replaces them with the JSON below; it does not merge with existing content. Jobs already created keep the Term map content captured when they were queued.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This permanently deletes the Term map and clears Directory defaults that use it. Media, Jobs, and published subtitles are not deleted. Enter "Characters" to confirm.',
+      ),
+    ).toBeInTheDocument();
     const termSearch = screen.getByRole("textbox", { name: "Search Source or Target" });
     expect(termSearch).toHaveAttribute("placeholder", "Type to filter");
     fireEvent.change(termSearch, {
