@@ -309,6 +309,7 @@ def _replace_extracted_source(candidate: Path, destination: Path) -> None:
         if diagnostic is not None:
             diagnostic.replace(destination)
         raise
+    _fsync_directory(destination.parent)
 
 
 def _content_digest(path: Path) -> str:
@@ -317,6 +318,14 @@ def _content_digest(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _fsync_directory(directory: Path) -> None:
+    directory_descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
 
 
 __all__ = [

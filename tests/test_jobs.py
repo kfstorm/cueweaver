@@ -217,33 +217,6 @@ def test_sqlite_record_store_imports_legacy_json_and_retires_the_snapshot(
     assert (jobs_root / "jobs.sqlite3").is_file()
 
 
-def test_sqlite_legacy_migration_does_not_restore_a_deleted_job(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir(parents=True)
-    record = persisted_job_record("deleted-legacy-job")
-    (jobs_root / "deleted-legacy-job.json").write_text(
-        json.dumps(record), encoding="utf-8"
-    )
-    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
-        connection.execute("CREATE TABLE deleted_jobs (id TEXT PRIMARY KEY)")
-        connection.execute(
-            "INSERT INTO deleted_jobs (id) VALUES (?)", ("deleted-legacy-job",)
-        )
-        connection.commit()
-
-    store = SqliteJobRecordStore(jobs_root)
-
-    assert store.load() == []
-    assert not (jobs_root / "deleted-legacy-job.json").exists()
-    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
-        assert (
-            connection.execute(
-                "SELECT name FROM sqlite_master WHERE name = 'deleted_jobs'"
-            ).fetchone()
-            is None
-        )
-
-
 def test_sqlite_legacy_migration_is_idempotent_when_snapshot_retirement_is_deferred(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -360,6 +333,32 @@ def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
         store.load()
 
     assert raised.value.error_code == "job_store_corrupt"
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        ("load", "Job records cannot be loaded"),
+        ("write", "Job record could not be persisted"),
+        ("remove", "Job record could not be deleted"),
+    ],
+)
+def test_sqlite_operation_errors_keep_their_operation_context(
+    tmp_path: Path, operation: str, message: str
+):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(jobs_root)
+    store.write("operation-error", persisted_job_record("operation-error"))
+    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
+        connection.execute("DROP TABLE jobs")
+
+    with pytest.raises(ServiceError, match=message):
+        if operation == "load":
+            store.load()
+        elif operation == "write":
+            store.write("operation-error", persisted_job_record("operation-error"))
+        else:
+            store.remove("operation-error")
 
 
 def status_history_entry(
@@ -2047,6 +2046,7 @@ def test_embedded_retry_rejects_a_job_work_directory_symlink(
         create_failed_embedded_job(tmp_path, translator)
     )
     jobs.close()
+    jobs._worker.join(timeout=5)
     work_directory = work_root / "jobs" / str(queued["id"])
     backup = work_root / "backup-job-work"
     work_directory.rename(backup)

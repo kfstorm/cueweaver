@@ -216,7 +216,11 @@ def test_product_status_rechecks_root_health_after_startup(
         )
     )
 
-    (media_root if root_name == "media" else work_root).rmdir()
+    root = media_root if root_name == "media" else work_root
+    if root_name == "work":
+        root.rename(root.with_name("work-moved"))
+    else:
+        root.rmdir()
 
     response = client.get("/api/status")
 
