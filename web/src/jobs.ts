@@ -26,24 +26,20 @@ function uniqueJobs(jobs: Job[]): Job[] {
   });
 }
 
-function reconcileJobLists(
-  activeJobs: Job[],
-  historyJobs: Job[],
-  activeUpdatedAt: number,
-  historyUpdatedAt: number,
-): JobListData {
+function reconcileJobLists(activeJobs: Job[], historyJobs: Job[]): JobListData {
   const uniqueActive = uniqueJobs(activeJobs);
   const uniqueHistory = uniqueJobs(historyJobs);
-  const activeIds = new Set(uniqueActive.map((job) => job.id));
-  const historyIds = new Set(uniqueHistory.map((job) => job.id));
-  const activeIsNewer = activeUpdatedAt > historyUpdatedAt;
+  const activeById = new Map(uniqueActive.map((job) => [job.id, job]));
+  const historyById = new Map(uniqueHistory.map((job) => [job.id, job]));
   return {
-    active_jobs: activeIsNewer
-      ? uniqueActive
-      : uniqueActive.filter((job) => !historyIds.has(job.id)),
-    history_jobs: activeIsNewer
-      ? uniqueHistory.filter((job) => !activeIds.has(job.id))
-      : uniqueHistory,
+    active_jobs: uniqueActive.filter((job) => {
+      const historyJob = historyById.get(job.id);
+      return historyJob === undefined || job.attempt > historyJob.attempt;
+    }),
+    history_jobs: uniqueHistory.filter((job) => {
+      const activeJob = activeById.get(job.id);
+      return activeJob === undefined || activeJob.attempt <= job.attempt;
+    }),
     next_cursor: null,
   };
 }
@@ -281,8 +277,6 @@ export function useJobs({
         ...reconcileJobLists(
           activeQuery.data?.active_jobs ?? [],
           pages.flatMap((page) => page.history_jobs),
-          activeQuery.dataUpdatedAt,
-          historyQuery.dataUpdatedAt,
         ),
         next_cursor: pages.at(-1)?.next_cursor ?? null,
         matching_count: pages[0]?.matching_count,

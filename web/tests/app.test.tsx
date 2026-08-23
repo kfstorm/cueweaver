@@ -1602,10 +1602,11 @@ describe("product shell", () => {
     expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
   });
 
-  it("prefers a fresher active retry over a cached terminal history Job", async () => {
+  it("prefers a retried active Job over cached terminal history", async () => {
     const failed = embeddedJob("retry-race-job", "Failed");
     const queued = {
       ...failed,
+      attempt: failed.attempt + 1,
       status: "Queued" as const,
       started_at: null,
       finished_at: null,
@@ -1617,7 +1618,10 @@ describe("product shell", () => {
       if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs?limit=1")
         return jobListResponse(activeJob ? [activeJob] : []);
-      if (input === "/api/jobs") return jobListResponse([failed]);
+      if (input === "/api/jobs") return jobListResponse([failed], "cursor-1");
+      if (input === "/api/jobs?limit=50&cursor=cursor-1") {
+        return jobListResponse([failed]);
+      }
       return jsonResponse({ term_maps: [] });
     });
     const { queryClient } = renderWithFetch("/jobs", fetchMock);
@@ -1636,6 +1640,12 @@ describe("product shell", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByText("Queued")).toBeInTheDocument();
     expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more history" }));
+    await waitFor(() => expect(screen.getByText("Queued")).toBeInTheDocument());
+    expect(
+      screen.queryByRole("heading", { name: "Completed and past Jobs" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders queued and running Job states with queue context", async () => {
