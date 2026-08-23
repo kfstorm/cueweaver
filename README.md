@@ -65,15 +65,19 @@ CueWeaver supports these providers in the built-in image:
 | --- | --- | --- |
 | DeepSeek | `DeepSeek` | `DEEPSEEK_API_KEY` |
 | OpenRouter | `OpenRouter` | `OPENROUTER_API_KEY` |
-| OpenAI-compatible remote server | `Custom Server` | `CUSTOM_API_KEY` if required by the server |
-
-Other provider integrations are not included in the built-in image.
+| OpenAI-compatible remote server | `Custom Server` | `CUSTOM_SERVER_ADDRESS` or the built-in localhost default; `CUSTOM_API_KEY` if required |
+| OpenAI | `OpenAI` | `OPENAI_API_KEY` |
+| Azure OpenAI | `Azure` | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, `AZURE_DEPLOYMENT_NAME` |
+| Google Gemini | `Gemini` | `GEMINI_API_KEY` |
+| Anthropic Claude | `Claude` | `CLAUDE_API_KEY` |
+| Mistral | `Mistral` | `MISTRAL_API_KEY` |
+| Amazon Bedrock | `Bedrock` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_MODEL` |
 
 Set `PROVIDER` and the matching provider variables before starting the container. Restart CueWeaver after changing them. Credentials cannot be entered in the Web interface.
 
 If no provider is configured, CueWeaver still starts so you can browse media, manage term maps, and view job history. New translations remain unavailable until `PROVIDER` and the matching credentials are configured.
 
-The provider status in the Web interface confirms that a provider has been selected; it does not verify the credentials. If translation fails, check the provider key and restart the container.
+The provider status performs a local preflight only. It confirms that the provider is bundled and its required variables are non-empty; it does not call the provider API or verify credentials, account access, region availability, or model access.
 
 The defaults below match the provider integration bundled with CueWeaver.
 
@@ -112,6 +116,98 @@ Set `PROVIDER=OpenRouter` and replace the DeepSeek credentials with these variab
 
 Use an OpenRouter model identifier for `OPENROUTER_MODEL`, not a display name from the OpenRouter Web site.
 
+### OpenAI
+
+Set `PROVIDER=OpenAI` and configure the OpenAI API:
+
+| Variable | Default | Type | Purpose and notes |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | None | string | Required. |
+| `OPENAI_API_BASE` | Provider default | string | Optional compatible API base URL. |
+| `OPENAI_MODEL` | `gpt-5-mini` | string | Model ID sent to the API. |
+| `OPENAI_TEMPERATURE` | `0.0` | float | Sampling temperature for non-reasoning models. |
+| `OPENAI_RATE_LIMIT` | None | float | Maximum API requests per minute. |
+| `OPENAI_REASONING_EFFORT` | `low` | string | Reasoning effort for supported reasoning models. |
+| `OPENAI_STREAM_RESPONSES` | `False` | boolean | Stream reasoning responses. |
+| `OPENAI_PROXY` | None | string | Optional proxy URL. |
+
+### Azure OpenAI
+
+Set `PROVIDER=Azure`. Azure uses the OpenAI SDK but requires an Azure deployment:
+
+| Variable | Default | Type | Purpose and notes |
+| --- | --- | --- | --- |
+| `AZURE_API_KEY` | None | string | Required. |
+| `AZURE_API_BASE` | None | string | Required Azure resource endpoint. |
+| `AZURE_API_VERSION` | None | string | Required API version. |
+| `AZURE_DEPLOYMENT_NAME` | None | string | Required deployment name. |
+| `AZURE_PROXY` | None | string | Optional proxy URL. |
+
+### Google Gemini
+
+Set `PROVIDER=Gemini` and configure Google AI:
+
+| Variable | Default | Type | Purpose and notes |
+| --- | --- | --- | --- |
+| `GEMINI_API_KEY` | None | string | Required. |
+| `GEMINI_MODEL` | `gemini-3-flash-preview` | string | Model ID. |
+| `GEMINI_STREAM_RESPONSES` | `True` | boolean | Stream partial responses. |
+| `GEMINI_ENABLE_THINKING` | `False` | boolean | Enable model reasoning when supported. |
+| `GEMINI_THINKING_BUDGET` | `100` | integer | Reasoning token budget. |
+| `GEMINI_TEMPERATURE` | `0.0` | float | Sampling temperature. |
+| `GEMINI_RATE_LIMIT` | `60.0` | float | Maximum API requests per minute. |
+| `GEMINI_PROXY` | None | string | Optional proxy URL. |
+
+Gemini model discovery and credential validation happen only when a translation request is made; the startup preflight does not call Google APIs.
+
+### Anthropic Claude
+
+Set `PROVIDER=Claude` and configure Anthropic:
+
+| Variable | Default | Type | Purpose and notes |
+| --- | --- | --- | --- |
+| `CLAUDE_API_KEY` | None | string | Required. |
+| `CLAUDE_MODEL` | `Claude Haiku 4.5` | string | Model ID or display name supported by the API. |
+| `CLAUDE_STREAM_RESPONSES` | `True` | boolean | Stream partial responses. |
+| `CLAUDE_THINKING` | `False` | boolean | Enable Claude thinking mode. |
+| `CLAUDE_MAX_TOKENS` | `4096` | integer | Maximum output tokens. |
+| `CLAUDE_MAX_THINKING_TOKENS` | `1024` | integer | Maximum thinking tokens when enabled. |
+| `CLAUDE_TEMPERATURE` | `0.0` | float | Sampling temperature. |
+| `CLAUDE_RATE_LIMIT` | `10.0` | float | Maximum API requests per minute. |
+| `CLAUDE_PROXY` | None | string | Optional proxy URL. |
+
+### Mistral
+
+Set `PROVIDER=Mistral` and configure Mistral:
+
+| Variable | Default | Type | Purpose and notes |
+| --- | --- | --- | --- |
+| `MISTRAL_API_KEY` | None | string | Required. |
+| `MISTRAL_SERVER_URL` | Provider default | string | Optional compatible API base URL. |
+| `MISTRAL_MODEL` | `mistral-small-latest` | string | Model ID. Larger models generally translate better. |
+| `MISTRAL_TEMPERATURE` | `0.0` | float | Sampling temperature. |
+| `MISTRAL_RATE_LIMIT` | None | float | Maximum API requests per minute. |
+| `MISTRAL_PROXY` | None | string | Optional proxy URL. |
+
+CueWeaver pins the Mistral SDK below version 2 because PySubtrans 1.6.0 uses its version 1 client API.
+
+### Amazon Bedrock
+
+Set `PROVIDER=Bedrock`. Bedrock requires static AWS credentials and an explicit model ID:
+
+| Variable | Default | Type | Purpose and notes |
+| --- | --- | --- | --- |
+| `AWS_ACCESS_KEY_ID` | None | string | Required. |
+| `AWS_SECRET_ACCESS_KEY` | None | string | Required. |
+| `AWS_REGION` | None | string | Required by CueWeaver, for example `us-east-1`. |
+| `BEDROCK_MODEL` | None | string | Required model ID with Bedrock access enabled. |
+| `BEDROCK_MAX_TOKENS` | `8192` | integer | Maximum output tokens. |
+| `BEDROCK_TEMPERATURE` | `0.0` | float | Sampling temperature. |
+| `BEDROCK_RATE_LIMIT` | None | float | Maximum API requests per minute. |
+| `BEDROCK_PROXY` | None | string | Optional proxy URL. |
+
+The image currently supports access key and secret key authentication. It does not configure IAM roles or session tokens. Bedrock model access must be enabled in AWS, and some models may not follow subtitle translation instructions reliably.
+
 ### Custom Server
 
 `Custom Server` connects to a remote server that exposes an OpenAI-compatible API. Set `PROVIDER=Custom Server` and configure the following variables:
@@ -140,8 +236,8 @@ Most users can leave the advanced settings at their defaults.
 
 ### Provider Troubleshooting
 
-- If the CueWeaver Web interface says that the translation provider is unavailable, check that `PROVIDER` is exactly `DeepSeek`, `OpenRouter`, or `Custom Server`, that the required credentials are set, and then restart the container.
-- If translation cannot start, check the spelling and capitalization of `PROVIDER` and the required API key.
+- If the CueWeaver Web interface says that the translation provider is unavailable, use the message shown in the status panel to identify the missing variable. Provider names are case-sensitive and must exactly match the table above.
+- If translation cannot start, check the provider's API key, endpoint, model, region, and account permissions.
 - For a `Custom Server` 404, check `CUSTOM_SERVER_ADDRESS` and `CUSTOM_ENDPOINT`.
 - For a `Custom Server` timeout or connection error, verify that the remote server accepts connections from the container and that its firewall allows the request.
 - Set `CUSTOM_SUPPORTS_CONVERSATION=false` when the remote service uses a completion endpoint rather than a chat endpoint. Set `CUSTOM_SUPPORTS_SYSTEM_MESSAGES=false` when it does not support system messages.

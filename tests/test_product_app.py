@@ -11,8 +11,11 @@ from cueweaver.product import (
 
 
 class TranslatorFixture:
-    def __init__(self, *, available: bool = True) -> None:
+    def __init__(
+        self, *, available: bool = True, availability_message: str | None = None
+    ) -> None:
         self.available = available
+        self.availability_message = availability_message
         self.secret = "provider-secret-sentinel"
 
     def translate(self, *_args, **_kwargs) -> bytes:
@@ -245,6 +248,23 @@ def test_unconfigured_provider_keeps_product_available_with_actionable_status(
         ),
     }
     assert response.json()["api"] == {"ready": True}
+
+
+def test_provider_status_exposes_specific_local_configuration_message(tmp_path: Path):
+    client = TestClient(
+        product_app(
+            tmp_path,
+            TranslatorFixture(
+                available=False,
+                availability_message="Set GEMINI_API_KEY for PROVIDER=Gemini, then restart CueWeaver.",
+            ),
+        )
+    )
+
+    assert client.get("/api/status").json()["translation_provider"] == {
+        "ready": False,
+        "message": "Set GEMINI_API_KEY for PROVIDER=Gemini, then restart CueWeaver.",
+    }
 
 
 @pytest.mark.parametrize("path", ["/", "/translate", "/jobs", "/term-maps"])
