@@ -41,10 +41,14 @@ class AtomicOutputPublisher:
             temporary_path = Path(temporary_name)
             os.close(descriptor)
             write(temporary_path)
+            with temporary_path.open("rb+") as file:
+                file.flush()
+                os.fsync(file.fileno())
             if overwrite:
                 temporary_path.replace(output_path)
             else:
                 os.link(temporary_path, output_path)
+            _fsync_directory(output_path.parent)
         except FileExistsError as error:
             raise ServiceError(
                 "output_exists", "Output path already exists", path=output_path
@@ -59,3 +63,11 @@ class AtomicOutputPublisher:
             if temporary_path is not None:
                 with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

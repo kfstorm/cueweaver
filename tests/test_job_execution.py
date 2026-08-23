@@ -402,6 +402,5 @@ def test_job_execution_returns_cleanup_failure(tmp_path: Path, monkeypatch):
         translator=TranslatorFixture(), output=OutputFixture()
     ).execute(external_input(tmp_path))
 
-    assert outcome.status == "Failed"
-    assert outcome.error is not None
-    assert outcome.error.error_code == "work_cleanup_failed"
+    assert outcome.status == "Completed"
+    assert outcome.cleanup_pending is True

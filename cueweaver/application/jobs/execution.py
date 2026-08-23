@@ -72,6 +72,8 @@ class JobExecutionOutcome:
     error: ServiceError | None = None
     preserve_failure: bool = False
     terminal_persisted: bool = False
+    output_digest: str | None = None
+    cleanup_pending: bool = False
 
 
 class JobExecutionProgressPersistenceError(Exception):
@@ -98,6 +100,7 @@ class JobExecution:
         *,
         extraction: Extraction | None = None,
         publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        before_publication: Callable[[], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
         finalize: Callable[[JobExecutionOutcome], bool] | None = None,
     ) -> None:
@@ -105,8 +108,16 @@ class JobExecution:
         self._output = output
         self._extraction = extraction
         self._publication_guard = publication_guard or nullcontext
+        self._before_publication_callback = before_publication
         self._should_stop = should_stop or (lambda: False)
         self._finalize = finalize
+        self._output_digest: str | None = None
+        self._cleanup_pending = False
+
+    def _before_publication(self) -> None:
+        self._check_publication_allowed()
+        if self._before_publication_callback is not None:
+            self._before_publication_callback()
 
     def execute(
         self,
@@ -118,6 +129,8 @@ class JobExecution:
         extracting = execution_input.embedded is not None
         outcome: JobExecutionOutcome | None = None
         publication_finalized = False
+        self._output_digest = None
+        self._cleanup_pending = False
 
         def finalize(outcome_to_persist: JobExecutionOutcome) -> bool:
             nonlocal publication_finalized
@@ -162,6 +175,8 @@ class JobExecution:
                     "Completed",
                     result=result,
                     terminal_persisted=publication_finalized,
+                    output_digest=self._output_digest,
+                    cleanup_pending=self._cleanup_pending,
                 )
         except JobExecutionProgressPersistenceError:
             raise
@@ -207,12 +222,12 @@ class JobExecution:
             self._translator,
             self._output,
             publication_guard=self._publication_guard,
-            before_publication=self._check_publication_allowed,
+            before_publication=self._before_publication,
             on_publication_failure=lambda error: self._publication_failed(
                 finalize, error
             ),
             after_publication=lambda: self._publication_succeeded(
-                execution_input.work_directory, finalize
+                execution_input.work_directory, execution_input.output_path, finalize
             ),
         ).translate(
             TranslateRequest(
@@ -251,18 +266,18 @@ class JobExecution:
     def _publication_succeeded(
         self,
         work_directory: Path,
+        output_path: Path,
         finalize: Callable[[JobExecutionOutcome], bool],
     ) -> None:
+        output_digest = _content_digest(output_path)
+        cleanup_pending = False
         try:
             shutil.rmtree(work_directory)
-        except OSError as error:
-            failure = ServiceError(
-                "work_cleanup_failed",
-                "Completed Job work data could not be cleaned up",
-            )
-            self._finalize_failure(finalize, failure)
-            raise _PublicationFailureError(failure) from error
-        self._finalize_success(finalize)
+        except OSError:
+            cleanup_pending = True
+        self._output_digest = output_digest
+        self._cleanup_pending = cleanup_pending
+        self._finalize_success(finalize, output_digest, cleanup_pending)
 
     @staticmethod
     def _finalize_failure(
@@ -276,9 +291,17 @@ class JobExecution:
     @staticmethod
     def _finalize_success(
         finalize: Callable[[JobExecutionOutcome], bool],
+        output_digest: str,
+        cleanup_pending: bool,
     ) -> None:
         try:
-            finalize(JobExecutionOutcome("Completed"))
+            finalize(
+                JobExecutionOutcome(
+                    "Completed",
+                    output_digest=output_digest,
+                    cleanup_pending=cleanup_pending,
+                )
+            )
         except Exception as finalization_error:
             raise JobExecutionFinalizationError from finalization_error
 

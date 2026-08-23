@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Protocol, cast
 from unicodedata import category
@@ -443,6 +444,7 @@ class Jobs:
             "Queued",
             "Extracting",
             "Translating",
+            "Publishing",
             *TERMINAL_JOB_STATUSES,
         }:
             raise ServiceError("invalid_job_status", "Job status filter is invalid")
@@ -465,9 +467,12 @@ class Jobs:
             active_records = [
                 record
                 for record in self._records.values()
-                if record.get("status") in {"Queued", "Extracting", "Translating"}
-                and (status == "all" or record.get("status") == status)
-                and _job_matches_search(record, normalized_search)
+                if (
+                    record.get("status")
+                    in {"Queued", "Extracting", "Translating", "Publishing"}
+                    and (status == "all" or record.get("status") == status)
+                    and _job_matches_search(record, normalized_search)
+                )
             ]
             active_records.sort(key=_active_sort_key)
             history_records = [
@@ -856,7 +861,9 @@ class Jobs:
             status = loaded_record.get("status")
             assert isinstance(job_id, str)
             assert isinstance(status, str)
-            if status in {"Queued", "Extracting", "Translating"}:
+            if status == "Publishing":
+                record = self._reconcile_publishing_record(loaded_record)
+            elif status in {"Queued", "Extracting", "Translating"}:
                 normalize_record(loaded_record)
                 if status == "Queued":
                     record = loaded_record
@@ -870,10 +877,68 @@ class Jobs:
             else:
                 record = loaded_record
                 normalize_record(record)
+                if record.get("status") == "Completed" and record.get(
+                    "cleanup_pending"
+                ):
+                    self._retry_pending_cleanup(job_id, record)
             self._next_queue_sequence = max(
                 self._next_queue_sequence, queue_sequence(record)
             )
             self._records[job_id] = record
+
+    def _reconcile_publishing_record(
+        self, loaded_record: dict[str, object]
+    ) -> dict[str, object]:
+        record = copy_job_record(loaded_record)
+        request = record.get("request")
+        output_path = (
+            self._media_root / str(request["output_path"])
+            if isinstance(request, dict) and isinstance(request.get("output_path"), str)
+            else None
+        )
+        if (
+            output_path is not None
+            and not output_path.is_symlink()
+            and output_path.is_file()
+        ):
+            finished_at = _timestamp()
+            transition_status(record, "Completed", at=finished_at, terminal=True)
+            record["finished_at"] = finished_at
+            record["error"] = None
+            record["publication"] = {
+                "path": str(output_path.relative_to(self._media_root)),
+                "content_digest": _content_digest(output_path),
+            }
+            record["cleanup_pending"] = self._job_work_directory_exists(
+                str(record["id"])
+            )
+            self._write_record(str(record["id"]), record)
+            if record["cleanup_pending"]:
+                self._retry_pending_cleanup(str(record["id"]), record)
+            return record
+        interrupted = _interrupted_record(record)
+        interrupted["error"] = {
+            "code": "publication_interrupted",
+            "message": "Job publication was interrupted before output was durable",
+        }
+        self._write_record(str(record["id"]), interrupted)
+        return interrupted
+
+    def _retry_pending_cleanup(self, job_id: str, record: dict[str, object]) -> None:
+        try:
+            shutil.rmtree(self._job_work_directory(job_id))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return
+        record["cleanup_pending"] = False
+        self._write_record(job_id, record)
+
+    def _job_work_directory_exists(self, job_id: str) -> bool:
+        try:
+            return self._job_work_directory(job_id).exists()
+        except ServiceError:
+            return False
 
     def _run(self) -> None:
         while True:
@@ -943,6 +1008,7 @@ class Jobs:
                 AtomicOutputPublisher(),
                 extraction=self._extraction,
                 publication_guard=self._publication_guard,
+                before_publication=lambda: self._begin_publication(job_id, request),
                 should_stop=self._closed.is_set,
                 finalize=finalize,
             ).execute(
@@ -1014,7 +1080,13 @@ class Jobs:
         work_directory: Path,
     ) -> None:
         if outcome.status == "Completed":
-            self._finish(job_id, "Completed", None)
+            self._finish(
+                job_id,
+                "Completed",
+                None,
+                output_digest=outcome.output_digest,
+                cleanup_pending=outcome.cleanup_pending,
+            )
             return
         if outcome.status == "Interrupted":
             self._finish_interrupted(job_id)
@@ -1089,6 +1161,17 @@ class Jobs:
                 self._write_record(job_id, record)
                 return request, embedded, self._jobs_root / job_id, record
 
+    def _begin_publication(self, job_id: str, request: dict[str, object]) -> None:
+        with self._lock:
+            record = self._records[job_id]
+            transition_status(record, "Publishing", at=_timestamp())
+            record["publication"] = {
+                "path": request["output_path"],
+                "content_digest": None,
+            }
+            record["cleanup_pending"] = False
+            self._write_record(job_id, record)
+
     def _execution_output_path(self, request: dict[str, object]) -> Path:
         output = self._media_path(str(request["output_path"]), "invalid_output_path")
         if request.get("output_conflict_policy", "append-number") in {
@@ -1130,7 +1213,13 @@ class Jobs:
         return safe
 
     def _finish(
-        self, job_id: str, status: str, error: dict[str, object] | None
+        self,
+        job_id: str,
+        status: str,
+        error: dict[str, object] | None,
+        *,
+        output_digest: str | None = None,
+        cleanup_pending: bool = False,
     ) -> None:
         with self._lock:
             record = self._records[job_id]
@@ -1138,6 +1227,14 @@ class Jobs:
             transition_status(record, status, at=finished_at, terminal=True)
             record["finished_at"] = finished_at
             record["error"] = error
+            if status == "Completed":
+                request = record.get("request")
+                if isinstance(request, dict):
+                    record["publication"] = {
+                        "path": request["output_path"],
+                        "content_digest": output_digest,
+                    }
+                record["cleanup_pending"] = cleanup_pending
             self._write_record(job_id, record)
 
     def _finish_interrupted(self, job_id: str) -> None:
@@ -1266,6 +1363,14 @@ def _interrupted_record(record: dict[str, object]) -> dict[str, object]:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _content_digest(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _history_sort_key(record: dict[str, object]) -> tuple[str, str]:

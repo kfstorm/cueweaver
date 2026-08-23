@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -265,6 +266,75 @@ def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
     assert loaded[0]["status"] == "Completed"
 
 
+def test_restarts_reconcile_publishing_job_when_output_exists(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    job_id = "publishing-job"
+    output = media_root / "Movie.zh-Hans.srt"
+    output.write_bytes(SRT)
+    work_directory = work_root / "jobs" / job_id
+    work_directory.mkdir(parents=True)
+    (work_directory / "checkpoint").write_text("checkpoint", encoding="utf-8")
+    record = persisted_job_record(job_id, status="Publishing")
+    SqliteJobRecordStore(work_root / "jobs").write(job_id, record)
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    reconciled = jobs.get(job_id)
+    assert reconciled["status"] == "Completed"
+    assert reconciled["cleanup_pending"] is False
+    assert (
+        reconciled["publication"]["content_digest"] == hashlib.sha256(SRT).hexdigest()
+    )
+    assert not work_directory.exists()
+    jobs.close()
+
+
+def test_restarts_interrupt_publishing_job_when_output_is_missing(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    job_id = "interrupted-publishing-job"
+    record = persisted_job_record(job_id, status="Publishing")
+    SqliteJobRecordStore(work_root / "jobs").write(job_id, record)
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    interrupted = jobs.get(job_id)
+    assert interrupted["status"] == "Interrupted"
+    assert interrupted["error"] == {
+        "code": "publication_interrupted",
+        "message": "Job publication was interrupted before output was durable",
+    }
+    jobs.close()
+
+
+def test_restart_retries_pending_work_cleanup(tmp_path: Path, monkeypatch):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    job_id = "cleanup-pending-job"
+    record = persisted_job_record(job_id, status="Completed")
+    record["cleanup_pending"] = True
+    work_directory = work_root / "jobs" / job_id
+    work_directory.mkdir(parents=True)
+    SqliteJobRecordStore(work_root / "jobs").write(job_id, record)
+    original_rmtree = shutil.rmtree
+    failed_once = True
+
+    def fail_once(path: Path) -> None:
+        nonlocal failed_once
+        if failed_once:
+            failed_once = False
+            raise OSError("permission denied")
+        original_rmtree(path)
+
+    monkeypatch.setattr("cueweaver.application.jobs.shutil.rmtree", fail_once)
+    first = Jobs(FakeTranslator(), media_root, work_root)
+    assert first.get(job_id)["cleanup_pending"] is True
+    first.close()
+
+    second = Jobs(FakeTranslator(), media_root, work_root)
+    assert second.get(job_id)["cleanup_pending"] is False
+    assert not work_directory.exists()
+    second.close()
+
+
 def status_history_entry(
     status: str,
     *,
@@ -290,7 +360,7 @@ def set_record_status(
     assert isinstance(attempt, int)
     assert isinstance(created_at, str)
 
-    if status in {"Queued", "Extracting", "Translating"}:
+    if status in {"Queued", "Extracting", "Translating", "Publishing"}:
         matching_index = next(
             (
                 index
@@ -1522,6 +1592,7 @@ def test_job_persists_status_history_and_exposes_it_on_detail(tmp_path: Path):
     assert [entry["status"] for entry in completed["status_history"]] == [
         "Queued",
         "Translating",
+        "Publishing",
         "Completed",
     ]
     assert all(
@@ -1566,6 +1637,7 @@ def test_retry_adds_a_new_attempt_to_status_history(tmp_path: Path):
         ("Failed", 1),
         ("Queued", 2),
         ("Translating", 2),
+        ("Publishing", 2),
         ("Completed", 2),
     ]
     assert completed["status_history"][2]["finished_at"] == failed_finished_at
@@ -1599,7 +1671,7 @@ def test_restart_appends_interrupted_without_fabricating_earlier_history(
     record["status"] = "Translating"
     record["finished_at"] = None
     record["error"] = None
-    record["status_history"] = record["status_history"][:-1]
+    record["status_history"] = record["status_history"][:-2]
     record["status_history"][-1]["finished_at"] = None
     persist_job_record(work_root, record)
 
@@ -2477,6 +2549,7 @@ def test_embedded_job_extracts_in_work_directory_before_translation(
         "Queued",
         "Extracting",
         "Translating",
+        "Publishing",
         "Completed",
     ]
     assert completed["request"]["output_path"] == f"Movie.zh-Hans.{source_format}"
@@ -3211,12 +3284,10 @@ def test_cleanup_failure_does_not_claim_job_completed(
     monkeypatch.setattr("cueweaver.application.jobs.shutil.rmtree", fail_cleanup)
 
     queued = create_job(client).json()
-    failed = wait_for_status(client, queued["id"], "Failed")
+    completed = wait_for_status(client, queued["id"], "Completed")
 
-    assert failed["error"] == {
-        "code": "work_cleanup_failed",
-        "message": "Completed Job work data could not be cleaned up",
-    }
+    assert completed["error"] is None
+    assert completed["cleanup_pending"] is True
     assert (work_root / "jobs" / queued["id"]).is_dir()
 
 

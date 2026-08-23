@@ -248,7 +248,7 @@ Most users can leave the advanced settings at their defaults.
 - Set `CUSTOM_SUPPORTS_CONVERSATION=false` when the remote service uses a completion endpoint rather than a chat endpoint. Set `CUSTOM_SUPPORTS_SYSTEM_MESSAGES=false` when it does not support system messages.
 - If a request is rejected for authentication, check the provider's API key and restart the container.
 - Changing any provider environment variable requires a container restart. The Work volume can be kept across restarts; it contains job history and resumable translation state.
-- Queued Jobs are restored in queue order after a restart. Jobs that were already extracting or translating are marked interrupted and can be retried from the Jobs page.
+- Queued Jobs are restored in queue order after a restart. Jobs that were already extracting or translating are marked interrupted and can be retried from the Jobs page. Jobs interrupted during publishing are reconciled from their durable output; completed Jobs with leftover Work data retry cleanup on restart.
 
 ## Use CueWeaver
 

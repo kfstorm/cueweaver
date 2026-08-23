@@ -19,6 +19,7 @@ JobStatus = Literal[
     "Queued",
     "Extracting",
     "Translating",
+    "Publishing",
     "Completed",
     "Failed",
     "Interrupted",
@@ -33,6 +34,7 @@ JOB_STATUSES = frozenset(
         "Queued",
         "Extracting",
         "Translating",
+        "Publishing",
         "Completed",
         "Failed",
         "Interrupted",
@@ -83,6 +85,8 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
         "started_at",
         "finished_at",
         "error",
+        "cleanup_pending",
+        "publication",
     )
     if not summary:
         fields += ("extraction", "status_history")
