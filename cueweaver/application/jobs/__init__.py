@@ -52,7 +52,12 @@ from .model import (
     valid_job_id,
     valid_record,
 )
-from .store import FileJobRecordStore, JobRecordHealth, JobRecordStore
+from .store import (
+    FileJobRecordStore,
+    JobRecordHealth,
+    JobRecordStore,
+    SqliteJobRecordStore,
+)
 
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
@@ -108,10 +113,13 @@ class Jobs:
         self._record_store = (
             record_store
             if record_store is not None
-            else FileJobRecordStore(self._jobs_root)
+            else SqliteJobRecordStore(
+                self._jobs_root, database_path=self._work.path / "jobs.sqlite3"
+            )
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
+        self._recovered_queue_ids: list[str] = []
         self._next_queue_sequence = 0
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
@@ -122,6 +130,8 @@ class Jobs:
             target=self._run, daemon=True, name="cueweaver-job-worker"
         )
         self._worker.start()
+        for job_id in self._recovered_queue_ids:
+            self._pending.put(job_id)
 
     def close(self) -> None:
         """Stop accepting work and signal the worker to exit when it can."""
@@ -848,10 +858,15 @@ class Jobs:
             assert isinstance(status, str)
             if status in {"Queued", "Extracting", "Translating"}:
                 normalize_record(loaded_record)
-                record = _interrupted_record(loaded_record)
-                # Recovery is the only startup write. The atomic record replace
-                # makes the interrupted state durable before the worker starts.
-                self._write_record(job_id, record)
+                if status == "Queued":
+                    record = loaded_record
+                    self._recovered_queue_ids.append(job_id)
+                else:
+                    record = _interrupted_record(loaded_record)
+                    # Recovery is the only startup write for an active Job. The
+                    # repository commits the interrupted state before the worker
+                    # starts.
+                    self._write_record(job_id, record)
             else:
                 record = loaded_record
                 normalize_record(record)
@@ -1367,5 +1382,6 @@ __all__ = [
     "JobStatus",
     "JobSummary",
     "Jobs",
+    "SqliteJobRecordStore",
     "valid_job_id",
 ]

@@ -58,3 +58,9 @@ _Avoid_: temporary root
 A durable product task that will orchestrate optional Extraction and
 Translation.
 _Avoid_: request, task
+
+**Job persistence**:
+SQLite at `<work-root>/jobs.sqlite3` is the authoritative Job record store.
+Legacy JSON records are imported during startup and retained as compatibility
+snapshots during the storage migration. Queued Jobs are restored in queue
+order; Jobs already in Extracting or Translating are marked Interrupted.

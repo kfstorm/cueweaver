@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 
 from ..errors import ServiceError
-from .model import JobRecord, migrate_record, valid_job_id
+from .model import JobRecord, migrate_record, valid_job_id, valid_record
 
 CORRUPT_DIRECTORY = "corrupt"
 UNSUPPORTED_DIRECTORY = "unsupported"
@@ -142,18 +146,242 @@ class FileJobRecordStore:
             raise
 
     def _ensure_jobs_root(self) -> None:
-        if self._jobs_root.is_symlink():
-            raise ServiceError(
-                "invalid_work_directory",
-                "Job Work root must not be a symbolic link",
+        _ensure_jobs_root(self._jobs_root)
+
+
+class SqliteJobRecordStore:
+    """Persist Job records in SQLite while importing the legacy JSON layout."""
+
+    def __init__(self, jobs_root: Path, database_path: Path | None = None) -> None:
+        self._jobs_root = jobs_root
+        self._database_path = database_path or jobs_root / "jobs.sqlite3"
+        self._legacy_store = FileJobRecordStore(jobs_root)
+        self._schema_lock = Lock()
+        self._initialized = False
+
+    def load(self) -> list[JobRecord]:
+        if self._jobs_root.exists() or self._jobs_root.is_symlink():
+            self._ensure_jobs_root()
+        # JSON files remain readable during the one-way migration window. They
+        # are also useful for operators inspecting a Work root by hand.
+        database_exists = self._database_path.exists()
+        if database_exists:
+            self._initialize()
+        if not database_exists or not self._migration_complete():
+            legacy_records = (
+                self._legacy_store.load() if self._jobs_root.exists() else []
             )
+            for record in legacy_records:
+                if not database_exists or (
+                    not self._has_record(record) and not self._is_deleted(record)
+                ):
+                    self._upsert(record)
+            if self._database_path.exists():
+                self._mark_migration_complete()
+        if not self._database_path.exists():
+            return []
+        self._initialize()
         try:
-            self._jobs_root.mkdir(parents=True, exist_ok=True)
-        except OSError as error:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    "SELECT record_json FROM jobs ORDER BY queue_sequence, created_at, id"
+                ).fetchall()
+        except sqlite3.Error as error:
             raise ServiceError(
-                "invalid_work_directory",
-                "Job Work root cannot be created",
+                "job_store_unavailable", "Job records cannot be loaded"
             ) from error
+        records: list[JobRecord] = []
+        for row in rows:
+            try:
+                record = json.loads(row[0])
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ServiceError(
+                    "job_store_corrupt", "Job database contains invalid record data"
+                ) from error
+            if not isinstance(record, dict) or not valid_record(record, strict=True):
+                raise ServiceError(
+                    "job_store_corrupt", "Job database contains an invalid record"
+                )
+            records.append(record)
+        return records
+
+    def health(self) -> JobRecordHealth:
+        return self._legacy_store.health()
+
+    def write(self, job_id: str, record: JobRecord) -> None:
+        _require_valid_job_id(job_id)
+        self._upsert(record)
+        # Keep the old representation during migration so an interrupted
+        # upgrade can still be inspected. SQLite remains authoritative if the
+        # compatibility snapshot cannot be updated.
+        with suppress(OSError, ServiceError):
+            self._legacy_store.write(job_id, record)
+
+    def remove(self, job_id: str) -> None:
+        _require_valid_job_id(job_id)
+        if not self._database_path.exists():
+            self._legacy_store.remove(job_id)
+            return
+        self._initialize()
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+                connection.execute(
+                    "INSERT OR IGNORE INTO deleted_jobs (id) VALUES (?)", (job_id,)
+                )
+                connection.commit()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job record could not be deleted"
+            ) from error
+        with suppress(OSError, ServiceError):
+            self._legacy_store.remove(job_id)
+
+    def _has_record(self, record: JobRecord) -> bool:
+        job_id = record.get("id")
+        if not isinstance(job_id, str):
+            return False
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        return row is not None
+
+    def _is_deleted(self, record: JobRecord) -> bool:
+        job_id = record.get("id")
+        if not isinstance(job_id, str):
+            return False
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM deleted_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        return row is not None
+
+    def _migration_complete(self) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key = 'legacy_import_complete'"
+            ).fetchone()
+        return row is not None and row[0] == "1"
+
+    def _mark_migration_complete(self) -> None:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO metadata (key, value) VALUES ('legacy_import_complete', '1')
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """
+            )
+            connection.commit()
+
+    def _initialize(self) -> None:
+        with self._schema_lock:
+            if self._initialized:
+                return
+            try:
+                self._database_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise ServiceError(
+                    "invalid_work_directory",
+                    "Job Work root cannot be created",
+                ) from error
+            try:
+                with self._connection() as connection:
+                    connection.executescript(
+                        """
+                        CREATE TABLE IF NOT EXISTS jobs (
+                            id TEXT PRIMARY KEY,
+                            record_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        queue_sequence INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS deleted_jobs (
+                        id TEXT PRIMARY KEY
+                    );
+                        """
+                    )
+            except sqlite3.Error as error:
+                raise ServiceError(
+                    "job_store_unavailable", "Job database cannot be opened"
+                ) from error
+            self._initialized = True
+
+    def _upsert(self, record: JobRecord) -> None:
+        self._initialize()
+        migrated, _was_migrated, future = migrate_record(record)
+        if migrated is not None:
+            record = migrated
+        elif future:
+            raise ServiceError(
+                "unsupported_job_record", "Job record schema is unsupported"
+            )
+        job_id = record.get("id")
+        if not isinstance(job_id, str):
+            raise ServiceError("invalid_job_id", "Job ID is invalid")
+        if not valid_record(record, strict=True):
+            raise ServiceError("invalid_job_record", "Job record is invalid")
+        raw_record = json.dumps(record, ensure_ascii=True, separators=(",", ":"))
+        created_at = record.get("created_at")
+        sequence = record.get("queue_sequence")
+        if not isinstance(created_at, str) or not isinstance(sequence, int):
+            raise ServiceError("invalid_job_record", "Job record metadata is invalid")
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    """
+                    INSERT INTO jobs (
+                        id, record_json, created_at, queue_sequence
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        record_json = excluded.record_json,
+                        created_at = excluded.created_at,
+                        queue_sequence = excluded.queue_sequence
+                    """,
+                    (
+                        job_id,
+                        raw_record,
+                        created_at,
+                        sequence,
+                    ),
+                )
+                connection.execute("DELETE FROM deleted_jobs WHERE id = ?", (job_id,))
+                connection.commit()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job record could not be persisted"
+            ) from error
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(
+                self._database_path,
+                timeout=30,
+                isolation_level=None,
+            )
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 30000")
+            yield connection
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job database cannot be opened"
+            ) from error
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _ensure_jobs_root(self) -> None:
+        _ensure_jobs_root(self._jobs_root)
 
 
 def _read_record_bytes(record_path: Path) -> bytes | None:
@@ -166,6 +394,21 @@ def _read_record_bytes(record_path: Path) -> bytes | None:
 def _require_valid_job_id(job_id: str) -> None:
     if not valid_job_id(job_id):
         raise ServiceError("invalid_job_id", "Job ID is invalid")
+
+
+def _ensure_jobs_root(jobs_root: Path) -> None:
+    if jobs_root.is_symlink():
+        raise ServiceError(
+            "invalid_work_directory",
+            "Job Work root must not be a symbolic link",
+        )
+    try:
+        jobs_root.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ServiceError(
+            "invalid_work_directory",
+            "Job Work root cannot be created",
+        ) from error
 
 
 def _classify_record(
@@ -300,4 +543,9 @@ def _restore_record(destination: Path, previous: bytes | None) -> None:
         temporary.unlink(missing_ok=True)
 
 
-__all__ = ["FileJobRecordStore", "JobRecordHealth", "JobRecordStore"]
+__all__ = [
+    "FileJobRecordStore",
+    "JobRecordHealth",
+    "JobRecordStore",
+    "SqliteJobRecordStore",
+]

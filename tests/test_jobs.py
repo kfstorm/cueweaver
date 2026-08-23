@@ -15,7 +15,12 @@ from cueweaver.adapters.term_maps import FileTermMapStore
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
-from cueweaver.application.jobs import CreateJobRequest, FileJobRecordStore, Jobs
+from cueweaver.application.jobs import (
+    CreateJobRequest,
+    FileJobRecordStore,
+    Jobs,
+    SqliteJobRecordStore,
+)
 from cueweaver.application.term_maps import TermMapDetail
 from cueweaver.product import create_product_app
 
@@ -175,6 +180,89 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
             "source_format": "srt",
         },
     }
+
+
+def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    record = persisted_job_record("sqlite-job")
+
+    store = SqliteJobRecordStore(jobs_root)
+    store.write("sqlite-job", record)
+
+    assert (jobs_root / "jobs.sqlite3").is_file()
+    loaded = store.load()
+    assert len(loaded) == 1
+    assert loaded[0]["id"] == "sqlite-job"
+    assert loaded[0]["schema_version"] == 1
+    assert loaded[0]["attempt"] == 1
+
+    store.remove("sqlite-job")
+
+    assert store.load() == []
+
+
+def test_sqlite_record_store_imports_legacy_json_without_deleting_it_until_write(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = persisted_job_record("legacy-job")
+    (jobs_root / "legacy-job.json").write_text(json.dumps(record), encoding="utf-8")
+
+    loaded = SqliteJobRecordStore(jobs_root).load()
+
+    assert loaded[0]["id"] == "legacy-job"
+    assert (jobs_root / "legacy-job.json").is_file()
+    assert (jobs_root / "jobs.sqlite3").is_file()
+
+
+def test_sqlite_record_store_delete_removes_unmigrated_legacy_records(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = persisted_job_record("legacy-delete")
+    record_path = jobs_root / "legacy-delete.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    SqliteJobRecordStore(jobs_root).remove("legacy-delete")
+
+    assert not record_path.exists()
+
+
+def test_sqlite_record_store_keeps_the_database_authoritative_after_snapshot_removal(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    record = persisted_job_record("durable-job")
+    store = SqliteJobRecordStore(jobs_root)
+    store.write("durable-job", record)
+    (jobs_root / "durable-job.json").unlink()
+
+    loaded = SqliteJobRecordStore(jobs_root).load()
+
+    assert [item["id"] for item in loaded] == ["durable-job"]
+
+
+def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(jobs_root)
+    old_record = persisted_job_record("authoritative-job", status="Failed")
+    new_record = persisted_job_record("authoritative-job", status="Completed")
+    store.write("authoritative-job", old_record)
+    store.write("authoritative-job", new_record)
+    snapshot = jobs_root / "authoritative-job.json"
+    snapshot.write_text(json.dumps(old_record), encoding="utf-8")
+    old_timestamp = time.time() - 10
+    os.utime(snapshot, (old_timestamp, old_timestamp))
+
+    loaded = SqliteJobRecordStore(jobs_root).load()
+
+    assert loaded[0]["status"] == "Completed"
 
 
 def status_history_entry(
@@ -1276,6 +1364,14 @@ def persisted_external_job(
     )
 
 
+def persist_job_record(work_root: Path, record: dict[str, object]) -> None:
+    job_id = record.get("id")
+    assert isinstance(job_id, str)
+    SqliteJobRecordStore(
+        work_root / "jobs", database_path=work_root / "jobs.sqlite3"
+    ).write(job_id, record)
+
+
 def wait_for_status(
     client: TestClient, job_id: str, expected: str
 ) -> dict[str, object]:
@@ -1497,7 +1593,7 @@ def test_cancel_adds_a_finished_cancelled_status_history_entry(tmp_path: Path):
 def test_restart_appends_interrupted_without_fabricating_earlier_history(
     tmp_path: Path,
 ):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     record["status"] = "Translating"
@@ -1505,7 +1601,7 @@ def test_restart_appends_interrupted_without_fabricating_earlier_history(
     record["error"] = None
     record["status_history"] = record["status_history"][:-1]
     record["status_history"][-1]["finished_at"] = None
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
 
@@ -1800,11 +1896,11 @@ def test_embedded_retry_reextracts_when_completion_marker_is_tampered(
     tmp_path: Path, field: str, value: str
 ):
     translator = FakeTranslator(error=RuntimeError("boom"))
-    media_root, work_root, media, media_adapter, queued, record_path, record = (
+    media_root, work_root, media, media_adapter, queued, _record_path, record = (
         persisted_failed_embedded_job(tmp_path, translator)
     )
     record["extraction"][field] = value
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     translator.error = None
 
     restarted = Jobs(
@@ -1897,11 +1993,11 @@ def test_interrupted_embedded_job_retries_using_its_verified_extraction(
     tmp_path: Path,
 ):
     translator = FakeTranslator(error=RuntimeError("boom"))
-    media_root, work_root, media, media_adapter, queued, record_path, record = (
+    media_root, work_root, media, media_adapter, queued, _record_path, record = (
         persisted_failed_embedded_job(tmp_path, translator)
     )
     set_record_status(record, "Interrupted", finished_at=record["finished_at"])
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     translator.error = None
 
     restarted = Jobs(
@@ -2260,10 +2356,10 @@ def test_retry_persistence_failure_keeps_job_terminal_and_unqueued(
     jobs.close()
 
 
-def test_retry_restores_terminal_record_when_directory_sync_fails(
+def test_retry_survives_compatibility_snapshot_sync_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    _media_root, work_root, _media, _subtitle, jobs, queued = (
+    _media_root, _work_root, _media, _subtitle, jobs, queued = (
         create_failed_external_job(tmp_path, FakeTranslator(error=RuntimeError("boom")))
     )
     original_fsync = os.fsync
@@ -2280,10 +2376,10 @@ def test_retry_restores_terminal_record_when_directory_sync_fails(
         "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
     )
 
-    with pytest.raises(OSError):
-        jobs.retry(str(queued["id"]))
-
-    assert_failed_record_persisted(jobs, work_root, str(queued["id"]))
+    retried = jobs.retry(str(queued["id"]))
+    assert retried["status"] == "Queued"
+    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
+    assert failed["attempt"] == 2
     jobs.close()
 
 
@@ -2294,7 +2390,7 @@ def test_retry_redacts_paths_from_a_malformed_persisted_record(tmp_path: Path):
     record_path = work_root / "jobs" / f"{queued['id']}.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
     record["request"]["media_path"] = str(tmp_path / "private" / "Movie.mkv")
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     jobs.close()
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
@@ -3167,7 +3263,7 @@ def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path
     record_path = work_root / "jobs" / f"{queued['id']}.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
     set_record_status(record, "Interrupted", finished_at=record["finished_at"])
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / str(queued["id"])
     (work_directory / "checkpoint").write_text("checkpoint", encoding="utf-8")
 
@@ -3272,7 +3368,7 @@ def test_delete_cleanup_failure_keeps_record_and_preserves_published_output(
     jobs.close()
 
 
-def test_delete_record_sync_failure_restores_history_record(
+def test_delete_removes_sqlite_record_when_snapshot_sync_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     _media_root, work_root, jobs, queued = create_queued_job(tmp_path)
@@ -3289,15 +3385,20 @@ def test_delete_record_sync_failure_restores_history_record(
         "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
     )
 
-    with pytest.raises(ServiceError) as raised:
-        jobs.delete(str(queued["id"]))
-
-    assert raised.value.error_code == "job_record_delete_failed"
+    assert jobs.delete(str(queued["id"])) == {"id": queued["id"], "deleted": True}
     assert record_path.exists()
-    assert jobs.get(str(queued["id"]))["status"] == "Completed"
+    with pytest.raises(ServiceError) as raised:
+        jobs.get(str(queued["id"]))
+    assert raised.value.error_code == "job_not_found"
     assert not work_directory.exists()
     monkeypatch.setattr("cueweaver.application.jobs.store.os.fsync", original_fsync)
     jobs.close()
+
+    restarted = Jobs(FakeTranslator(), _media_root, work_root)
+    with pytest.raises(ServiceError) as raised:
+        restarted.get(str(queued["id"]))
+    assert raised.value.error_code == "job_not_found"
+    restarted.close()
 
 
 def test_clear_completed_is_deterministic_and_retains_partial_failures(
@@ -3766,7 +3867,7 @@ def test_job_accepts_external_subtitle_without_language_suffix(tmp_path: Path):
 
 
 @pytest.mark.parametrize("active_status", ["Queued", "Extracting", "Translating"])
-def test_restart_recovers_every_active_job_without_requeueing(
+def test_restart_recovers_queued_jobs_and_interrupts_running_jobs(
     tmp_path: Path, active_status: str
 ):
     media_root, work_root, queued, record_path, record = persisted_external_job(
@@ -3780,7 +3881,7 @@ def test_restart_recovers_every_active_job_without_requeueing(
     }
     record["request"]["term_map_mode"] = "selected"
     record["finished_at"] = None
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / queued["id"]
     work_directory.mkdir()
     source = work_directory / "source.srt"
@@ -3791,6 +3892,14 @@ def test_restart_recovers_every_active_job_without_requeueing(
     restarted = Jobs(translator, media_root, work_root)
 
     recovered = restarted.get(queued["id"])
+    if active_status == "Queued":
+        assert recovered["status"] in {"Queued", "Translating", "Completed"}
+        completed = wait_for_status_from_jobs(restarted, queued["id"], "Completed")
+        assert completed["id"] == queued["id"]
+        assert translator.started.is_set()
+        restarted.close()
+        return
+
     assert recovered["status"] == "Interrupted"
     assert recovered["id"] == queued["id"]
     assert recovered["request"] == request_snapshot
@@ -3807,11 +3916,11 @@ def test_restart_recovers_every_active_job_without_requeueing(
 
 
 def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, "Translating", finished_at=None)
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     translator = FakeTranslator(started=threading.Event())
 
     with make_client(media_root, work_root, translator) as client:
@@ -3828,12 +3937,12 @@ def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
 
 
 def test_external_job_retries_after_restart_recovery(tmp_path: Path):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, "Translating", finished_at=None)
     record["error"] = None
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / queued["id"]
     work_directory.mkdir()
     (work_directory / "checkpoint-marker").write_text("keep", encoding="utf-8")
@@ -3865,7 +3974,7 @@ def test_external_job_retries_after_restart_recovery(tmp_path: Path):
 
 @pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])
 def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status: str):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, terminal_status, finished_at="2026-08-14T00:00:00Z")
@@ -3874,34 +3983,30 @@ def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status:
         if terminal_status == "Completed"
         else {"code": "translation_failed", "message": "Translation failed"}
     )
-    persisted = json.dumps(record, separators=(",", ":"))
-    record_path.write_text(persisted, encoding="utf-8")
+    persist_job_record(work_root, record)
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
 
     assert restarted.get(queued["id"])["status"] == terminal_status
     assert restarted.get(queued["id"])["finished_at"] == "2026-08-14T00:00:00Z"
-    assert record_path.read_text(encoding="utf-8") == persisted
     restarted.close()
 
 
 def test_restart_recovery_is_idempotent(tmp_path: Path):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, "Translating", finished_at=None)
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
 
     first = Jobs(FakeTranslator(), media_root, work_root)
     first_recovery = first.get(queued["id"])
     first.close()
-    persisted_after_first_recovery = record_path.read_text(encoding="utf-8")
 
     second = Jobs(
         FakeTranslator(error=RuntimeError("must not run")), media_root, work_root
     )
     assert second.get(queued["id"]) == first_recovery
-    assert record_path.read_text(encoding="utf-8") == persisted_after_first_recovery
     second.close()
 
 
@@ -3934,7 +4039,7 @@ def test_restart_retains_extracted_source_for_an_interrupted_embedded_job(
     record_path = work_root / "jobs" / f"{queued['id']}.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
     set_record_status(record, active_status, finished_at=None)
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     source = work_root / "jobs" / str(queued["id"]) / "source.srt"
     source.parent.mkdir()
     source.write_bytes(SRT)

@@ -57,6 +57,11 @@ The `media` directory is the library shown in CueWeaver. Replace it with an exis
 
 The selected media directory must be writable so CueWeaver can save translated subtitles. The Work volume must be writable and persistent so CueWeaver can keep job history and resumable work.
 
+Job history is stored in SQLite at `jobs.sqlite3` in the Work root. Existing
+JSON Job records are imported automatically when the application starts; JSON
+snapshots remain beside the database while the storage format migration is in
+progress. Do not remove the Work volume while Jobs are active.
+
 ## Translation Provider Configuration
 
 CueWeaver supports these providers in the built-in image:
@@ -243,6 +248,7 @@ Most users can leave the advanced settings at their defaults.
 - Set `CUSTOM_SUPPORTS_CONVERSATION=false` when the remote service uses a completion endpoint rather than a chat endpoint. Set `CUSTOM_SUPPORTS_SYSTEM_MESSAGES=false` when it does not support system messages.
 - If a request is rejected for authentication, check the provider's API key and restart the container.
 - Changing any provider environment variable requires a container restart. The Work volume can be kept across restarts; it contains job history and resumable translation state.
+- Queued Jobs are restored in queue order after a restart. Jobs that were already extracting or translating are marked interrupted and can be retried from the Jobs page.
 
 ## Use CueWeaver
 
