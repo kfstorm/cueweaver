@@ -1,4 +1,4 @@
-"""Durable JSON storage for Job records."""
+"""Durable storage for Job records."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import sqlite3
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -162,8 +162,7 @@ class SqliteJobRecordStore:
     def load(self) -> list[JobRecord]:
         if self._jobs_root.exists() or self._jobs_root.is_symlink():
             self._ensure_jobs_root()
-        # JSON files remain readable during the one-way migration window. They
-        # are also useful for operators inspecting a Work root by hand.
+        # Import legacy JSON only until the SQLite migration marker is set.
         database_exists = self._database_path.exists()
         if database_exists:
             self._initialize()
@@ -203,19 +202,70 @@ class SqliteJobRecordStore:
                     "job_store_corrupt", "Job database contains an invalid record"
                 )
             records.append(record)
+        self._retire_legacy_snapshots()
         return records
 
     def health(self) -> JobRecordHealth:
         return self._legacy_store.health()
 
+    def get(self, job_id: str) -> JobRecord | None:
+        self._initialize()
+        try:
+            with self._connection() as connection:
+                row = connection.execute(
+                    "SELECT record_json FROM jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job records cannot be queried"
+            ) from error
+        return self._decode_record(row[0]) if row is not None else None
+
+    def query(self, statuses: tuple[str, ...] | None = None) -> list[JobRecord]:
+        self._initialize()
+        try:
+            with self._connection() as connection:
+                if statuses:
+                    placeholders = ", ".join("?" for _ in statuses)
+                    rows = connection.execute(
+                        """
+                        SELECT record_json FROM jobs
+                        WHERE json_extract(record_json, '$.status') IN ("""
+                        + placeholders
+                        + ") ORDER BY queue_sequence, created_at, id",
+                        statuses,
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT record_json FROM jobs "
+                        "ORDER BY queue_sequence, created_at, id"
+                    ).fetchall()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job records cannot be queried"
+            ) from error
+        return [self._decode_record(row[0]) for row in rows]
+
+    def count(self, status: str) -> int:
+        self._initialize()
+        try:
+            with self._connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM jobs
+                    WHERE json_extract(record_json, '$.status') = ?
+                    """,
+                    (status,),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job records cannot be counted"
+            ) from error
+        return int(row[0]) if row is not None else 0
+
     def write(self, job_id: str, record: JobRecord) -> None:
         _require_valid_job_id(job_id)
         self._upsert(record)
-        # Keep the old representation during migration so an interrupted
-        # upgrade can still be inspected. SQLite remains authoritative if the
-        # compatibility snapshot cannot be updated.
-        with suppress(OSError, ServiceError):
-            self._legacy_store.write(job_id, record)
 
     def remove(self, job_id: str) -> None:
         _require_valid_job_id(job_id)
@@ -235,8 +285,6 @@ class SqliteJobRecordStore:
             raise ServiceError(
                 "job_store_unavailable", "Job record could not be deleted"
             ) from error
-        with suppress(OSError, ServiceError):
-            self._legacy_store.remove(job_id)
 
     def _has_record(self, record: JobRecord) -> bool:
         job_id = record.get("id")
@@ -383,6 +431,35 @@ class SqliteJobRecordStore:
     def _ensure_jobs_root(self) -> None:
         _ensure_jobs_root(self._jobs_root)
 
+    def _retire_legacy_snapshots(self) -> None:
+        if not self._jobs_root.exists():
+            return
+        removed = False
+        for record_path in self._jobs_root.glob("*.json"):
+            removed = _retire_snapshot(record_path) or removed
+        if removed:
+            try:
+                _fsync_directory(self._jobs_root)
+            except OSError as error:
+                raise ServiceError(
+                    "job_store_unavailable",
+                    "Legacy Job snapshots could not be retired",
+                ) from error
+
+    @staticmethod
+    def _decode_record(raw_record: str) -> JobRecord:
+        try:
+            record = json.loads(raw_record)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ServiceError(
+                "job_store_corrupt", "Job database contains invalid record data"
+            ) from error
+        if not isinstance(record, dict) or not valid_record(record, strict=True):
+            raise ServiceError(
+                "job_store_corrupt", "Job database contains an invalid record"
+            )
+        return record
+
 
 def _read_record_bytes(record_path: Path) -> bytes | None:
     try:
@@ -409,6 +486,18 @@ def _ensure_jobs_root(jobs_root: Path) -> None:
             "invalid_work_directory",
             "Job Work root cannot be created",
         ) from error
+
+
+def _retire_snapshot(record_path: Path) -> bool:
+    try:
+        record_path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise ServiceError(
+            "job_store_unavailable", "Legacy Job snapshots could not be retired"
+        ) from error
+    return True
 
 
 def _classify_record(

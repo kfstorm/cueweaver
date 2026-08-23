@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import queue
 import shutil
 import tempfile
@@ -18,7 +19,7 @@ from unicodedata import category
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
-from ...work import WorkRoot
+from ...work import WorkRoot, WorkRootLease
 from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
 from ..errors import ServiceError, project_service_error
 from ..extraction import Extraction
@@ -110,6 +111,7 @@ class Jobs:
         self._extraction = extraction
         self._media_root = media_root.resolve()
         self._work = WorkRoot(work_root)
+        self._lease = WorkRootLease(self._work.path / ".jobs.lease")
         self._jobs_root = self._work.jobs_directory
         self._record_store = (
             record_store
@@ -120,17 +122,36 @@ class Jobs:
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
+        self._unsaved_record_ids: set[str] = set()
         self._recovered_queue_ids: list[str] = []
         self._next_queue_sequence = 0
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._closed = threading.Event()
-        self._check_jobs_root()
-        self._load_records()
+        try:
+            self._lease.acquire()
+        except ValueError as error:
+            raise ServiceError(
+                "work_root_in_use", "Another CueWeaver process owns this Work root"
+            ) from error
+        except OSError as error:
+            raise ServiceError(
+                "invalid_work_directory", "Work root lease cannot be created"
+            ) from error
+        try:
+            self._check_jobs_root()
+            self._load_records()
+        except Exception:
+            self._lease.release()
+            raise
         self._worker = threading.Thread(
             target=self._run, daemon=True, name="cueweaver-job-worker"
         )
-        self._worker.start()
+        try:
+            self._worker.start()
+        except Exception:
+            self._lease.release()
+            raise
         for job_id in self._recovered_queue_ids:
             self._pending.put(job_id)
 
@@ -378,14 +399,11 @@ class Jobs:
 
     def clear_completed(self) -> dict[str, object]:
         """Delete every Completed Job, retaining records whose cleanup fails."""
-        with self._lock:
+        with self._lifecycle_lock:
             job_ids = sorted(
-                (
-                    str(record["id"])
-                    for record in self._records.values()
-                    if record.get("status") == "Completed"
-                ),
-                key=lambda value: value,
+                str(record["id"])
+                for record in self._query_records(("Completed",))
+                if isinstance(record.get("id"), str)
             )
         deleted: list[str] = []
         failed: list[dict[str, object]] = []
@@ -411,13 +429,19 @@ class Jobs:
         return {"deleted": deleted, "failed": failed}
 
     def list(self) -> list[dict[str, object]]:
-        with self._lock:
-            records = [
-                self._record_with_queue_position(record)
-                for record in self._records.values()
-            ]
+        with self._lifecycle_lock:
+            return self._list()
+
+    def _list(self) -> builtins.list[dict[str, object]]:
+        records = self._query_records()
+        positions = _queue_positions(records)
+        projected = []
+        for record in records:
+            copied = copy_job_record(record)
+            copied["queue_position"] = positions.get(str(record["id"]))
+            projected.append(copied)
         return sorted(
-            records, key=lambda record: str(record["created_at"]), reverse=True
+            projected, key=lambda record: str(record["created_at"]), reverse=True
         )
 
     def list_page(
@@ -426,6 +450,16 @@ class Jobs:
         cursor: str | None = None,
         search: str = "",
         status: str = "all",
+    ) -> dict[str, object]:
+        with self._lifecycle_lock:
+            return self._list_page(limit, cursor, search, status)
+
+    def _list_page(
+        self,
+        limit: int,
+        cursor: str | None,
+        search: str,
+        status: str,
     ) -> dict[str, object]:
         """Return active Jobs and one bounded page of terminal history."""
         if (
@@ -463,41 +497,39 @@ class Jobs:
                     "invalid_job_cursor", "Job history cursor is invalid"
                 ) from error
 
-        with self._lock:
-            active_records = [
-                record
-                for record in self._records.values()
-                if (
-                    record.get("status")
-                    in {"Queued", "Extracting", "Translating", "Publishing"}
-                    and (status == "all" or record.get("status") == status)
-                    and _job_matches_search(record, normalized_search)
-                )
-            ]
-            active_records.sort(key=_active_sort_key)
+        records = self._query_records()
+        active_records = [
+            record
+            for record in records
+            if record.get("status")
+            in {"Queued", "Extracting", "Translating", "Publishing"}
+            if (status == "all" or record.get("status") == status)
+            and _job_matches_search(record, normalized_search)
+        ]
+        history_records = [
+            record
+            for record in records
+            if record.get("status") in TERMINAL_JOB_STATUSES
+            if (status == "all" or record.get("status") == status)
+            and _job_matches_search(record, normalized_search)
+        ]
+        active_records.sort(key=_active_sort_key)
+        history_records.sort(key=_history_sort_key, reverse=True)
+        matching_count = len(active_records) + len(history_records)
+        if position is not None:
             history_records = [
                 record
-                for record in self._records.values()
-                if record.get("status") in TERMINAL_JOB_STATUSES
-                and (status == "all" or record.get("status") == status)
-                and _job_matches_search(record, normalized_search)
+                for record in history_records
+                if _history_sort_key(record) < position
             ]
-            history_records.sort(key=_history_sort_key, reverse=True)
-            matching_count = len(active_records) + len(history_records)
-            if position is not None:
-                history_records = [
-                    record
-                    for record in history_records
-                    if _history_sort_key(record) < position
-                ]
-            page_records = history_records[:limit]
-            has_more = len(history_records) > limit
-            active_jobs = [
-                self._summary_with_queue_position(record) for record in active_records
-            ]
-            history_jobs = [
-                project_job_summary(record, None) for record in page_records
-            ]
+        page_records = history_records[:limit]
+        has_more = len(history_records) > limit
+        positions = _queue_positions(active_records)
+        active_jobs = [
+            project_job_summary(record, positions.get(str(record["id"])))
+            for record in active_records
+        ]
+        history_jobs = [project_job_summary(record, None) for record in page_records]
 
         next_cursor = None
         if has_more:
@@ -508,10 +540,7 @@ class Jobs:
                 next_cursor = encode_history_cursor(
                     last_created_at, last_job_id, condition_hash
                 )
-        with self._lock:
-            completed_count = sum(
-                record.get("status") == "Completed" for record in self._records.values()
-            )
+        completed_count = self._completed_count(records)
         return {
             "active_jobs": active_jobs,
             "history_jobs": history_jobs,
@@ -520,12 +549,69 @@ class Jobs:
             "completed_count": completed_count,
         }
 
+    def _query_records(
+        self, statuses: tuple[str, ...] | None = None
+    ) -> builtins.list[dict[str, object]]:
+        if isinstance(self._record_store, SqliteJobRecordStore):
+            with self._lock:
+                dirty_ids = set(self._unsaved_record_ids)
+                dirty_records = {
+                    str(record["id"]): copy_job_record(record)
+                    for record in tuple(self._records.values())
+                    if str(record["id"]) in dirty_ids
+                }
+            records = self._record_store.query(None if dirty_ids else statuses)
+            records_by_id = {
+                str(record["id"]): record
+                for record in records
+                if str(record["id"]) not in dirty_ids
+            }
+            records_by_id.update(dirty_records)
+            records = list(records_by_id.values())
+        else:
+            with self._lock:
+                records = [copy_job_record(record) for record in self._records.values()]
+        if statuses is None:
+            return records
+        return [record for record in records if record.get("status") in statuses]
+
+    def _completed_count(self, records: builtins.list[dict[str, object]]) -> int:
+        if not isinstance(self._record_store, SqliteJobRecordStore):
+            return sum(record.get("status") == "Completed" for record in records)
+        count = self._record_store.count("Completed")
+        for record in records:
+            job_id = record.get("id")
+            if not isinstance(job_id, str) or job_id not in self._unsaved_record_ids:
+                continue
+            persisted = self._record_store.get(job_id)
+            persisted_completed = (
+                persisted is not None and persisted.get("status") == "Completed"
+            )
+            current_completed = record.get("status") == "Completed"
+            if current_completed and not persisted_completed:
+                count += 1
+            elif persisted_completed and not current_completed:
+                count -= 1
+        return count
+
     def get(self, job_id: str) -> dict[str, object]:
+        with self._lifecycle_lock:
+            return self._get(job_id)
+
+    def _get(self, job_id: str) -> dict[str, object]:
         with self._lock:
             record = self._records.get(job_id)
-            if record is None:
-                raise ServiceError("job_not_found", "Job does not exist")
+        if record is not None:
             return self._record_with_queue_position(record)
+        get_record = getattr(self._record_store, "get", None)
+        if callable(get_record):
+            record = get_record(job_id)
+        else:
+            with self._lock:
+                record = self._records.get(job_id)
+        if record is None:
+            raise ServiceError("job_not_found", "Job does not exist")
+        return self._record_with_queue_position(record)
 
     def record_health(self) -> dict[str, object]:
         health = getattr(self._record_store, "health", None)
@@ -576,6 +662,7 @@ class Jobs:
             ) from error
         with self._lock:
             self._records.pop(job_id, None)
+            self._unsaved_record_ids.discard(job_id)
 
     def _attempt_delete_terminal_job(self, job_id: str) -> ServiceError | None:
         try:
@@ -638,18 +725,6 @@ class Jobs:
     ) -> dict[str, object]:
         return self._copy_with_queue_position(record)
 
-    def _summary_with_queue_position(
-        self, record: dict[str, object]
-    ) -> dict[str, object]:
-        return self._project_with_queue_position(record, project_job_summary)
-
-    def _project_with_queue_position(
-        self,
-        record: dict[str, object],
-        projector: Callable[[JobRecord, int | None], dict[str, object]],
-    ) -> dict[str, object]:
-        return projector(record, self._queue_position(record))
-
     def _copy_with_queue_position(self, record: dict[str, object]) -> dict[str, object]:
         copied = copy_job_record(record)
         copied["queue_position"] = self._queue_position(record)
@@ -658,12 +733,22 @@ class Jobs:
     def _queue_position(self, record: dict[str, object]) -> int | None:
         if record.get("status") != "Queued":
             return None
+        queued_records = [
+            copy_job_record(item)
+            for item in tuple(self._records.values())
+            if item.get("status") == "Queued"
+        ]
         queued = sorted(
-            (item for item in self._records.values() if item.get("status") == "Queued"),
+            queued_records,
             key=queue_sequence,
         )
         return next(
-            index + 1 for index, item in enumerate(queued) if item["id"] == record["id"]
+            (
+                index + 1
+                for index, item in enumerate(queued)
+                if item["id"] == record["id"]
+            ),
+            None,
         )
 
     def _validate(
@@ -960,25 +1045,28 @@ class Jobs:
             return False
 
     def _run(self) -> None:
-        while True:
-            job_id = self._pending.get()
-            try:
-                if job_id is None:
-                    return
-                if self._closed.is_set():
-                    continue
-                self._execute(job_id)
-            except Exception as error:
-                # A persistence error must not kill the serial worker or strand a Job.
-                if job_id is not None:
-                    self._mark_failed_after_worker_error(
-                        job_id,
-                        error,
-                        force=isinstance(error, JobExecutionFinalizationError)
-                        or self._closed.is_set(),
-                    )
-            finally:
-                self._pending.task_done()
+        try:
+            while True:
+                job_id = self._pending.get()
+                try:
+                    if job_id is None:
+                        return
+                    if self._closed.is_set():
+                        continue
+                    self._execute(job_id)
+                except Exception as error:
+                    # A persistence error must not kill the serial worker or strand a Job.
+                    if job_id is not None:
+                        self._mark_failed_after_worker_error(
+                            job_id,
+                            error,
+                            force=isinstance(error, JobExecutionFinalizationError)
+                            or self._closed.is_set(),
+                        )
+                finally:
+                    self._pending.task_done()
+        finally:
+            self._lease.release()
 
     def _execute(self, job_id: str) -> None:
         prepared = self._prepare_execution(job_id)
@@ -1290,7 +1378,12 @@ class Jobs:
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
         record["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
-        self._record_store.write(job_id, record)
+        try:
+            self._record_store.write(job_id, record)
+        except Exception:
+            self._unsaved_record_ids.add(job_id)
+            raise
+        self._unsaved_record_ids.discard(job_id)
 
     def _ensure_jobs_root(self) -> None:
         self._check_jobs_root()
@@ -1428,6 +1521,18 @@ def _job_matches_search(record: dict[str, object], search: str) -> bool:
 def _active_sort_key(record: dict[str, object]) -> tuple[int, str, str]:
     created_at, job_id = _history_sort_key(record)
     return queue_sequence(record), created_at, job_id
+
+
+def _queue_positions(records: list[dict[str, object]]) -> dict[str, int]:
+    queued = sorted(
+        (record for record in records if record.get("status") == "Queued"),
+        key=queue_sequence,
+    )
+    return {
+        str(record["id"]): position
+        for position, record in enumerate(queued, start=1)
+        if isinstance(record.get("id"), str)
+    }
 
 
 def _empty_record_health() -> dict[str, object]:

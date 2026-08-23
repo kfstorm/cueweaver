@@ -61,8 +61,9 @@ _Avoid_: request, task
 
 **Job persistence**:
 SQLite at `<work-root>/jobs.sqlite3` is the authoritative Job record store.
-Legacy JSON records are imported during startup and retained as compatibility
-snapshots during the storage migration. Queued Jobs are restored in queue
-order; Jobs already in Extracting or Translating are marked Interrupted.
+Legacy JSON records are imported once during startup and then their snapshots
+are retired. A Work-root lease prevents multiple CueWeaver processes from
+using the same Work root. Queued Jobs are restored in queue order; Jobs
+already in Extracting or Translating are marked Interrupted.
 Publishing Jobs are reconciled from their durable output, and completed Jobs
 with leftover Work data retain a cleanup_pending marker for retry on restart.

@@ -58,9 +58,10 @@ The `media` directory is the library shown in CueWeaver. Replace it with an exis
 The selected media directory must be writable so CueWeaver can save translated subtitles. The Work volume must be writable and persistent so CueWeaver can keep job history and resumable work.
 
 Job history is stored in SQLite at `jobs.sqlite3` in the Work root. Existing
-JSON Job records are imported automatically when the application starts; JSON
-snapshots remain beside the database while the storage format migration is in
-progress. Do not remove the Work volume while Jobs are active.
+JSON Job records are imported once automatically when the application starts,
+then their snapshots are retired. The Work root also contains `.jobs.lease`,
+which prevents multiple CueWeaver processes from using the same Work root.
+Do not remove the Work volume while Jobs are active.
 
 ## Translation Provider Configuration
 

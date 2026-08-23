@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
+from typing import ClassVar, TextIO
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the supported runtime is POSIX
+    fcntl = None  # type: ignore[assignment]
 
 
 class WorkRoot:
@@ -101,6 +108,59 @@ class WorkRoot:
         )
 
 
+class WorkRootLease:
+    """Hold an exclusive process lease for one Work root."""
+
+    _registry_lock: ClassVar[threading.Lock] = threading.Lock()
+    _registry: ClassVar[dict[Path, tuple[TextIO, int]]] = {}
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._handle: TextIO | None = None
+        self._registry_key: Path | None = None
+
+    def acquire(self) -> None:
+        key = self._path.resolve()
+        with self._registry_lock:
+            existing = self._registry.get(key)
+            if existing is not None:
+                self._registry[key] = (existing[0], existing[1] + 1)
+                self._handle = existing[0]
+                self._registry_key = key
+                return
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            handle = self._path.open("a+")
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                handle.close()
+                raise ValueError("Work root is already in use") from error
+            self._registry[key] = (handle, 1)
+            self._handle = handle
+            self._registry_key = key
+
+    def release(self) -> None:
+        handle = self._handle
+        key = self._registry_key
+        self._handle = None
+        self._registry_key = None
+        if handle is None:
+            return
+        assert key is not None
+        with self._registry_lock:
+            current = self._registry.get(key)
+            if current is None or current[0] is not handle:
+                return
+            if current[1] > 1:
+                self._registry[key] = (handle, current[1] - 1)
+                return
+            del self._registry[key]
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+
 def is_safe_job_identifier(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -113,4 +173,4 @@ def is_safe_job_identifier(value: object) -> bool:
     )
 
 
-__all__ = ["WorkRoot", "is_safe_job_identifier"]
+__all__ = ["WorkRoot", "WorkRootLease", "is_safe_job_identifier"]
