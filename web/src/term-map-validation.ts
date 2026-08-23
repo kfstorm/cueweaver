@@ -14,6 +14,7 @@ export interface TermMapContentValidation {
   rawByteLength: number;
   byteLength: number;
   error: string | null;
+  errorKey: TranslationKey | null;
 }
 
 export function validateTermMapContent(
@@ -21,41 +22,41 @@ export function validateTermMapContent(
   t: Translator = translate,
 ): TermMapContentValidation {
   if (!text.trim()) {
-    return invalidTermMapContent(t("termMapValidation.enterObject"));
+    return invalidTermMapContent("termMapValidation.enterObject", t);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return invalidTermMapContent(t("termMapValidation.validJson"));
+    return invalidTermMapContent("termMapValidation.validJson", t);
   }
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return invalidTermMapContent(t("termMapValidation.object"));
+    return invalidTermMapContent("termMapValidation.object", t);
   }
   const entries = Object.entries(parsed);
   if (entries.length === 0) {
-    return invalidTermMapContent(t("termMapValidation.mapping"));
+    return invalidTermMapContent("termMapValidation.mapping", t);
   }
 
   let sourceKeys: string[];
   try {
     sourceKeys = readTopLevelObjectKeys(text);
   } catch {
-    return invalidTermMapContent(t("termMapValidation.validJson"));
+    return invalidTermMapContent("termMapValidation.validJson", t);
   }
 
   const foldedSources = new Set<string>();
   for (const source of sourceKeys) {
     if (!source) {
-      return invalidTermMapContent(t("termMapValidation.source"));
+      return invalidTermMapContent("termMapValidation.source", t);
     }
     if (hasUnpairedSurrogate(source)) {
-      return invalidTermMapContent(t("termMapValidation.unicode"));
+      return invalidTermMapContent("termMapValidation.unicode", t);
     }
     const foldedSource = source.toLowerCase();
     if (foldedSources.has(foldedSource)) {
-      return invalidTermMapContent(t("termMapValidation.unique"));
+      return invalidTermMapContent("termMapValidation.unique", t);
     }
     foldedSources.add(foldedSource);
   }
@@ -63,13 +64,13 @@ export function validateTermMapContent(
   const content: Record<string, string> = {};
   for (const [source, target] of entries) {
     if (!source) {
-      return invalidTermMapContent(t("termMapValidation.source"));
+      return invalidTermMapContent("termMapValidation.source", t);
     }
     if (typeof target !== "string" || !target) {
-      return invalidTermMapContent(t("termMapValidation.target"));
+      return invalidTermMapContent("termMapValidation.target", t);
     }
     if (hasUnpairedSurrogate(target)) {
-      return invalidTermMapContent(t("termMapValidation.unicode"));
+      return invalidTermMapContent("termMapValidation.unicode", t);
     }
     Object.defineProperty(content, source, {
       configurable: true,
@@ -81,11 +82,11 @@ export function validateTermMapContent(
 
   const rawByteLength = new TextEncoder().encode(text).byteLength;
   if (rawByteLength > MAX_TERM_MAP_UPLOAD_BYTES) {
-    return invalidTermMapContent(t("termMapValidation.size"));
+    return invalidTermMapContent("termMapValidation.size", t);
   }
   const byteLength = new TextEncoder().encode(JSON.stringify(content)).byteLength;
   if (byteLength > MAX_TERM_MAP_BYTES) {
-    return invalidTermMapContent(t("termMapValidation.size"));
+    return invalidTermMapContent("termMapValidation.size", t);
   }
   return {
     content,
@@ -93,11 +94,22 @@ export function validateTermMapContent(
     rawByteLength,
     byteLength,
     error: null,
+    errorKey: null,
   };
 }
 
-function invalidTermMapContent(error: string): TermMapContentValidation {
-  return { content: null, entryCount: 0, rawByteLength: 0, byteLength: 0, error };
+function invalidTermMapContent(
+  errorKey: TranslationKey,
+  t: Translator,
+): TermMapContentValidation {
+  return {
+    content: null,
+    entryCount: 0,
+    rawByteLength: 0,
+    byteLength: 0,
+    error: t(errorKey),
+    errorKey,
+  };
 }
 
 function hasUnpairedSurrogate(value: string): boolean {

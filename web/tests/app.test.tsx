@@ -791,6 +791,37 @@ describe("product shell", () => {
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
   });
 
+  it("detects, switches, and persists the interface locale independently", async () => {
+    window.localStorage.setItem("cueweaver.target-language", "zh-Hans");
+    vi.stubGlobal("navigator", { languages: ["zh-CN"] });
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/media/browse") return emptyMediaResponse();
+      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+      return jobListResponse([]);
+    });
+
+    const view = renderWithFetch("/translate", fetchMock);
+    expect(await screen.findByRole("heading", { name: "翻译" })).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("zh-CN");
+
+    fireEvent.change(screen.getAllByLabelText("切换界面语言")[0], {
+      target: { value: "zh-TW" },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "翻譯" })).toBeInTheDocument(),
+    );
+    expect(document.documentElement.lang).toBe("zh-TW");
+    expect(window.localStorage.getItem("cueweaver.ui-locale")).toBe("zh-TW");
+    expect(window.localStorage.getItem("cueweaver.target-language")).toBe("zh-Hans");
+
+    view.unmount();
+    cleanup();
+    renderWithFetch("/translate", fetchMock);
+    expect(await screen.findByRole("heading", { name: "翻譯" })).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("zh-TW");
+  });
+
   it.each([
     ["/translate", "Translate"],
     ["/jobs", "Jobs"],

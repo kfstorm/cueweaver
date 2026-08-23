@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { translate, type Locale } from "./i18n";
+import { localizedError, type Locale } from "./i18n";
 
 const HISTORY_QUERY_KEY = ["jobs", "history"] as const;
 const HISTORY_REFRESH_QUERY_KEY = ["jobs", "history-refresh"] as const;
@@ -304,7 +304,7 @@ async function fetchJobsPage(path: string, signal?: AbortSignal): Promise<JobLis
   const body = (await response.json()) as Partial<JobListPage> & {
     message?: string;
   };
-  if (!response.ok) throw new Error(body.message ?? translate("errors.jobs"));
+  if (!response.ok) throw localizedError("errors.jobs", body.message);
   if (
     !Array.isArray(body.active_jobs) ||
     !Array.isArray(body.history_jobs) ||
@@ -313,7 +313,7 @@ async function fetchJobsPage(path: string, signal?: AbortSignal): Promise<JobLis
       (typeof body.next_cursor === "string" && body.next_cursor.length > 0)
     )
   ) {
-    throw new Error(translate("errors.invalidJobsResponse"));
+    throw localizedError("errors.invalidJobsResponse");
   }
   return {
     active_jobs: body.active_jobs,
@@ -340,7 +340,7 @@ export function useJob(jobId: string | null, enabled = jobId !== null) {
         signal,
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok) throw new Error(body.message ?? translate("errors.jobDetails"));
+      if (!response.ok) throw localizedError("errors.jobDetails", body.message);
       return body;
     },
     staleTime: 0,
@@ -422,7 +422,7 @@ export function useCreateJob() {
         body: JSON.stringify(request),
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok) throw new Error(body.message ?? translate("errors.queue"));
+      if (!response.ok) throw localizedError("errors.queue", body.message);
       return body;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
@@ -456,13 +456,13 @@ export function useCreateBatchJobs() {
         results?: BatchJobResult[];
         message?: string;
       };
-      if (!response.ok) throw new Error(body.message ?? translate("errors.batchQueue"));
+      if (!response.ok) throw localizedError("errors.batchQueue", body.message);
       if (
         !Array.isArray(body.results) ||
         body.results.length !== request.items.length ||
         !body.results.every(isBatchJobResult)
       )
-        throw new Error(translate("errors.invalidBatchResponse"));
+        throw localizedError("errors.invalidBatchResponse");
       return body.results;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
@@ -477,7 +477,7 @@ export function useRetryJob() {
         method: "POST",
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok) throw new Error(body.message ?? translate("errors.retry"));
+      if (!response.ok) throw localizedError("errors.retry", body.message);
       return body;
     },
     onSuccess: (job, jobId) => updateJobAfterMutation(queryClient, job, jobId),
@@ -492,7 +492,7 @@ export function useCancelJob() {
         method: "POST",
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok) throw new Error(body.message ?? translate("errors.cancel"));
+      if (!response.ok) throw localizedError("errors.cancel", body.message);
       return body;
     },
     onSuccess: (job, jobId) => updateJobAfterMutation(queryClient, job, jobId),
@@ -511,7 +511,7 @@ export function useDeleteJob() {
         deleted: boolean;
         message?: string;
       };
-      if (!response.ok) throw new Error(body.message ?? translate("errors.delete"));
+      if (!response.ok) throw localizedError("errors.delete", body.message);
       return body;
     },
     onSuccess: (_result, jobId) => {
@@ -529,8 +529,7 @@ export function useClearCompletedJobs() {
       const body = (await response.json()) as ClearCompletedJobsResult & {
         message?: string;
       };
-      if (!response.ok)
-        throw new Error(body.message ?? translate("errors.clearCompleted"));
+      if (!response.ok) throw localizedError("errors.clearCompleted", body.message);
       return body;
     },
     onSuccess: () => {

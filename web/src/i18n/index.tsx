@@ -3,17 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 export const UI_LOCALE_STORAGE_KEY = "cueweaver.ui-locale";
 
-export const SUPPORTED_LOCALES = [
-  "en",
-  "zh-CN",
-  "zh-TW",
-  "ja",
-  "ko",
-  "es",
-  "fr",
-  "de",
-  "pt-BR",
-] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW"] as const;
 
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
@@ -21,12 +11,6 @@ export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
   { code: "en", label: "English" },
   { code: "zh-CN", label: "简体中文" },
   { code: "zh-TW", label: "繁體中文" },
-  { code: "ja", label: "日本語" },
-  { code: "ko", label: "한국어" },
-  { code: "es", label: "Español" },
-  { code: "fr", label: "Français" },
-  { code: "de", label: "Deutsch" },
-  { code: "pt-BR", label: "Português (Brasil)" },
 ];
 
 const ENGLISH = {
@@ -152,6 +136,7 @@ const ENGLISH = {
   "translate.outputSuffix": "Subtitle suffix",
   "translate.outputConflict": "If the output filename already exists",
   "translate.skipExisting": "Skip existing output",
+  "translate.noJobIfOutputExists": "(No Job if output exists)",
   "translate.appendNumber": "Append a number",
   "translate.appendNumberRecommended": "Append a number (recommended)",
   "translate.overwrite": "Overwrite existing output",
@@ -476,6 +461,7 @@ const ENGLISH = {
   "errors.delete": "Job could not be deleted.",
   "errors.termMapOperation": "Term map operation failed",
   "errors.clearCompleted": "Completed Jobs could not be cleared.",
+  "errors.unknown": "An unexpected error occurred.",
   "time.notRecorded": "Not recorded",
   "time.timestampUnavailable": "Timestamp unavailable",
   "time.unavailable": "Time unavailable",
@@ -486,7 +472,30 @@ export type TranslationKey = keyof typeof ENGLISH;
 type TranslationOverrides = Partial<Record<TranslationKey, string>>;
 type TranslationTable = Record<TranslationKey, string>;
 
-const NOTIFICATION_TRANSLATIONS: Record<Locale, TranslationOverrides> = {
+export class LocalizedError extends Error {
+  constructor(
+    readonly translationKey: TranslationKey,
+    readonly detail?: string,
+  ) {
+    super(detail ?? translationKey);
+    this.name = "LocalizedError";
+  }
+}
+
+export function localizedError(key: TranslationKey, detail?: string): LocalizedError {
+  return new LocalizedError(key, detail);
+}
+
+export function formatError(
+  error: unknown,
+  t: (key: TranslationKey) => string = translate,
+): string {
+  if (error instanceof LocalizedError) return error.detail ?? t(error.translationKey);
+  if (error instanceof Error) return error.message;
+  return t("errors.unknown");
+}
+
+const NOTIFICATION_TRANSLATIONS: Record<string, TranslationOverrides> = {
   en: {},
   "zh-CN": {
     "jobs.notificationCompleted": "{media} 翻译已完成。",
@@ -533,12 +542,12 @@ const NOTIFICATION_TRANSLATIONS: Record<Locale, TranslationOverrides> = {
 
 function withEnglishFallback(
   overrides: TranslationOverrides,
-  locale: Locale = "en",
+  locale = "en",
 ): TranslationTable {
   return { ...ENGLISH, ...NOTIFICATION_TRANSLATIONS[locale], ...overrides };
 }
 
-const TRANSLATIONS: Record<Locale, TranslationTable> = {
+const TRANSLATIONS: Record<string, TranslationTable> = {
   en: ENGLISH,
   "zh-CN": withEnglishFallback(
     {
@@ -636,6 +645,7 @@ const TRANSLATIONS: Record<Locale, TranslationTable> = {
       "translate.outputSuffix": "输出后缀",
       "translate.outputConflict": "输出文件名已存在时",
       "translate.skipExisting": "跳过已有输出",
+      "translate.noJobIfOutputExists": "（如果输出已存在则不创建任务）",
       "translate.appendNumber": "追加编号",
       "translate.overwrite": "覆盖已有输出",
       "translate.queueing": "正在排队...",
@@ -761,7 +771,209 @@ const TRANSLATIONS: Record<Locale, TranslationTable> = {
       "time.notRecorded": "未记录",
       "time.timestampUnavailable": "时间戳不可用",
       "time.unavailable": "时间不可用",
-      "time.utc": "UTC",
+      "translate.selectUnique": "选择唯一项",
+      "translate.chooseSubtitle": "选择字幕",
+      "translate.sourceDiscovered": "已发现 {name} 的来源。",
+      "translate.chooseAnotherMedia": "选择其他 Media",
+      "translate.loadingSubtitles": "正在加载字幕",
+      "translate.multipleSubtitles": "发现多个字幕。请选择一个候选项继续。",
+      "translate.resolveCandidates": "处理候选项",
+      "translate.noCandidateMatch": "没有字幕候选项符合此筛选条件。",
+      "translate.targetLanguagePlaceholder": "例如 zh-Hans",
+      "translate.appendNumberRecommended": "追加编号（推荐）",
+      "translate.selectSubtitle": "选择 {kind} 字幕 {details}",
+      "translate.streamAccessible": "流 {index}",
+      "translate.externalKind": "外部",
+      "translate.embeddedKind": "内嵌",
+      "translate.unsupportedLabel": "不支持的 {kind} 字幕",
+      "translate.unavailableSubtitle": "不可用字幕",
+      "translate.notSelectable": "无法选择",
+      "translate.queuedEyebrow": "已排队任务",
+      "translate.mediaSummary": "媒体",
+      "translate.targetLanguageUnavailable": "目标语言不可用",
+      "translate.mediaRoot": "媒体根目录",
+      "translate.subtitleSelectionFor": "为 {name} 选择字幕",
+      "translate.unknownFormat": "未知格式",
+      "translate.disposition.default": "默认",
+      "translate.disposition.forced": "强制",
+      "translate.disposition.hearingImpaired": "听障辅助",
+      "translate.disposition.visualImpaired": "视障辅助",
+      "translate.disposition.commentary": "评论",
+      "translate.disposition.lyrics": "歌词",
+      "translate.disposition.karaoke": "卡拉 OK",
+      "translate.disposition.original": "原声",
+      "translate.disposition.dubbed": "配音",
+      "translate.disposition.cleanEffects": "纯净音效",
+      "translate.job": "任务",
+      "translate.jobs": "任务",
+      "translate.viewJob": "查看任务",
+      "translate.outputExists": "输出已存在",
+      "translate.noJobCreated": "未创建任务。",
+      "translate.batchQueuedSummary":
+        "已排队 {queued} 个任务{skipped}，跳过 {errors} 个。",
+      "translate.queuedCount": "已排队 {count} 个{unit}",
+      "translate.skippedCount": "已跳过 {count} 个{unit}",
+      "translate.errorCount": "{count} 个{unit}",
+      "translate.batchSummary": "{queued}{skipped}{errors}。",
+      "translate.batchItem": "项目",
+      "translate.batchItems": "项目",
+      "translate.batchError": "错误",
+      "translate.batchErrors": "错误",
+      "translate.queuedAsJob": "已作为任务 {id} 排队",
+      "translate.skippedReason": "已跳过：{reason}",
+      "translate.existingOutput": "已有输出：{path}",
+      "translate.showErrorDetails": "显示错误详情",
+      "translate.errorCode": "错误代码",
+      "translate.batchSubmissionResults": "批量提交结果",
+      "translate.batchResult": "批量结果",
+      "translate.sharedOutputSettings": "共享输出设置",
+      "translate.appliedEvery": "应用于每个排队的翻译。",
+      "translate.outputFilename": "输出文件名：",
+      "translate.loadingTermMaps": "正在加载术语表",
+      "translate.noTermMapJob": "此任务不使用术语表",
+      "translate.termMapPolicyHelp":
+        "跟随目录默认值、明确不使用术语表，或为此次翻译选择指定术语表。",
+      "translate.directoryOption": "目录：{name}",
+      "translate.mediaBrowser": "媒体浏览器",
+      "translate.mediaBreadcrumbs": "媒体路径导航",
+      "translate.currentDirectory": "当前目录：{name}",
+      "translate.currentDirectoryRoot": "当前目录：媒体根目录",
+      "translate.directoryDefaultHelp":
+        "适用于当前目录下的 Media，除非任务覆盖或禁用它。",
+      "translate.localBinding": "本地绑定",
+      "translate.effectiveTermMap": "生效的术语表",
+      "translate.noDefault": "无默认值",
+      "translate.inheritedFrom": "继承自 {name}",
+      "translate.chooseTermMap": "选择术语表",
+      "translate.binding": "正在绑定...",
+      "translate.replaceLocalBinding": "替换本地绑定",
+      "translate.bindTermMap": "绑定术语表",
+      "translate.removing": "正在移除...",
+      "translate.removeLocalBinding": "移除本地绑定",
+      "translate.filterDirectory": "筛选此目录",
+      "translate.typeName": "输入名称",
+      "translate.directory": "目录",
+      "translate.media": "媒体",
+      "translate.noMatchingMedia": "没有匹配的 Media 或目录。",
+      "translate.openDirectory": "打开 {name}",
+      "translate.directoryLabel": "目录",
+      "translate.mediaLabel": "媒体",
+      "translate.emptyDirectory": "此目录为空。",
+      "jobs.clearConfirmation":
+        "清除所有已完成任务历史？这将移除 {count} 个已完成任务{plural}及残留 Work 数据。Media 和已发布输出会保留。",
+      "jobs.actionNeeded": "需要处理",
+      "jobs.someCompletedFailed": "部分已完成任务无法清除。",
+      "jobs.jobPrefix": "任务 {id}",
+      "jobs.persistenceWarning": "持久化警告",
+      "jobs.recordsExcluded": "这些记录已从活动历史中排除，需要操作员检查。",
+      "jobs.recordCount": "{count} 条{unit}位于",
+      "jobs.record": "记录",
+      "jobs.records": "记录",
+      "jobs.corrupt": "损坏",
+      "jobs.unsupported": "不支持",
+      "jobs.noLongerAvailable": "此任务已不可用。",
+      "jobs.sourceTo": "{source} 至 {target}",
+      "jobs.jobId": "任务 {id}",
+      "jobs.termMapLabel": "术语表：{name}",
+      "jobs.deleteConfirmation":
+        "{action} {id}？这将移除其任务历史和残留 Work 数据。Media 和已发布输出会保留。",
+      "jobs.attemptLabel": "第 {attempt} 次尝试",
+      "jobs.cancelConfirmation":
+        "{action} 任务 {id}？它会保留在任务历史中，且不会被翻译。",
+      "jobs.statusOption.Queued": "排队中状态",
+      "jobs.statusOption.Extracting": "提取中状态",
+      "jobs.statusOption.Translating": "翻译中状态",
+      "jobs.statusOption.Completed": "已完成历史",
+      "jobs.statusOption.Failed": "失败历史",
+      "jobs.statusOption.Interrupted": "已中断历史",
+      "jobs.statusOption.Cancelled": "已取消历史",
+      "jobs.detailsRegion": "任务详情",
+      "jobs.statusHistoryLabel": "任务状态历史",
+      "jobs.translationJobs": "翻译任务",
+      "jobs.noMatching": "没有匹配的任务",
+      "jobs.noMatchingDetail": "请尝试其他搜索词或清除筛选条件。",
+      "jobs.clearFilters": "清除筛选条件",
+      "jobs.active": "活动任务",
+      "jobs.completedAndPast": "已完成及历史任务",
+      "jobs.refreshingHistory": "正在刷新历史...",
+      "jobs.loadingHistory": "正在加载历史...",
+      "jobs.loadMoreHistory": "加载更多历史",
+      "jobs.cancelJob": "取消任务",
+      "jobs.cancelling": "正在取消...",
+      "jobs.retrying": "正在重试...",
+      "jobs.deleting": "正在删除...",
+      "jobs.copyId": "复制任务 ID",
+      "jobs.copied": "已复制",
+      "jobs.copyManually": "请选择任务 ID 并手动复制。",
+      "jobs.media": "媒体",
+      "jobs.source": "来源",
+      "jobs.outputFormat": "输出格式",
+      "jobs.termMapPolicy": "术语表策略",
+      "jobs.termMapSnapshot": "术语表快照",
+      "jobs.attempt": "尝试次数",
+      "jobs.enabled": "已启用",
+      "jobs.disabled": "已禁用",
+      "jobs.none": "无",
+      "jobs.timestampsLocal": "时间戳（本地时间）",
+      "jobs.statusUnavailable": "此任务的状态历史不可用。",
+      "jobs.showDiagnostics": "显示批准的诊断上下文",
+      "jobs.errorCode": "错误代码",
+      "jobs.select": "选择任务",
+      "jobs.selectDetail": "从历史中选择一个任务，查看其配置、输出和诊断信息。",
+      "termMaps.newResource": "新资源",
+      "termMaps.name": "名称",
+      "termMaps.importJson": "导入 JSON 文件",
+      "termMaps.jsonHelp": "使用 .json 文件作为一种受支持的输入方式。",
+      "termMaps.selectJson": "选择 JSON 文件",
+      "termMaps.jsonFile": "JSON 文件",
+      "termMaps.jsonContent": "JSON 内容",
+      "termMaps.invalidFile": "请选择包含术语表的 .json 文件。",
+      "termMaps.readError": "无法读取所选 JSON 文件。",
+      "termMaps.loaded": "已加载 {name}",
+      "termMaps.pasteJson": "直接粘贴 JSON",
+      "termMaps.pasteHelp":
+        "或者直接粘贴由 Source 到 Target 字符串组成的非空对象，最大 1 MiB。",
+      "termMaps.readingJson": "正在读取 JSON 文件...",
+      "termMaps.previewHelp": "通过文件导入或粘贴方式添加 JSON，以预览其映射。",
+      "termMaps.valid": "有效术语表：{count} 个{unit}。",
+      "termMaps.mapping": "映射",
+      "termMaps.mappings": "映射",
+      "termMaps.uploading": "正在上传术语表",
+      "termMaps.uploadingButton": "正在上传...",
+      "termMaps.library": "术语表库",
+      "termMaps.retry": "重试",
+      "termMaps.emptyDetail": "上传 JSON 术语表，让术语在不同任务中保持一致。",
+      "termMaps.entry": "条目",
+      "termMaps.entries": "条目",
+      "termMaps.back": "返回术语表",
+      "termMaps.details": "术语表详情",
+      "termMaps.updated": "更新时间",
+      "termMaps.newName": "新术语表名称",
+      "termMaps.saveName": "保存名称",
+      "termMaps.loadingDetails": "正在加载详情",
+      "termMaps.search": "搜索 Source 或 Target",
+      "termMaps.filter": "输入以筛选",
+      "termMaps.source": "来源",
+      "termMaps.target": "目标",
+      "termMaps.noMatchingTerms": "没有匹配的术语。",
+      "termMaps.replaceJson": "替换 JSON 内容",
+      "termMaps.replacementJson": "替换用 JSON 内容",
+      "termMaps.replacing": "正在替换...",
+      "termMaps.replaceContent": "替换内容",
+      "termMaps.deleteTitle": "删除术语表",
+      "termMaps.deleteHelp": "输入“{name}”以确认永久删除。",
+      "termMaps.confirmName": "确认术语表名称",
+      "termMaps.deleting": "正在删除...",
+      "termMaps.deleteMap": "删除术语表",
+      "termMapValidation.invalid": "术语表内容无效",
+      "translate.suffixRequired": "字幕后缀不能为空。",
+      "translate.suffixSegmentRequired": "字幕后缀片段不能为空。",
+      "translate.suffixTrailingSpace": "字幕后缀片段不能以空格结尾。",
+      "translate.suffixReserved": "字幕后缀包含保留的文件名片段。",
+      "translate.suffixUnsafe": "字幕后缀包含不安全字符。",
+      "errors.termMapOperation": "术语表操作失败",
+      "errors.unknown": "发生了意外错误。",
+      "time.utc": "协调世界时",
     },
     "zh-CN",
   ),
@@ -1253,6 +1465,19 @@ const TRANSLATIONS: Record<Locale, TranslationTable> = {
   ),
 };
 
+// The Traditional Chinese table keeps its dedicated overrides and inherits the
+// complete Chinese coverage for shared UI keys instead of falling back to English.
+const simplifiedChinese = TRANSLATIONS["zh-CN"];
+const traditionalChinese = TRANSLATIONS["zh-TW"];
+TRANSLATIONS["zh-TW"] = Object.fromEntries(
+  getTranslationKeys().map((key) => [
+    key,
+    traditionalChinese[key] === ENGLISH[key]
+      ? simplifiedChinese[key]
+      : traditionalChinese[key],
+  ]),
+) as TranslationTable;
+
 let activeLocale: Locale = "en";
 
 function readStoredLocale(): string | null {
@@ -1278,10 +1503,14 @@ export function resolveLocale(value: string | null | undefined): Locale {
   const normalized = value.toLowerCase();
   const exact = SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === normalized);
   if (exact) return exact;
-  if (normalized.startsWith("zh-tw") || normalized.startsWith("zh-hant"))
+  if (
+    normalized.startsWith("zh-tw") ||
+    normalized.startsWith("zh-hant") ||
+    normalized.startsWith("zh-hk") ||
+    normalized.startsWith("zh-mo")
+  )
     return "zh-TW";
   if (normalized.startsWith("zh")) return "zh-CN";
-  if (normalized.startsWith("pt")) return "pt-BR";
   const base = normalized.split("-")[0];
   return SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === base) ?? "en";
 }
@@ -1371,4 +1600,9 @@ export function getTranslationKeys(): readonly TranslationKey[] {
 
 export function getLocaleTable(locale: Locale): TranslationTable {
   return TRANSLATIONS[locale];
+}
+
+export function getUntranslatedKeys(locale: Locale): readonly TranslationKey[] {
+  const table = getLocaleTable(locale);
+  return getTranslationKeys().filter((key) => table[key] === ENGLISH[key]);
 }

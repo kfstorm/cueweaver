@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { translate } from "./i18n";
+import { localizedError } from "./i18n";
 
 export interface ProductStatus {
   api: { ready: boolean };
@@ -21,7 +21,7 @@ export function jobRecordAttention(status: ProductStatus | undefined): boolean {
 async function fetchStatus(): Promise<ProductStatus> {
   const response = await fetch("/api/status");
   if (!response.ok) {
-    throw new Error(translate("errors.statusUnavailable"));
+    throw localizedError("errors.statusUnavailable");
   }
   return response.json() as Promise<ProductStatus>;
 }

@@ -26,7 +26,7 @@ import {
   type OutputConflictPolicy,
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
-import { useI18n, type TranslationKey } from "./i18n";
+import { formatError, useI18n, type TranslationKey } from "./i18n";
 import { useProductStatus } from "./status";
 
 type ClearFeedback = {
@@ -272,7 +272,7 @@ export function JobsPage() {
           )}
           {clearCompleted.isError && (
             <p className="form-error" role="alert">
-              {clearCompleted.error.message}
+              {formatError(clearCompleted.error, t)}
             </p>
           )}
           {clearCompleted.data && clearCompleted.data.failed.length > 0 && (
@@ -308,7 +308,7 @@ export function JobsPage() {
             )}
             {jobs.isError && (
               <div className="inline-state error" role="alert">
-                {jobs.error?.message ?? t("errors.jobs")}
+                {formatError(jobs.error, t)}
                 <Button variant="outline" onClick={() => void jobs.refetch()}>
                   {t("common.tryAgain")}
                 </Button>
@@ -389,7 +389,7 @@ export function JobsPage() {
             <DetailState error>
               {detail.error.message === "Job does not exist"
                 ? t("jobs.noLongerAvailable")
-                : detail.error.message}
+                : formatError(detail.error, t)}
               <Button variant="outline" onClick={() => navigate("/jobs")}>
                 {t("jobs.back")}
               </Button>
@@ -534,7 +534,7 @@ function JobListItem({
           </Button>
           {cancelJob.isError && (
             <p className="form-error" role="alert">
-              {cancelJob.error.message}
+              {formatError(cancelJob.error, t)}
             </p>
           )}
         </>
@@ -662,17 +662,17 @@ function JobDetail({
         )}
         {retryJob.isError && (
           <p className="form-error" role="alert">
-            {retryJob.error.message}
+            {formatError(retryJob.error, t)}
           </p>
         )}
         {deleteJob.isError && (
           <p className="form-error" role="alert">
-            {deleteJob.error.message}
+            {formatError(deleteJob.error, t)}
           </p>
         )}
         {cancelJob.isError && (
           <p className="form-error" role="alert">
-            {cancelJob.error.message}
+            {formatError(cancelJob.error, t)}
           </p>
         )}
       </div>

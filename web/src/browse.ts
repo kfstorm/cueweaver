@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
-import { translate } from "./i18n";
+import { localizedError, type TranslationKey } from "./i18n";
 
 export interface MediaDirectoryEntry {
   name: string;
@@ -24,7 +24,7 @@ async function fetchDirectory(path: string): Promise<MediaDirectory> {
     body: JSON.stringify({ path }),
   });
   if (!response.ok) {
-    await throwResponseError(response, translate("errors.mediaDirectory"));
+    await throwResponseError(response, "errors.mediaDirectory");
   }
   return response.json() as Promise<MediaDirectory>;
 }
@@ -69,19 +69,22 @@ async function fetchDiscovery(
     signal,
   });
   if (!response.ok) {
-    await throwResponseError(response, translate("errors.subtitleDiscovery"));
+    await throwResponseError(response, "errors.subtitleDiscovery");
   }
   return response.json() as Promise<MediaDiscovery>;
 }
 
 async function throwResponseError(
   response: Response,
-  fallback: string,
+  fallback: TranslationKey,
 ): Promise<never> {
   const body = (await response.json().catch(() => null)) as {
     message?: unknown;
   } | null;
-  throw new Error(typeof body?.message === "string" ? body.message : fallback);
+  throw localizedError(
+    fallback,
+    typeof body?.message === "string" ? body.message : undefined,
+  );
 }
 
 export function useMediaDiscovery(path: string | null) {

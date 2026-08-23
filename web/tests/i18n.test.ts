@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   detectLocale,
+  formatError,
   getLocaleTable,
   getTranslationKeys,
+  getUntranslatedKeys,
+  localizedError,
   resolveLocale,
   setActiveLocale,
   SUPPORTED_LOCALES,
@@ -18,14 +21,17 @@ describe("interface locale selection", () => {
   it("normalizes regional browser languages and falls back safely", () => {
     expect(resolveLocale("zh-Hans-CN")).toBe("zh-CN");
     expect(resolveLocale("zh-Hant-TW")).toBe("zh-TW");
-    expect(resolveLocale("pt-PT")).toBe("pt-BR");
-    expect(resolveLocale("fr-CA")).toBe("fr");
+    expect(resolveLocale("zh-HK")).toBe("zh-TW");
+    expect(resolveLocale("zh-MO")).toBe("zh-TW");
+    expect(resolveLocale("zh-Hant-HK")).toBe("zh-TW");
+    expect(resolveLocale("pt-PT")).toBe("en");
+    expect(resolveLocale("fr-CA")).toBe("en");
     expect(resolveLocale("xx-YY")).toBe("en");
   });
 
   it("prefers a stored locale, then the first supported browser locale", () => {
-    expect(detectLocale("ja", ["zh-CN"])).toBe("ja");
-    expect(detectLocale(null, ["xx-YY", "de-DE"])).toBe("de");
+    expect(detectLocale("ja", ["zh-CN"])).toBe("en");
+    expect(detectLocale(null, ["xx-YY", "de-DE"])).toBe("en");
     expect(detectLocale(null, ["xx-YY"])).toBe("en");
   });
 
@@ -43,7 +49,7 @@ describe("interface locale selection", () => {
     for (const locale of SUPPORTED_LOCALES) {
       const table = getLocaleTable(locale);
       for (const key of requiredKeys) expect(table[key]).toBeTruthy();
-      for (const key of getTranslationKeys()) expect(table[key]).toBeTruthy();
+      if (locale !== "en") expect(getUntranslatedKeys(locale), locale).toEqual([]);
     }
     expect(getTranslationKeys().length).toBeGreaterThan(100);
   });
@@ -55,5 +61,13 @@ describe("interface locale selection", () => {
     );
     expect(translate("jobs.matching", { count: 3 })).toContain("3");
     expect(translate("translate.targetLanguageCode")).toBe("目标语言代码");
+  });
+
+  it("formats a cached localized error with the active locale", () => {
+    const error = localizedError("errors.mediaDirectory");
+    setActiveLocale("en");
+    expect(formatError(error)).toBe("This Media directory could not be loaded.");
+    setActiveLocale("zh-CN");
+    expect(formatError(error)).toBe("无法加载此 Media 目录。");
   });
 });

@@ -320,7 +320,7 @@ function OutputConflictPolicy({
           {value === "skip" && (
             <span className="output-conflict-policy-hint">
               {" "}
-              (No Job if output exists)
+              {t("translate.noJobIfOutputExists")}
             </span>
           )}
         </span>
@@ -811,9 +811,11 @@ function Translate() {
             isBinding={bindDirectoryTermMap.isPending}
             isRemoving={removeDirectoryTermMap.isPending}
             error={
-              bindDirectoryTermMap.error?.message ??
-              removeDirectoryTermMap.error?.message ??
-              null
+              bindDirectoryTermMap.error
+                ? formatError(bindDirectoryTermMap.error, t)
+                : removeDirectoryTermMap.error
+                  ? formatError(removeDirectoryTermMap.error, t)
+                  : null
             }
           />
         </div>
@@ -910,7 +912,7 @@ function Translate() {
               <option value={DIRECTORY_TERM_MAP_VALUE}>
                 {directoryTermMap.data?.effective
                   ? `${t("translate.directoryDefault")} (${directoryTermMap.data.effective.name})`
-                  : `${t("translate.directoryDefault")} (none)`}
+                  : `${t("translate.directoryDefault")} (${t("jobs.none")})`}
               </option>
               <option value="">{t("translate.noTermMapJob")}</option>
               {(termMaps.data?.term_maps ?? []).map((termMap) => (
@@ -936,7 +938,7 @@ function Translate() {
             {termMaps.isError && (
               <div className="field-recovery">
                 <span className="form-error" role="alert">
-                  {termMaps.error.message}
+                  {formatError(termMaps.error, t)}
                 </span>
                 <Button
                   type="button"
@@ -1138,12 +1140,12 @@ function Translate() {
       </div>
       {createJob.isError && (
         <p className="form-error" role="alert">
-          {createJob.error.message}
+          {formatError(createJob.error, t)}
         </p>
       )}
       {createBatchJobs.isError && (
         <p className="form-error" role="alert">
-          {createBatchJobs.error.message}
+          {formatError(createBatchJobs.error, t)}
         </p>
       )}
     </>
@@ -1207,7 +1209,7 @@ function DirectoryTermMapPanel({
       {query.isError ? (
         <div className="field-recovery">
           <p className="form-error" role="alert">
-            {query.error.message}
+            {formatError(query.error, t)}
           </p>
           <Button
             type="button"
@@ -1663,7 +1665,7 @@ function SubtitleDiscovery({
         )}
         {query.isError && (
           <QueryErrorMessage
-            message={query.error.message}
+            message={formatError(query.error, t)}
             onRetry={() => void query.refetch()}
           />
         )}
@@ -2004,7 +2006,7 @@ function MediaBrowser({
         )}
         {query.isError && (
           <QueryErrorMessage
-            message={query.error.message}
+            message={formatError(query.error, t)}
             onRetry={() => void query.refetch()}
           />
         )}
@@ -2158,7 +2160,7 @@ function ProviderState() {
   if (status.isError) {
     return (
       <div role="alert" className="provider-state error">
-        <WarningCircleIcon size={18} /> {status.error.message}
+        <WarningCircleIcon size={18} /> {formatError(status.error, t)}
       </div>
     );
   }
@@ -2480,7 +2482,7 @@ function TermMapsPage() {
             )}
             {create.isError && (
               <p className="form-error" role="alert">
-                {create.error.message}
+                {formatError(create.error, t)}
               </p>
             )}
             {create.isPending && (
@@ -2520,7 +2522,7 @@ function TermMapsPage() {
             )}
             {maps.isError && (
               <div className="inline-state error" role="alert">
-                {maps.error.message}
+                {formatError(maps.error, t)}
                 <Button variant="outline" onClick={() => void maps.refetch()}>
                   {t("termMaps.retry")}
                 </Button>
@@ -2638,7 +2640,7 @@ function TermMapsPage() {
                   </Button>
                   {rename.isError && (
                     <p className="form-error" role="alert">
-                      {rename.error.message}
+                      {formatError(rename.error, t)}
                     </p>
                   )}
                 </div>
@@ -2653,7 +2655,7 @@ function TermMapsPage() {
             )}
             {selected.isError && (
               <div className="inline-state error" role="alert">
-                {selected.error.message}
+                {formatError(selected.error, t)}
                 <Button variant="outline" onClick={() => void selected.refetch()}>
                   {t("common.tryAgain")}
                 </Button>
@@ -2709,7 +2711,7 @@ function TermMapsPage() {
                   )}
                   {replace.isError && (
                     <p className="form-error" role="alert">
-                      {replace.error.message}
+                      {formatError(replace.error, t)}
                     </p>
                   )}
                   <Button
@@ -2760,7 +2762,7 @@ function TermMapsPage() {
                     </Button>
                     {remove.isError && (
                       <p className="form-error" role="alert">
-                        {remove.error.message}
+                        {formatError(remove.error, t)}
                       </p>
                     )}
                   </div>
