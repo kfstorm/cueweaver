@@ -330,6 +330,14 @@ function jobListFetch(getJobs: () => JobFixture[]) {
   });
 }
 
+function emptyJobsFetch() {
+  return vi.fn().mockImplementation(async (input: string) => {
+    if (input === "/api/status") return statusResponse();
+    if (input.startsWith("/api/jobs")) return jobListResponse([]);
+    return jsonResponse({ term_maps: [] });
+  });
+}
+
 function cancelJobFetch(jobId: string, cancelError?: string) {
   const queuedJob = {
     ...embeddedJob(jobId, "Failed"),
@@ -879,6 +887,22 @@ describe("product shell", () => {
     expect(
       screen.getByText("已清除 1 个已完成任务。Media 和已发布字幕未被删除。"),
     ).toBeInTheDocument();
+  });
+
+  it("localizes the empty Jobs state and CTA in Simplified Chinese", async () => {
+    window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
+    vi.stubGlobal("navigator", { languages: ["zh-CN"] });
+    const fetchMock = emptyJobsFetch();
+
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(
+      await screen.findByRole("heading", { name: "暂无任务" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("已提交的翻译会在这里显示其当前状态。"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始翻译" })).toBeInTheDocument();
   });
 
   it.each([
@@ -1543,11 +1567,7 @@ describe("product shell", () => {
 
   it("pauses Job polling while hidden and refreshes when visible again", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
-      if (input.startsWith("/api/jobs")) return jobListResponse([]);
-      return jsonResponse({ term_maps: [] });
-    });
+    const fetchMock = emptyJobsFetch();
     try {
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
@@ -1594,6 +1614,20 @@ describe("product shell", () => {
       "This Job is no longer available.",
     );
     expect(screen.getByRole("button", { name: "Back to Jobs" })).toBeInTheDocument();
+  });
+
+  it("distinguishes Job detail loading from Job list loading", async () => {
+    const detailPending = new Promise<Response>(() => {});
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs/job-loading") return detailPending;
+      if (input.startsWith("/api/jobs")) return jobListResponse([]);
+      return jsonResponse({ term_maps: [] });
+    });
+
+    renderWithFetch("/jobs/job-loading", fetchMock);
+
+    expect(await screen.findByText("Loading Job details")).toBeInTheDocument();
   });
 
   it("shows Job list loading and retryable error states", async () => {
@@ -2422,6 +2456,7 @@ describe("product shell", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "People" })).toBeInTheDocument(),
     );
+    expect(screen.getByText("Saved", { exact: true })).toBeInTheDocument();
     expect(directoryCachesAreStale()).toBe(true);
     setFreshDirectoryCaches();
     fireEvent.change(screen.getByLabelText("Replacement JSON content"), {
@@ -3294,6 +3329,17 @@ describe("product shell", () => {
 
   it("offers friendly common languages while submitting their BCP 47 code", async () => {
     renderRoute("/translate");
+
+    expect(
+      screen.getByText(
+        "Select a subtitle source and choose the language you want to translate into.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Choose a common language or enter a BCP 47 code such as zh-Hans, pt-BR, or ja.",
+      ),
+    ).toBeInTheDocument();
 
     await selectExternalSubtitle();
     const commonLanguage = screen.getByLabelText("Common target language");

@@ -334,7 +334,7 @@ export function JobsPage() {
                     type="button"
                     onClick={() => navigate("/translate")}
                   >
-                    Start a translation
+                    {t("jobs.startTranslation")}
                   </Button>
                 )}
                 {hasJobFilters(search, status) && (
@@ -382,7 +382,7 @@ export function JobsPage() {
         <section className="job-detail" aria-label={t("jobs.detailsRegion")}>
           {!jobId && <SelectionPrompt />}
           {jobId && !selected && detail.isPending && (
-            <DetailState>{t("jobs.loading")}</DetailState>
+            <DetailState>{t("jobs.loadingDetails")}</DetailState>
           )}
           {jobId && detail.isError && (
             <DetailState error>

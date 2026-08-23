@@ -2366,7 +2366,7 @@ function TermMapsPage() {
         <p>{t("termMaps.createHelpDetail")}</p>
       </section>
       {successMessage && (
-        <Guidance title={t("common.save")} tone="success" role="status">
+        <Guidance title={t("common.saved")} tone="success" role="status">
           {successMessage}
         </Guidance>
       )}
