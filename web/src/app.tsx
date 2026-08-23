@@ -32,6 +32,7 @@ import {
 } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
+import { PageHeader } from "./components/page-header";
 import { Input, Select, Textarea } from "./components/ui/input";
 import {
   useMediaDirectory,
@@ -60,6 +61,8 @@ import {
 } from "./jobs";
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
 import { COMMON_TARGET_LANGUAGES } from "./languages";
+import { ThemeProvider } from "./theme-provider";
+import { ThemeToggle } from "./theme-toggle";
 import {
   useCreateTermMap,
   useDeleteTermMap,
@@ -134,6 +137,7 @@ function Shell() {
             Job records need attention
           </div>
         )}
+        <ThemeToggle className="sidebar-theme-toggle" />
       </aside>
       <main className="workspace">
         <Outlet />
@@ -141,17 +145,6 @@ function Shell() {
       <Navigation mobile />
       <JobNotificationRegion {...jobNotifications} />
     </div>
-  );
-}
-
-function PageHeader({ title, detail }: { title: string; detail: string }) {
-  return (
-    <header className="page-header">
-      <div>
-        <h1>{title}</h1>
-        <p>{detail}</p>
-      </div>
-    </header>
   );
 }
 
@@ -2428,15 +2421,17 @@ function TermMapsPage() {
 
 export function App() {
   return (
-    <Routes>
-      <Route element={<Shell />}>
-        <Route index element={<Navigate to="/translate" replace />} />
-        <Route path="translate" element={<Translate />} />
-        <Route path="jobs" element={<JobsPage />} />
-        <Route path="jobs/:jobId" element={<JobsPage />} />
-        <Route path="term-maps" element={<TermMapsPage />} />
-        <Route path="*" element={<Navigate to="/translate" replace />} />
-      </Route>
-    </Routes>
+    <ThemeProvider>
+      <Routes>
+        <Route element={<Shell />}>
+          <Route index element={<Navigate to="/translate" replace />} />
+          <Route path="translate" element={<Translate />} />
+          <Route path="jobs" element={<JobsPage />} />
+          <Route path="jobs/:jobId" element={<JobsPage />} />
+          <Route path="term-maps" element={<TermMapsPage />} />
+          <Route path="*" element={<Navigate to="/translate" replace />} />
+        </Route>
+      </Routes>
+    </ThemeProvider>
   );
 }

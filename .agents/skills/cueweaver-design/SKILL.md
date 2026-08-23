@@ -10,14 +10,34 @@ interaction rules below across every product route.
 
 ## Visual Language
 
-- Use a light, cool-neutral canvas with one indigo accent. Color communicates
-  selection, focus, and runtime state rather than decoration.
+- Use a cool-neutral canvas with one indigo accent in both supported themes.
+  Color communicates selection, focus, and runtime state rather than decoration.
 - Prefer dividers, spacing, and typography to card grids. Add elevation only
   for controls that must sit above workflow content.
 - Keep controls compact: 36px desktop control height, 44px minimum touch
   targets on mobile, 6-10px radii, and no decorative gradients or glows.
 - Use sentence case and concise English copy. Call domain concepts Media,
   External subtitle, Embedded subtitle, Job, Term map, and Work directory.
+
+## Theme Principles
+
+- Treat light and dark as first-class visual systems, not as an inverted
+  screenshot. Keep the cool-neutral canvas and indigo emphasis recognizable in
+  both themes while recalibrating surfaces, text, borders, and status colors.
+- Use color by role: canvas, surface, raised surface, primary text, muted text,
+  border, accent, focus, success, warning, and error. A theme change may alter
+  value and contrast, but not the meaning of a role.
+- Prefer the system theme for first-time visitors and remember a deliberate
+  user choice. Theme changes should be immediate, reversible, and quiet; never
+  interrupt a workflow with a confirmation or a decorative transition.
+- Place theme controls according to information architecture, not navigation:
+  use the desktop sidebar footer and the mobile page-header action area. Keep
+  bottom navigation reserved for the three product destinations.
+- Make the control easy to recognize: use a concise visible label such as
+  `Dark mode`, show its current state, and maintain a 44px mobile touch target
+  without giving it the visual weight of a primary workflow action.
+- Recheck contrast and hierarchy in both themes, including primary actions,
+  badges, focus rings, selected states, and success/warning/error states.
 
 ## Density Contract
 
@@ -96,6 +116,8 @@ inspection alone.
 - Check 1280x800 and 390x844 viewports with Agent Browser.
 - Check Translate, Jobs, and Term maps, including at least one populated and
   one empty/loading/error state affected by the change.
+- Check both light and dark themes, including the desktop sidebar switch, the
+  mobile page-header switch, hierarchy, contrast, and system-theme fallback.
 - Inspect computed font size, line height, control height, gap, and margins for
   the changed controls. Same-kind controls must not silently diverge.
 - Confirm there is no horizontal overflow, fixed-navigation overlap, clipped

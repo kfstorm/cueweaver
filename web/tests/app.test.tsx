@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -714,6 +715,73 @@ afterEach(() => {
 });
 
 describe("product shell", () => {
+  it("follows the system theme and lets the user persist a choice", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    );
+    renderRoute("/translate");
+
+    const themeToggle = screen.getAllByRole("switch", {
+      name: "Dark mode",
+    })[0];
+    expect(themeToggle).toHaveAttribute("aria-checked", "true");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+      "content",
+      "#111827",
+    );
+
+    fireEvent.click(themeToggle);
+
+    expect(screen.getAllByRole("switch", { name: "Dark mode" })[0]).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(window.localStorage.getItem("cueweaver.theme")).toBe("light");
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+      "content",
+      "#f7f8fa",
+    );
+  });
+
+  it("tracks system theme changes until the user chooses a theme", () => {
+    let onSystemThemeChange: (() => void) | undefined;
+    const mediaQuery = {
+      matches: false,
+      addEventListener: vi.fn((_event: string, listener: () => void) => {
+        onSystemThemeChange = listener;
+      }),
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mediaQuery));
+    renderRoute("/translate");
+
+    mediaQuery.matches = true;
+    act(() => onSystemThemeChange?.());
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(window.localStorage.getItem("cueweaver.theme")).toBeNull();
+  });
+
+  it("restores a saved theme across routes", () => {
+    window.localStorage.setItem("cueweaver.theme", "dark");
+    renderRoute("/jobs");
+
+    expect(screen.getAllByRole("switch", { name: "Dark mode" })[0]).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  });
+
   it.each([
     ["/translate", "Translate"],
     ["/jobs", "Jobs"],
