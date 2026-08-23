@@ -57,7 +57,7 @@ def test_term_map_store_requires_the_work_root_policy(tmp_path: Path):
 
 
 def test_work_root_lease_blocks_another_process_until_release(tmp_path: Path):
-    lease_path = tmp_path / "work" / ".jobs.lease"
+    lease_path = tmp_path / "work" / ".cueweaver.lease"
     child = subprocess.Popen(
         [
             sys.executable,

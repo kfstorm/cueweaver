@@ -60,12 +60,12 @@ Translation.
 _Avoid_: request, task
 
 **Job persistence**:
-SQLite at `<work-root>/jobs.sqlite3` is the authoritative Job record store.
-Legacy JSON records are imported once during startup and then their snapshots
-are retired. A Work-root lease prevents multiple CueWeaver processes from
-using the same Work root. Queued Jobs are restored in queue order; Jobs
-already in Extracting or Translating are marked Interrupted. Subtitle output
-is published through a same-directory temporary file and atomic rename/link.
-A completed Job is persisted before best-effort Work-directory cleanup; cleanup
-failure leaves the Job Completed and logs an orphaned Work directory for later
-removal.
+SQLite at `<work-root>/cueweaver.sqlite3` is the application database and the
+authoritative Job record store for the current Jobs-only schema. Legacy JSON
+records are imported once during startup and then their snapshots are retired.
+A Work-root lease prevents multiple CueWeaver processes from using the same
+Work root. Queued Jobs are restored in queue order; Jobs already in Extracting
+or Translating are marked Interrupted. Subtitle output is published through a
+same-directory temporary file and atomic rename/link. A completed Job is
+persisted before best-effort Work-directory cleanup; cleanup failure leaves the
+Job Completed and logs an orphaned Work directory for later removal.

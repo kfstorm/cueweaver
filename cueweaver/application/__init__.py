@@ -36,7 +36,8 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         configured_work_root = WorkRoot(work_root or Path.cwd())
-        lease = WorkRootLease(configured_work_root.path / ".jobs.lease")
+        database_path = configured_work_root.path / "cueweaver.sqlite3"
+        lease = WorkRootLease(configured_work_root.path / ".cueweaver.lease")
         lease.acquire()
         storage_lock = DurableFileLock(
             configured_work_root.term_maps_directory / ".lock"
@@ -65,6 +66,7 @@ class CueWeaverApplication:
                     self.term_maps,
                     self.extraction,
                     self.directory_term_maps,
+                    database_path=database_path,
                     lease=lease,
                 )
             else:

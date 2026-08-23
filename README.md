@@ -57,11 +57,12 @@ The `media` directory is the library shown in CueWeaver. Replace it with an exis
 
 The selected media directory must be writable so CueWeaver can save translated subtitles. The Work volume must be writable and persistent so CueWeaver can keep job history and resumable work.
 
-Job history is stored in SQLite at `jobs.sqlite3` in the Work root. Existing
-JSON Job records are imported once automatically when the application starts,
-then their snapshots are retired. The Work root also contains `.jobs.lease`,
-which prevents multiple CueWeaver processes from using the same Work root.
-Do not remove the Work volume while Jobs are active.
+Job history is stored in the application SQLite database at `cueweaver.sqlite3`
+in the Work root. Existing JSON Job records are imported once automatically
+when the application starts, then their snapshots are retired. The Work root
+also contains `.cueweaver.lease`, which prevents multiple CueWeaver processes
+from using the same Work root. Do not remove the Work volume while Jobs are
+active.
 
 After an unclean process stop, the next startup restores `Queued` Jobs in
 queue order and marks Jobs that were in `Extracting` or `Translating` as
@@ -70,7 +71,7 @@ it is atomically published, so readers never observe a partial output. A
 completed Job is persisted before its Work directory is removed; cleanup
 failure leaves the Job `Completed` and logs the leftover directory. The
 operating system releases the lease after a process crash; do not delete
-`.jobs.lease` manually. If SQLite cannot be opened, CueWeaver refuses startup;
+`.cueweaver.lease` manually. If SQLite cannot be opened, CueWeaver refuses startup;
 preserve the entire Work volume before restoring or inspecting a backup.
 
 ## Translation Provider Configuration

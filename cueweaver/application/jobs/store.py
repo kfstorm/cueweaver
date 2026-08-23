@@ -162,9 +162,9 @@ ON CONFLICT(id) DO UPDATE SET
 class SqliteJobRecordStore:
     """Persist Job records in SQLite while importing the legacy JSON layout."""
 
-    def __init__(self, jobs_root: Path, database_path: Path | None = None) -> None:
+    def __init__(self, jobs_root: Path, database_path: Path) -> None:
         self._jobs_root = jobs_root
-        self._database_path = database_path or jobs_root / "jobs.sqlite3"
+        self._database_path = database_path
         self._legacy_store = FileJobRecordStore(jobs_root)
         self._schema_lock = Lock()
         self._initialized = False
@@ -216,6 +216,7 @@ class SqliteJobRecordStore:
     def write(self, job_id: str, record: JobRecord) -> None:
         _require_valid_job_id(job_id)
         self._ensure_migrated()
+        self._ensure_jobs_root()
         self._upsert(record)
 
     def remove(self, job_id: str) -> None:
@@ -238,7 +239,8 @@ class SqliteJobRecordStore:
         try:
             with self._connection() as connection:
                 row = connection.execute(
-                    "SELECT value FROM metadata WHERE key = 'legacy_import_complete'"
+                    "SELECT value FROM app_metadata "
+                    "WHERE key = 'jobs.legacy_json_import_complete'"
                 ).fetchone()
             return row is not None and row[0] == "1"
         except sqlite3.Error as error:
@@ -271,8 +273,8 @@ class SqliteJobRecordStore:
                     )
                 connection.execute(
                     """
-                    INSERT INTO metadata (key, value)
-                    VALUES ('legacy_import_complete', '1')
+                    INSERT INTO app_metadata (key, value)
+                    VALUES ('jobs.legacy_json_import_complete', '1')
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """
                 )
@@ -304,7 +306,7 @@ class SqliteJobRecordStore:
                             created_at TEXT NOT NULL,
                             queue_sequence INTEGER NOT NULL
                         );
-                        CREATE TABLE IF NOT EXISTS metadata (
+                        CREATE TABLE IF NOT EXISTS app_metadata (
                             key TEXT PRIMARY KEY,
                             value TEXT NOT NULL
                         );

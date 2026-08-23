@@ -187,10 +187,10 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     jobs_root = tmp_path / "jobs"
     record = persisted_job_record("sqlite-job")
 
-    store = SqliteJobRecordStore(jobs_root)
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     store.write("sqlite-job", record)
 
-    assert (jobs_root / "jobs.sqlite3").is_file()
+    assert (tmp_path / "cueweaver.sqlite3").is_file()
     loaded = store.load()
     assert len(loaded) == 1
     assert loaded[0]["id"] == "sqlite-job"
@@ -210,11 +210,11 @@ def test_sqlite_record_store_imports_legacy_json_and_retires_the_snapshot(
     record = persisted_job_record("legacy-job")
     (jobs_root / "legacy-job.json").write_text(json.dumps(record), encoding="utf-8")
 
-    loaded = SqliteJobRecordStore(jobs_root).load()
+    loaded = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3").load()
 
     assert loaded[0]["id"] == "legacy-job"
     assert not (jobs_root / "legacy-job.json").exists()
-    assert (jobs_root / "jobs.sqlite3").is_file()
+    assert (tmp_path / "cueweaver.sqlite3").is_file()
 
 
 def test_sqlite_legacy_migration_is_idempotent_when_snapshot_retirement_is_deferred(
@@ -226,12 +226,12 @@ def test_sqlite_legacy_migration_is_idempotent_when_snapshot_retirement_is_defer
     snapshot = jobs_root / "legacy-retry.json"
     snapshot.write_text(json.dumps(record), encoding="utf-8")
 
-    first_store = SqliteJobRecordStore(jobs_root)
+    first_store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     monkeypatch.setattr(first_store, "_retire_legacy_snapshots", lambda: None)
     assert first_store.load()[0]["id"] == "legacy-retry"
     assert snapshot.exists()
 
-    second_store = SqliteJobRecordStore(jobs_root)
+    second_store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     assert second_store.load()[0]["id"] == "legacy-retry"
     assert not snapshot.exists()
 
@@ -245,7 +245,9 @@ def test_sqlite_record_store_delete_removes_unmigrated_legacy_records(
     record_path = jobs_root / "legacy-delete.json"
     record_path.write_text(json.dumps(record), encoding="utf-8")
 
-    SqliteJobRecordStore(jobs_root).remove("legacy-delete")
+    SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3").remove(
+        "legacy-delete"
+    )
 
     assert not record_path.exists()
 
@@ -255,10 +257,10 @@ def test_sqlite_record_store_keeps_the_database_authoritative_after_snapshot_rem
 ):
     jobs_root = tmp_path / "jobs"
     record = persisted_job_record("durable-job")
-    store = SqliteJobRecordStore(jobs_root)
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     store.write("durable-job", record)
 
-    loaded = SqliteJobRecordStore(jobs_root).load()
+    loaded = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3").load()
 
     assert [item["id"] for item in loaded] == ["durable-job"]
 
@@ -267,7 +269,7 @@ def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
     tmp_path: Path,
 ):
     jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(jobs_root)
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     old_record = persisted_job_record("authoritative-job", status="Failed")
     new_record = persisted_job_record("authoritative-job", status="Completed")
     store.write("authoritative-job", old_record)
@@ -277,7 +279,7 @@ def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
     old_timestamp = time.time() - 10
     os.utime(snapshot, (old_timestamp, old_timestamp))
 
-    loaded = SqliteJobRecordStore(jobs_root).load()
+    loaded = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3").load()
 
     assert loaded[0]["status"] == "Completed"
 
@@ -291,7 +293,7 @@ def test_sqlite_corruption_preserves_legacy_snapshot_for_recovery(tmp_path: Path
     snapshot = jobs_root / "recoverable-job.json"
     snapshot_bytes = json.dumps(persisted_job_record("recoverable-job")).encode()
     snapshot.write_bytes(snapshot_bytes)
-    (work_root / "jobs.sqlite3").write_bytes(b"not a sqlite database")
+    (work_root / "cueweaver.sqlite3").write_bytes(b"not a sqlite database")
 
     with pytest.raises(ServiceError) as raised:
         Jobs(FakeTranslator(), media_root, work_root)
@@ -302,9 +304,9 @@ def test_sqlite_corruption_preserves_legacy_snapshot_for_recovery(tmp_path: Path
 
 def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
     jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(jobs_root)
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     store.write("corrupt-record", persisted_job_record("corrupt-record"))
-    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute(
             "UPDATE jobs SET record_json = ? WHERE id = ?",
             ("{}", "corrupt-record"),
@@ -319,10 +321,10 @@ def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
 
 def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
     jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(jobs_root)
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     store.write("row-id", persisted_job_record("row-id"))
     mismatched = persisted_job_record("record-id")
-    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute(
             "UPDATE jobs SET record_json = ? WHERE id = ?",
             (json.dumps(mismatched), "row-id"),
@@ -347,9 +349,9 @@ def test_sqlite_operation_errors_keep_their_operation_context(
     tmp_path: Path, operation: str, message: str
 ):
     jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(jobs_root)
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
     store.write("operation-error", persisted_job_record("operation-error"))
-    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute("DROP TABLE jobs")
 
     with pytest.raises(ServiceError, match=message):
@@ -1336,7 +1338,7 @@ def persisted_failed_embedded_job(tmp_path: Path, translator: FakeTranslator):
         create_failed_embedded_job(tmp_path, translator)
     )
     jobs.close()
-    record_path = work_root / "jobs.sqlite3"
+    record_path = work_root / "cueweaver.sqlite3"
     record = sqlite_job_record(work_root, str(queued["id"]))
     return _media_root, work_root, media, media_adapter, queued, record_path, record
 
@@ -1370,7 +1372,7 @@ def persisted_external_job(
     with make_client(media_root, work_root, FakeTranslator()) as client:
         queued = create_job(client).json()
         wait_for_status(client, queued["id"], "Completed")
-    record_path = work_root / "jobs.sqlite3"
+    record_path = work_root / "cueweaver.sqlite3"
     record = sqlite_job_record(work_root, str(queued["id"]))
     return (
         media_root,
@@ -1383,7 +1385,7 @@ def persisted_external_job(
 
 def sqlite_job_record(work_root: Path, job_id: str) -> dict[str, object]:
     records = SqliteJobRecordStore(
-        work_root / "jobs", database_path=work_root / "jobs.sqlite3"
+        work_root / "jobs", database_path=work_root / "cueweaver.sqlite3"
     ).load()
     record = next((item for item in records if item.get("id") == job_id), None)
     assert record is not None
@@ -1394,7 +1396,7 @@ def persist_job_record(work_root: Path, record: dict[str, object]) -> None:
     job_id = record.get("id")
     assert isinstance(job_id, str)
     SqliteJobRecordStore(
-        work_root / "jobs", database_path=work_root / "jobs.sqlite3"
+        work_root / "jobs", database_path=work_root / "cueweaver.sqlite3"
     ).write(job_id, record)
 
 
@@ -1467,7 +1469,7 @@ def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
     assert store.calls[0] == "load"
     assert "write" in store.calls
     assert store.calls[-1] == "remove"
-    assert not (work_root / "jobs.sqlite3").exists()
+    assert not (work_root / "cueweaver.sqlite3").exists()
     jobs.close()
 
 
@@ -2384,6 +2386,7 @@ def test_retry_redacts_paths_from_a_malformed_persisted_record(tmp_path: Path):
     record["request"]["media_path"] = str(tmp_path / "private" / "Movie.mkv")
     persist_job_record(work_root, record)
     jobs.close()
+    jobs._worker.join(timeout=5)
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
     with pytest.raises(ServiceError) as raised:
@@ -3313,7 +3316,7 @@ def test_delete_cleanup_failure_keeps_record_and_preserves_published_output(
     assert raised.value.error_code == "job_work_cleanup_failed"
     assert raised.value.context == {"path": f"jobs/{queued['id']}"}
     assert jobs.get(str(queued["id"]))["status"] == "Completed"
-    assert (work_root / "jobs.sqlite3").exists()
+    assert (work_root / "cueweaver.sqlite3").exists()
     assert work_directory.exists()
     assert output.read_bytes() == output_before
     assert media.exists()

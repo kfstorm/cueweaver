@@ -17,8 +17,8 @@ printf '%s\n' \
   '00:00:00,000 --> 00:00:01,000' \
   'Example subtitle' \
   >"$ROOTS/media/Example.en.srt"
-printf '%s' 'not a sqlite database' >"$ROOTS/corrupt-work/jobs.sqlite3"
-cp "$ROOTS/corrupt-work/jobs.sqlite3" "$ROOTS/corrupt-work/expected.sqlite3"
+printf '%s' 'not a sqlite database' >"$ROOTS/corrupt-work/cueweaver.sqlite3"
+cp "$ROOTS/corrupt-work/cueweaver.sqlite3" "$ROOTS/corrupt-work/expected.sqlite3"
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
@@ -65,7 +65,7 @@ for _attempt in {1..30}; do
       printf '%s\n' 'Corrupt SQLite database unexpectedly allowed startup' >&2
       exit 1
     fi
-    cmp --silent "$ROOTS/corrupt-work/jobs.sqlite3" \
+    cmp --silent "$ROOTS/corrupt-work/cueweaver.sqlite3" \
       "$ROOTS/corrupt-work/expected.sqlite3"
     docker kill --signal KILL "$CONTAINER" >/dev/null
     docker start "$CONTAINER" >/dev/null

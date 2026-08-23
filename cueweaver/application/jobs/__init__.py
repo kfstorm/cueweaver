@@ -104,6 +104,7 @@ class Jobs:
         directory_term_maps: DirectoryTermMaps | None = None,
         *,
         record_store: JobRecordStore | None = None,
+        database_path: Path | None = None,
         lease: WorkRootLease | None = None,
     ) -> None:
         self._translator = translator
@@ -112,13 +113,14 @@ class Jobs:
         self._extraction = extraction
         self._media_root = media_root.resolve()
         self._work = WorkRoot(work_root)
-        self._lease = lease or WorkRootLease(self._work.path / ".jobs.lease")
+        self._lease = lease or WorkRootLease(self._work.path / ".cueweaver.lease")
         self._jobs_root = self._work.jobs_directory
         self._record_store = (
             record_store
             if record_store is not None
             else SqliteJobRecordStore(
-                self._jobs_root, database_path=self._work.path / "jobs.sqlite3"
+                self._jobs_root,
+                database_path=database_path or self._work.path / "cueweaver.sqlite3",
             )
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
