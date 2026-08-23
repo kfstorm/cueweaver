@@ -199,6 +199,28 @@ def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Pat
     assert translator.secret not in serialized
 
 
+@pytest.mark.parametrize("root_name", ["media", "work"])
+def test_product_status_rechecks_root_health_after_startup(
+    tmp_path: Path, root_name: str
+):
+    media_root, work_root = configured_roots(tmp_path)
+    client = TestClient(
+        create_product_app(
+            media_root,
+            work_root,
+            TranslatorFixture(),
+            static_root=static_fixture(tmp_path),
+        )
+    )
+
+    (media_root if root_name == "media" else work_root).rmdir()
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    assert response.json()["roots"] == {"ready": False}
+
+
 def test_product_status_reports_quarantined_job_record_counts(tmp_path: Path):
     media_root, work_root = configured_roots(tmp_path)
     jobs_root = work_root / "jobs"

@@ -270,10 +270,11 @@ function statusResponse(
     corrupt: { count: number; location: string };
     unsupported: { count: number; location: string };
   },
+  runtime: { apiReady?: boolean; rootsReady?: boolean } = {},
 ) {
   return jsonResponse({
-    api: { ready: true },
-    roots: { ready: true },
+    api: { ready: runtime.apiReady ?? true },
+    roots: { ready: runtime.rootsReady ?? true },
     translation_provider: providerReady
       ? { ready: true }
       : {
@@ -642,6 +643,11 @@ function renderRoute(
     MediaDiscovery | Error | Promise<MediaDiscovery | Error>
   > = [],
   termMaps: TermMapSummary[] = [],
+  runtime: {
+    apiReady?: boolean;
+    rootsReady?: boolean;
+    statusFailure?: boolean;
+  } = {},
 ) {
   let discoveryCall = 0;
   const fetchMock = vi
@@ -675,7 +681,10 @@ function renderRoute(
       if (String(input) === "/api/term-maps") {
         return Promise.resolve(jsonResponse({ term_maps: [...termMaps] }));
       }
-      return Promise.resolve(statusResponse(providerReady));
+      if (runtime.statusFailure) {
+        return Promise.reject(new Error("status unavailable"));
+      }
+      return Promise.resolve(statusResponse(providerReady, undefined, runtime));
     });
   return renderWithFetch(path, fetchMock);
 }
@@ -806,6 +815,34 @@ describe("product shell", () => {
       ),
     );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("blocks translation when the Media or Work root is unavailable", async () => {
+    renderRoute("/translate", true, undefined, undefined, false, [], [], {
+      rootsReady: false,
+    });
+
+    await selectExternalSubtitle();
+    await enterCustomTargetLanguage("zh-Hans");
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    expect(
+      screen.getByText("Check the Media and Work directory configuration."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the status failure recovery action aligned with the next step", async () => {
+    renderRoute("/translate", true, undefined, undefined, false, [], [], {
+      statusFailure: true,
+    });
+
+    expect(await screen.findByText("CueWeaver is not reachable")).toBeInTheDocument();
+    expect(
+      screen.getByText("CueWeaver status could not be checked. Try again."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("does not offer submission before the workflow exists", async () => {
@@ -1545,6 +1582,72 @@ describe("product shell", () => {
     );
   });
 
+  it("reconciles a Job that appears in both active and history responses", async () => {
+    const active = translatingEmbeddedJob("reconciled-job");
+    const terminal = { ...completedJob(active), status: "Completed" };
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs?limit=1") return jobListResponse([active]);
+      if (input === "/api/jobs") return jobListResponse([terminal]);
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(
+      await screen.findByRole("heading", { name: "Completed and past Jobs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Active Jobs" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
+  });
+
+  it("prefers a retried active Job over cached terminal history", async () => {
+    const failed = embeddedJob("retry-race-job", "Failed");
+    const queued = {
+      ...failed,
+      attempt: failed.attempt + 1,
+      status: "Queued" as const,
+      started_at: null,
+      finished_at: null,
+      queue_position: 1,
+      error: null,
+    };
+    let activeJob: JobFixture | null = null;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs?limit=1")
+        return jobListResponse(activeJob ? [activeJob] : []);
+      if (input === "/api/jobs") return jobListResponse([failed], "cursor-1");
+      if (input === "/api/jobs?limit=50&cursor=cursor-1") {
+        return jobListResponse([failed]);
+      }
+      return jsonResponse({ term_maps: [] });
+    });
+    const { queryClient } = renderWithFetch("/jobs", fetchMock);
+
+    expect(
+      await screen.findByRole("heading", { name: "Completed and past Jobs" }),
+    ).toBeInTheDocument();
+    activeJob = queued;
+    await queryClient.invalidateQueries({ queryKey: ["jobs", "active"] });
+
+    expect(
+      await screen.findByRole("heading", { name: "Active Jobs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Completed and past Jobs" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more history" }));
+    await waitFor(() => expect(screen.getByText("Queued")).toBeInTheDocument());
+    expect(
+      screen.queryByRole("heading", { name: "Completed and past Jobs" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders queued and running Job states with queue context", async () => {
     const statuses = ["Queued", "Extracting", "Translating"] as const;
     for (const status of statuses) {
@@ -1714,6 +1817,9 @@ describe("product shell", () => {
     renderWithFetch("/jobs", retry.fetchMock);
 
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    expect(screen.getByText("Action available").parentElement).toHaveTextContent(
+      "Retry reuses this Job's saved request, including its Term map. To change the Term map or other translation settings, start a new translation.",
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
 
     await waitFor(() =>
@@ -1931,6 +2037,10 @@ describe("product shell", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Some Completed Jobs could not be cleared",
     );
+    expect(screen.getByText("History partially cleared")).toBeInTheDocument();
+    expect(
+      screen.queryByText("History cleared", { exact: true }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Job clear-jo: Job Work data could not be cleaned up",
     );
@@ -1951,6 +2061,54 @@ describe("product shell", () => {
         screen.queryByText("Some Completed Jobs could not be cleared."),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  it("does not announce success when every completed Job fails to clear", async () => {
+    const first = {
+      ...embeddedJob("clear-all-failed-a", "Failed"),
+      status: "Completed",
+    };
+    const second = {
+      ...embeddedJob("clear-all-failed-b", "Failed"),
+      status: "Completed",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/jobs/completed" && init?.method === "DELETE") {
+          return jsonResponse({
+            deleted: [],
+            failed: [
+              {
+                id: first.id,
+                error_code: "job_work_cleanup_failed",
+                message: "Job Work data could not be cleaned up",
+              },
+              {
+                id: second.id,
+                error_code: "job_work_cleanup_failed",
+                message: "Job Work data could not be cleaned up",
+              },
+            ],
+          });
+        }
+        if (input.startsWith("/api/jobs")) return jobListResponse([first, second]);
+        return jsonResponse({ term_maps: [] });
+      });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Clear completed history (2)" }),
+    );
+
+    expect(await screen.findByText("History could not be cleared")).toBeInTheDocument();
+    expect(
+      screen.queryByText("History cleared", { exact: true }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("No Completed Jobs could be cleared.")).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("keeps global cleanup disabled when filtered rows have no Completed Jobs", async () => {
@@ -3749,7 +3907,22 @@ describe("product shell", () => {
     );
   });
 
-  it("allows Skip submission when the Translation provider is unavailable", async () => {
+  it("blocks all translation submission when the provider is unavailable", async () => {
+    renderRoute("/translate", false);
+
+    await selectExternalSubtitle();
+    await enterCustomTargetLanguage("zh-Hans");
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Translation is unavailable until the provider is configured and CueWeaver is restarted.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("preserves skip submission when the provider is unavailable", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
@@ -3757,14 +3930,7 @@ describe("product shell", () => {
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
-    await waitFor(() =>
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/jobs",
-        expect.objectContaining({
-          body: expect.stringContaining('"output_conflict_policy":"skip"'),
-        }),
-      ),
-    );
+    await expectQueuedJob({ media_path: "Movie.mkv", subtitle_path: "Movie.en.srt" });
   });
 
   it("keeps the real filename in the accessible Media name", async () => {

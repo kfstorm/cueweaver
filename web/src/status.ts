@@ -25,5 +25,10 @@ async function fetchStatus(): Promise<ProductStatus> {
 }
 
 export function useProductStatus() {
-  return useQuery({ queryKey: ["product-status"], queryFn: fetchStatus });
+  return useQuery({
+    queryKey: ["product-status"],
+    queryFn: fetchStatus,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: false,
+  });
 }

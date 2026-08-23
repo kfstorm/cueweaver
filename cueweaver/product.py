@@ -88,7 +88,7 @@ def _create_api_app(
             )
         return {
             "api": {"ready": True},
-            "roots": {"ready": True},
+            "roots": {"ready": _roots_ready(media_root, work_root)},
             "translation_provider": provider,
             "worker": {"ready": True, "mode": "single"},
             "job_records": application.jobs.record_health(),
@@ -163,6 +163,23 @@ def _validate_media_root(media_root: Path) -> None:
             pass
     except OSError as error:
         raise ValueError("Media root must be a readable directory") from error
+
+
+def _roots_ready(media_root: Path, work_root: Path) -> bool:
+    return _directory_ready(media_root, os.R_OK) and _directory_ready(
+        work_root, os.R_OK | os.W_OK
+    )
+
+
+def _directory_ready(path: Path, access: int) -> bool:
+    try:
+        if not path.is_dir() or not os.access(path, access | os.X_OK):
+            return False
+        with os.scandir(path):
+            pass
+    except OSError:
+        return False
+    return True
 
 
 def _validate_static_root(static_root: Path) -> Path:
