@@ -108,6 +108,7 @@ const ENGLISH = {
   "translate.chooseSubtitle": "Choose a subtitle",
   "translate.sourceDiscovered": "Sources discovered for {name}.",
   "translate.chooseAnotherMedia": "Choose another Media",
+  "translate.selectAnotherMedia": "Select another Media",
   "translate.loadingSubtitles": "Loading subtitles",
   "translate.multipleSubtitles":
     "Multiple subtitles found. Select one candidate to continue.",
@@ -778,6 +779,7 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "translate.chooseSubtitle": "选择字幕",
       "translate.sourceDiscovered": "已发现 {name} 的来源。",
       "translate.chooseAnotherMedia": "选择其他 Media",
+      "translate.selectAnotherMedia": "选择其他 Media",
       "translate.loadingSubtitles": "正在加载字幕",
       "translate.multipleSubtitles": "发现多个字幕。请选择一个候选项继续。",
       "translate.resolveCandidates": "处理候选项",

@@ -649,7 +649,7 @@ function Translate() {
                       className="mobile-browser-restore"
                       onClick={() => setMediaBrowserExpanded(true)}
                     >
-                      {t("translate.chooseMedia")}
+                      {t("translate.selectAnotherMedia")}
                     </Button>
                   )}
                   <label htmlFor="batch-subtitle-filter">
