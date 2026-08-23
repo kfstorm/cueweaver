@@ -2090,6 +2090,7 @@ summary:focus-visible {
     display: inline-flex;
     min-height: 44px;
     padding: 0 9px;
+    font-size: var(--font-control);
   }
 
   .page-header h1 {

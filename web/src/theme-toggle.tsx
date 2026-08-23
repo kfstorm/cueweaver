@@ -11,7 +11,6 @@ export function ThemeToggle({ className }: { className?: string }) {
       type="button"
       role="switch"
       aria-checked={dark}
-      aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
       className={className ? `theme-toggle ${className}` : "theme-toggle"}
       onClick={toggleTheme}
     >

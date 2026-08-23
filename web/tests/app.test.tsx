@@ -727,7 +727,7 @@ describe("product shell", () => {
     renderRoute("/translate");
 
     const themeToggle = screen.getAllByRole("switch", {
-      name: "Switch to light theme",
+      name: "Dark mode",
     })[0];
     expect(themeToggle).toHaveAttribute("aria-checked", "true");
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
@@ -739,9 +739,10 @@ describe("product shell", () => {
 
     fireEvent.click(themeToggle);
 
-    expect(
-      screen.getAllByRole("switch", { name: "Switch to dark theme" })[0],
-    ).toHaveAttribute("aria-checked", "false");
+    expect(screen.getAllByRole("switch", { name: "Dark mode" })[0]).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     expect(window.localStorage.getItem("cueweaver.theme")).toBe("light");
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(document.documentElement.style.colorScheme).toBe("light");
@@ -774,9 +775,10 @@ describe("product shell", () => {
     window.localStorage.setItem("cueweaver.theme", "dark");
     renderRoute("/jobs");
 
-    expect(
-      screen.getAllByRole("switch", { name: "Switch to light theme" })[0],
-    ).toHaveAttribute("aria-checked", "true");
+    expect(screen.getAllByRole("switch", { name: "Dark mode" })[0]).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
   });
 
