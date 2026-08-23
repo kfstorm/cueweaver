@@ -309,7 +309,7 @@ async function openVisibleJobDetail(fetchImplementation: typeof fetch) {
   });
   renderWithFetch("/jobs", fetchImplementation);
   fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
-  await screen.findByRole("heading", { name: "Job summary" });
+  await screen.findByRole("heading", { name: "Request summary" });
 }
 
 function jobsFetch(job: JobFixture) {
@@ -827,6 +827,60 @@ describe("product shell", () => {
     expect(document.documentElement.lang).toBe("en");
   });
 
+  it("localizes the runtime recovery guidance in Simplified Chinese", async () => {
+    window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
+    vi.stubGlobal("navigator", { languages: ["zh-CN"] });
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") throw new Error("offline");
+      if (input === "/api/media/browse") return emptyMediaResponse();
+      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+      return jobListResponse([]);
+    });
+
+    renderWithFetch("/translate", fetchMock);
+
+    expect(
+      await screen.findByText("无法连接 CueWeaver", { exact: true }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(
+      screen.getByText("应用无法确认翻译是否可用。开始任务前请重试。"),
+    ).toBeInTheDocument();
+  });
+
+  it("localizes successful completed Job cleanup in Simplified Chinese", async () => {
+    window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
+    vi.stubGlobal("navigator", { languages: ["zh-CN"] });
+    const job = {
+      ...embeddedJob("clear-zh-success", "Failed"),
+      status: "Completed",
+      error: null,
+    };
+    let cleared = false;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/jobs/completed" && init?.method === "DELETE") {
+          cleared = true;
+          return jsonResponse({ deleted: [job.id], failed: [] });
+        }
+        if (input.startsWith("/api/jobs")) {
+          return jobListResponse(cleared ? [] : [job]);
+        }
+        return jsonResponse({ term_maps: [] });
+      });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWithFetch("/jobs", fetchMock);
+    fireEvent.click(await screen.findByRole("button", { name: "清除已完成历史 (1)" }));
+
+    expect(await screen.findByText("历史记录已清除")).toBeInTheDocument();
+    expect(
+      screen.getByText("已清除 1 个已完成任务。Media 和已发布字幕未被删除。"),
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ["/translate", "Translate"],
     ["/jobs", "Jobs"],
@@ -1120,7 +1174,7 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
 
     expect(
-      await screen.findByRole("heading", { name: "Job summary" }),
+      await screen.findByRole("heading", { name: "Request summary" }),
     ).toBeInTheDocument();
     const detailRegion = screen.getByRole("region", { name: "Job details" });
     expect(screen.getByRole("heading", { name: "Movie.mkv" })).toHaveFocus();
@@ -3431,7 +3485,7 @@ describe("product shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "View Job" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Job summary" }),
+      await screen.findByRole("heading", { name: "Request summary" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Movie.mkv" })).toBeInTheDocument();
   });

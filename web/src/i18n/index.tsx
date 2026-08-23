@@ -54,6 +54,7 @@ const ENGLISH = {
   "translate.title": "Translate",
   "translate.detail":
     "Choose a Media item and subtitle, then create a background translation Job.",
+  "translate.quickStartTitle": "How it works",
   "translate.quickStartStepOne": "Choose a Media item and one subtitle source.",
   "translate.quickStartStepTwo":
     "Choose the language you want the subtitle translated into.",
@@ -70,11 +71,12 @@ const ENGLISH = {
     "Let the translator identify useful terms while it works.",
   "translate.subtitleTerminologyHelp":
     "Focus terminology handling on text found in the chosen subtitle.",
-  "translate.appliedEveryDetail":
-    "The suffix becomes part of each output filename.",
+  "translate.appliedEveryDetail": "The suffix becomes part of each output filename.",
   "translate.suffixTargetHelp": "The suffix does not change the target language.",
   "translate.termMapHelp":
     "A Term map is a reusable set of source and target terms that should stay consistent. You can follow the Directory default, choose one, or continue without one.",
+  "translate.directoryDefaultScopeHelp":
+    "This Term map is offered automatically for Media in this directory and its child directories. A translation can still choose another Term map or use none.",
   "translate.noTermMapsHelp":
     "No saved Term maps. You can continue without one or create a Term map first.",
   "translate.multipleSubtitlesHelp":
@@ -250,6 +252,10 @@ const ENGLISH = {
   "termMaps.createHelpDetail":
     "The left side is source subtitle text. The right side is the preferred translation.",
   "termMaps.createFirst": "Create your first Term map",
+  "termMaps.savedSuccess": "Term map saved. It is now available on Translate.",
+  "termMaps.nameSaved": "Term map name saved.",
+  "termMaps.deletedSuccess":
+    "Term map deleted. Directory defaults using it were cleared.",
   "jobs.title": "Jobs",
   "jobs.detail": "Review durable translation history, diagnostics, and retryable work.",
   "jobs.history": "Job history",
@@ -272,7 +278,7 @@ const ENGLISH = {
   "jobs.noJobs": "No Jobs yet",
   "jobs.noJobsDetail": "Queued translations will appear here.",
   "jobs.loading": "Loading Jobs...",
-  "jobs.requestSummary": "Job summary",
+  "jobs.requestSummary": "Request summary",
   "jobs.created": "Created",
   "jobs.started": "Started",
   "jobs.finished": "Finished",
@@ -297,7 +303,8 @@ const ENGLISH = {
   "jobs.actionAvailable": "Action available",
   "jobs.retryGuidance":
     "Review the error below and fix the provider, Media, or subtitle source problem, then choose Retry Job. Retry reuses this Job's saved request, including its Term map. To change the Term map or other translation settings, start a new translation.",
-  "jobs.requestSummaryDetail": "These are the settings saved when this Job was created.",
+  "jobs.requestSummaryDetail":
+    "These are the settings saved when this Job was created.",
   "jobs.savedOutput": "Saved output",
   "jobs.plannedOutput": "Planned output",
   "jobs.diagnosticsDetail": "Technical details are provided for troubleshooting.",
@@ -329,12 +336,17 @@ const ENGLISH = {
   "jobs.status.Failed": "Failed",
   "jobs.status.Interrupted": "Interrupted",
   "jobs.status.Cancelled": "Cancelled",
-  "jobs.statusExplanation.Queued": "Waiting for the worker. Only one Job runs at a time.",
-  "jobs.statusExplanation.Extracting": "Preparing an Embedded subtitle for translation.",
-  "jobs.statusExplanation.Translating": "The translation provider is translating the subtitle.",
+  "jobs.statusExplanation.Queued":
+    "Waiting for the worker. Only one Job runs at a time.",
+  "jobs.statusExplanation.Extracting":
+    "Preparing an Embedded subtitle for translation.",
+  "jobs.statusExplanation.Translating":
+    "The translation provider is translating the subtitle.",
   "jobs.statusExplanation.Completed": "The translated subtitle was saved successfully.",
-  "jobs.statusExplanation.Failed": "Translation stopped because of an error. Fix the cause, then retry.",
-  "jobs.statusExplanation.Interrupted": "CueWeaver stopped before the Job finished. It can be retried.",
+  "jobs.statusExplanation.Failed":
+    "Translation stopped because of an error. Fix the cause, then retry.",
+  "jobs.statusExplanation.Interrupted":
+    "CueWeaver stopped before the Job finished. It can be retried.",
   "jobs.statusExplanation.Cancelled": "The Job was cancelled before translation.",
   "jobs.statusOption.Queued": "Queued status",
   "jobs.statusOption.Extracting": "Extracting status",
@@ -594,6 +606,7 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "common.remove": "移除",
       "translate.title": "翻译",
       "translate.detail": "选择 Media 和字幕，然后创建后台翻译任务。",
+      "translate.quickStartTitle": "工作流程",
       "translate.quickStartStepOne": "选择一个 Media 和一个字幕来源。",
       "translate.quickStartStepTwo": "选择字幕要翻译成的语言。",
       "translate.quickStartStepThree": "启动任务并在任务页面跟踪进度。",
@@ -608,7 +621,10 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "translate.suffixTargetHelp": "后缀不会改变目标语言。",
       "translate.termMapHelp":
         "术语表是一组可复用的源词和目标词，用于保持翻译一致。你可以跟随目录默认值、选择一个术语表，或不使用术语表。",
-      "translate.noTermMapsHelp": "暂无已保存的术语表。你可以继续而不使用术语表，或先创建一个术语表。",
+      "translate.directoryDefaultScopeHelp":
+        "此术语表会自动提供给此目录及其子目录中的 Media。翻译仍然可以选择其他术语表或不使用术语表。",
+      "translate.noTermMapsHelp":
+        "暂无已保存的术语表。你可以继续而不使用术语表，或先创建一个术语表。",
       "translate.multipleSubtitlesHelp": "发现多个字幕。请选择要翻译的来源。",
       "translate.noSubtitlesHelp":
         "没有找到可用字幕。请在 Media 旁添加 External subtitle，例如 Movie.en.srt，或选择包含 Embedded text subtitle 的 Media。",
@@ -622,10 +638,12 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "translate.nextConfigureRoots": "请检查 Media 和 Work 目录配置。",
       "translate.nextChooseMedia": "下一步：选择一个 Media。",
       "translate.nextChooseMediaBatch": "下一步：选择一个或多个 Media。",
-      "translate.nextChooseSubtitleForMedia": "下一步：为已选的 {count} 个 Media 选择字幕。",
+      "translate.nextChooseSubtitleForMedia":
+        "下一步：为已选的 {count} 个 Media 选择字幕。",
       "translate.nextChooseSubtitle": "下一步：选择一个字幕来源。",
       "translate.nextChooseLanguage": "下一步：选择目标语言。",
-      "translate.nextProviderUnavailable": "配置服务商并重启 CueWeaver 后才能使用翻译。",
+      "translate.nextProviderUnavailable":
+        "配置服务商并重启 CueWeaver 后才能使用翻译。",
       "translate.nextReady": "已就绪。启动后将创建 {count} 个后台{unit}。",
       "translate.chooseMedia": "选择媒体",
       "translate.chooseMediaDetail": "选择一个 Media 并发现其中的字幕。",
@@ -692,8 +710,10 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "jobs.clearSuccessTitle": "历史记录已清除",
       "jobs.clearPartialTitle": "历史记录已部分清除",
       "jobs.clearFailedTitle": "无法清除历史记录",
-      "jobs.clearSuccess": "已清除 {count} 个已完成{unit}。Media 和已发布字幕未被删除。",
-      "jobs.clearPartial": "已清除 {count} 个已完成{unit}。有 {failed} 个已完成{failedUnit}无法清除。详情如下。",
+      "jobs.clearSuccess":
+        "已清除 {count} 个已完成{unit}。Media 和已发布字幕未被删除。",
+      "jobs.clearPartial":
+        "已清除 {count} 个已完成{unit}。有 {failed} 个已完成{failedUnit}无法清除。详情如下。",
       "jobs.clearFailed": "没有已完成任务被清除。详情如下。",
       "jobs.actionAvailable": "可执行操作",
       "jobs.retryGuidance":
@@ -731,7 +751,8 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "jobs.statusExplanation.Translating": "翻译服务商正在翻译字幕。",
       "jobs.statusExplanation.Completed": "译文字幕已成功保存。",
       "jobs.statusExplanation.Failed": "翻译因错误停止。修复原因后重试。",
-      "jobs.statusExplanation.Interrupted": "CueWeaver 在任务完成前停止了运行。可以重试。",
+      "jobs.statusExplanation.Interrupted":
+        "CueWeaver 在任务完成前停止了运行。可以重试。",
       "jobs.statusExplanation.Cancelled": "任务在翻译前已取消。",
       "jobs.termMap.follow": "跟随目录默认值",
       "jobs.termMap.none": "明确禁用",
@@ -753,6 +774,9 @@ const TRANSLATIONS: Record<string, TranslationTable> = {
       "termMaps.createStepThree": "在下方粘贴 JSON 或导入 .json 文件。",
       "termMaps.createHelpDetail": "左侧是源字幕文本，右侧是偏好的译文。",
       "termMaps.createFirst": "创建第一个术语表",
+      "termMaps.savedSuccess": "术语表已保存，现在可以在翻译页面使用。",
+      "termMaps.nameSaved": "术语表名称已保存。",
+      "termMaps.deletedSuccess": "术语表已删除，使用它的目录默认值已清除。",
       "termMaps.deleteConfirmation":
         "删除此术语表？已经引用它的任务仍会保留已记录的请求。",
       "termMapValidation.enterObject":

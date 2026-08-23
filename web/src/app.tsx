@@ -559,11 +559,9 @@ function Translate() {
 
   return (
     <>
-      <PageHeader
-        title={t("translate.title")}
-        detail={t("translate.detail")}
-      />
+      <PageHeader title={t("translate.title")} detail={t("translate.detail")} />
       <QuickStart
+        title={t("translate.quickStartTitle")}
         steps={[
           t("translate.quickStartStepOne"),
           t("translate.quickStartStepTwo"),
@@ -922,7 +920,8 @@ function Translate() {
             <span className="field-help">{t("translate.termMapHelp")}</span>
             {termMaps.data?.term_maps.length === 0 && (
               <span className="field-help">
-                {t("translate.noTermMapsHelp")} <Link to="/term-maps">{t("termMaps.createFirst")}</Link>.
+                {t("translate.noTermMapsHelp")}{" "}
+                <Link to="/term-maps">{t("termMaps.createFirst")}</Link>.
               </span>
             )}
             {termMaps.isPending && (
@@ -962,7 +961,9 @@ function Translate() {
                 />
                 {t("translate.dynamicTerminology")}
               </label>
-              <span className="field-help">{t("translate.dynamicTerminologyHelp")}</span>
+              <span className="field-help">
+                {t("translate.dynamicTerminologyHelp")}
+              </span>
               <label className="checkbox-field">
                 <input
                   type="checkbox"
@@ -973,7 +974,9 @@ function Translate() {
                 />
                 {t("translate.subtitleTerminology")}
               </label>
-              <span className="field-help">{t("translate.subtitleTerminologyHelp")}</span>
+              <span className="field-help">
+                {t("translate.subtitleTerminologyHelp")}
+              </span>
             </div>
           </details>
           {batchMode
@@ -1197,7 +1200,7 @@ function DirectoryTermMapPanel({
           <p id="directory-default-help" className="field-help">
             {t("translate.directoryDefaultHelp")}
           </p>
-          <p className="field-help">{t("translate.directoryDefaultHelp")}</p>
+          <p className="field-help">{t("translate.directoryDefaultScopeHelp")}</p>
         </div>
         {query.isPending && <span role="status">{t("common.loading")}</span>}
       </div>
@@ -1682,12 +1685,14 @@ function SubtitleDiscovery({
           candidates.length === 0 &&
           (candidateFilter || query.data.unsupported_candidates.length === 0) && (
             <EmptyMessage>
-              {candidateFilter
-                ? t("translate.noCandidateMatch")
-                : <>
-                    <span>{t("translate.noSubtitles")}</span>
-                    <span className="field-help">{t("translate.noSubtitlesHelp")}</span>
-                  </>}
+              {candidateFilter ? (
+                t("translate.noCandidateMatch")
+              ) : (
+                <>
+                  <span>{t("translate.noSubtitles")}</span>
+                  <span className="field-help">{t("translate.noSubtitlesHelp")}</span>
+                </>
+              )}
             </EmptyMessage>
           )}
         {!query.isFetching &&
@@ -2290,7 +2295,7 @@ function TermMapsPage() {
       { name, content },
       {
         onSuccess: () => {
-          setSuccessMessage("Term map saved. It is now available on Translate.");
+          setSuccessMessage(t("termMaps.savedSuccess"));
           fileReadGeneration.current += 1;
           setFileLoading(false);
           setName("");
@@ -2318,7 +2323,7 @@ function TermMapsPage() {
       { id: selectedId, name: renameName },
       {
         onSuccess: (summary) => {
-          setSuccessMessage("Term map name saved.");
+          setSuccessMessage(t("termMaps.nameSaved"));
           if (selectedIdRef.current === selectedId) setRenameName(summary.name);
           if (selectedIdRef.current === selectedId) setLoadedName(summary.name);
         },
@@ -2332,9 +2337,7 @@ function TermMapsPage() {
       { id: selectedId, name: confirmation },
       {
         onSuccess: () => {
-          setSuccessMessage(
-            "Term map deleted. Directory defaults using it were cleared.",
-          );
+          setSuccessMessage(t("termMaps.deletedSuccess"));
           if (selectedIdRef.current === selectedId) {
             selectedIdRef.current = null;
             setSelectedId(null);
@@ -2347,13 +2350,8 @@ function TermMapsPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("termMaps.title")}
-        detail={t("termMaps.detail")}
-      />
-      <Guidance title={t("termMaps.guidanceTitle")}>
-        {t("termMaps.guidance")}
-      </Guidance>
+      <PageHeader title={t("termMaps.title")} detail={t("termMaps.detail")} />
+      <Guidance title={t("termMaps.guidanceTitle")}>{t("termMaps.guidance")}</Guidance>
       <section className="concept-help" aria-label={t("termMaps.createHelpLabel")}>
         <strong>{t("termMaps.createHelpTitle")}</strong>
         <ol>
@@ -2365,12 +2363,10 @@ function TermMapsPage() {
   "New York": "Nueva York",
   "The Captain": "La capitana"
 }`}</pre>
-        <p>
-          {t("termMaps.createHelpDetail")}
-        </p>
+        <p>{t("termMaps.createHelpDetail")}</p>
       </section>
       {successMessage && (
-          <Guidance title={t("common.save")} tone="success" role="status">
+        <Guidance title={t("common.save")} tone="success" role="status">
           {successMessage}
         </Guidance>
       )}

@@ -32,14 +32,16 @@ export function Guidance({
 
 export function QuickStart({
   steps,
+  title,
   className,
 }: {
   steps: string[];
+  title: string;
   className?: string;
 }) {
   return (
-    <section className={cn("quick-start", className)} aria-label="How it works">
-      <strong>How it works</strong>
+    <section className={cn("quick-start", className)} aria-label={title}>
+      <strong>{title}</strong>
       <ol>
         {steps.map((step) => (
           <li key={step}>{step}</li>

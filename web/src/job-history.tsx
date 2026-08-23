@@ -134,9 +134,9 @@ export function JobsPage() {
     if (!window.confirm(prompt)) {
       return;
     }
-      setClearFeedback(null);
-      clearCompleted.mutate(undefined, {
-        onSuccess: (result) => {
+    setClearFeedback(null);
+    clearCompleted.mutate(undefined, {
+      onSuccess: (result) => {
         const unit = result.deleted.length === 1 ? t("jobs.job") : t("jobs.jobs");
         const failedUnit = result.failed.length === 1 ? t("jobs.job") : t("jobs.jobs");
         if (result.failed.length === 0) {
@@ -588,7 +588,9 @@ function JobDetail({
         </div>
         <div className="job-detail-context">
           <JobStatus status={job.status} />
-          <p className="job-status-explanation">{jobStatusExplanation(job.status, t)}</p>
+          <p className="job-status-explanation">
+            {jobStatusExplanation(job.status, t)}
+          </p>
           <div className="job-id-control">
             <code title={job.id}>{job.id}</code>
             <Button
