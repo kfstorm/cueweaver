@@ -309,7 +309,7 @@ async function openVisibleJobDetail(fetchImplementation: typeof fetch) {
   });
   renderWithFetch("/jobs", fetchImplementation);
   fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
-  await screen.findByRole("heading", { name: "Request summary" });
+  await screen.findByRole("heading", { name: "Job summary" });
 }
 
 function jobsFetch(job: JobFixture) {
@@ -1084,7 +1084,7 @@ describe("product shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
 
     expect(
-      await screen.findByRole("heading", { name: "Request summary" }),
+      await screen.findByRole("heading", { name: "Job summary" }),
     ).toBeInTheDocument();
     const detailRegion = screen.getByRole("region", { name: "Job details" });
     expect(screen.getByRole("heading", { name: "Movie.mkv" })).toHaveFocus();
@@ -3395,7 +3395,7 @@ describe("product shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "View Job" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Request summary" }),
+      await screen.findByRole("heading", { name: "Job summary" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Movie.mkv" })).toBeInTheDocument();
   });

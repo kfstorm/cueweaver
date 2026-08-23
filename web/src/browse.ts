@@ -1,5 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
+import { translate } from "./i18n";
+
 export interface MediaDirectoryEntry {
   name: string;
   path: string;
@@ -22,7 +24,7 @@ async function fetchDirectory(path: string): Promise<MediaDirectory> {
     body: JSON.stringify({ path }),
   });
   if (!response.ok) {
-    await throwResponseError(response, "This Media directory could not be loaded.");
+    await throwResponseError(response, translate("errors.mediaDirectory"));
   }
   return response.json() as Promise<MediaDirectory>;
 }
@@ -67,7 +69,7 @@ async function fetchDiscovery(
     signal,
   });
   if (!response.ok) {
-    await throwResponseError(response, "Subtitles could not be discovered.");
+    await throwResponseError(response, translate("errors.subtitleDiscovery"));
   }
   return response.json() as Promise<MediaDiscovery>;
 }

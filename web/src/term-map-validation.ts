@@ -1,3 +1,10 @@
+import { translate, type TranslationKey } from "./i18n";
+
+type Translator = (
+  key: TranslationKey,
+  values?: Record<string, string | number>,
+) => string;
+
 export const MAX_TERM_MAP_BYTES = 1024 * 1024;
 export const MAX_TERM_MAP_UPLOAD_BYTES = MAX_TERM_MAP_BYTES;
 
@@ -9,47 +16,46 @@ export interface TermMapContentValidation {
   error: string | null;
 }
 
-export function validateTermMapContent(text: string): TermMapContentValidation {
+export function validateTermMapContent(
+  text: string,
+  t: Translator = translate,
+): TermMapContentValidation {
   if (!text.trim()) {
-    return invalidTermMapContent(
-      'Enter a Term map JSON object, such as {"Source":"Target"}.',
-    );
+    return invalidTermMapContent(t("termMapValidation.enterObject"));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return invalidTermMapContent('Enter valid JSON, such as {"Source":"Target"}.');
+    return invalidTermMapContent(t("termMapValidation.validJson"));
   }
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return invalidTermMapContent("Term map JSON must be a non-empty object.");
+    return invalidTermMapContent(t("termMapValidation.object"));
   }
   const entries = Object.entries(parsed);
   if (entries.length === 0) {
-    return invalidTermMapContent("Term map JSON must contain at least one mapping.");
+    return invalidTermMapContent(t("termMapValidation.mapping"));
   }
 
   let sourceKeys: string[];
   try {
     sourceKeys = readTopLevelObjectKeys(text);
   } catch {
-    return invalidTermMapContent('Enter valid JSON, such as {"Source":"Target"}.');
+    return invalidTermMapContent(t("termMapValidation.validJson"));
   }
 
   const foldedSources = new Set<string>();
   for (const source of sourceKeys) {
     if (!source) {
-      return invalidTermMapContent("Source keys must be non-empty strings.");
+      return invalidTermMapContent(t("termMapValidation.source"));
     }
     if (hasUnpairedSurrogate(source)) {
-      return invalidTermMapContent("Term map must contain valid Unicode strings.");
+      return invalidTermMapContent(t("termMapValidation.unicode"));
     }
     const foldedSource = source.toLowerCase();
     if (foldedSources.has(foldedSource)) {
-      return invalidTermMapContent(
-        "Source keys must be unique regardless of case; remove the duplicate mapping.",
-      );
+      return invalidTermMapContent(t("termMapValidation.unique"));
     }
     foldedSources.add(foldedSource);
   }
@@ -57,13 +63,13 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
   const content: Record<string, string> = {};
   for (const [source, target] of entries) {
     if (!source) {
-      return invalidTermMapContent("Source keys must be non-empty strings.");
+      return invalidTermMapContent(t("termMapValidation.source"));
     }
     if (typeof target !== "string" || !target) {
-      return invalidTermMapContent("Target values must be non-empty strings.");
+      return invalidTermMapContent(t("termMapValidation.target"));
     }
     if (hasUnpairedSurrogate(target)) {
-      return invalidTermMapContent("Term map must contain valid Unicode strings.");
+      return invalidTermMapContent(t("termMapValidation.unicode"));
     }
     Object.defineProperty(content, source, {
       configurable: true,
@@ -75,11 +81,11 @@ export function validateTermMapContent(text: string): TermMapContentValidation {
 
   const rawByteLength = new TextEncoder().encode(text).byteLength;
   if (rawByteLength > MAX_TERM_MAP_UPLOAD_BYTES) {
-    return invalidTermMapContent("Term map must be at most 1 MiB.");
+    return invalidTermMapContent(t("termMapValidation.size"));
   }
   const byteLength = new TextEncoder().encode(JSON.stringify(content)).byteLength;
   if (byteLength > MAX_TERM_MAP_BYTES) {
-    return invalidTermMapContent("Term map must be at most 1 MiB.");
+    return invalidTermMapContent(t("termMapValidation.size"));
   }
   return {
     content,

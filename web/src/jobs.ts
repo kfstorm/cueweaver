@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { translate, type Locale } from "./i18n";
+
 const HISTORY_QUERY_KEY = ["jobs", "history"] as const;
 const HISTORY_REFRESH_QUERY_KEY = ["jobs", "history-refresh"] as const;
 
@@ -157,7 +159,8 @@ export interface JobNotification {
   id: string;
   jobId: string;
   status: "Completed" | "Failed";
-  message: string;
+  media: string;
+  errorMessage: string | null;
 }
 
 export interface JobCleanupFailure {
@@ -301,7 +304,7 @@ async function fetchJobsPage(path: string, signal?: AbortSignal): Promise<JobLis
   const body = (await response.json()) as Partial<JobListPage> & {
     message?: string;
   };
-  if (!response.ok) throw new Error(body.message ?? "Jobs could not be loaded.");
+  if (!response.ok) throw new Error(body.message ?? translate("errors.jobs"));
   if (
     !Array.isArray(body.active_jobs) ||
     !Array.isArray(body.history_jobs) ||
@@ -310,7 +313,7 @@ async function fetchJobsPage(path: string, signal?: AbortSignal): Promise<JobLis
       (typeof body.next_cursor === "string" && body.next_cursor.length > 0)
     )
   ) {
-    throw new Error("Jobs response has an invalid shape.");
+    throw new Error(translate("errors.invalidJobsResponse"));
   }
   return {
     active_jobs: body.active_jobs,
@@ -337,8 +340,7 @@ export function useJob(jobId: string | null, enabled = jobId !== null) {
         signal,
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok)
-        throw new Error(body.message ?? "Job details could not be loaded.");
+      if (!response.ok) throw new Error(body.message ?? translate("errors.jobDetails"));
       return body;
     },
     staleTime: 0,
@@ -348,7 +350,10 @@ export function useJob(jobId: string | null, enabled = jobId !== null) {
   });
 }
 
-export function useJobNotifications(data: JobListData | undefined): {
+export function useJobNotifications(
+  data: JobListData | undefined,
+  locale: Locale,
+): {
   notifications: JobNotification[];
   dismiss: (id: string) => void;
 } {
@@ -371,10 +376,8 @@ export function useJobNotifications(data: JobListData | undefined): {
           id: `${job.id}-${job.status}-${job.finished_at ?? Date.now()}`,
           jobId: job.id,
           status: job.status,
-          message:
-            job.status === "Completed"
-              ? `${media} translation completed.`
-              : `${media} translation failed: ${job.error?.message ?? "Check Job details."}`,
+          media,
+          errorMessage: job.error?.message ?? null,
         });
       }
       lastKnownStatuses.current.set(job.id, job.status);
@@ -384,7 +387,7 @@ export function useJobNotifications(data: JobListData | undefined): {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setNotifications((current) => [...current, ...observed].slice(-4));
     }
-  }, [data]);
+  }, [data, locale]);
 
   const dismiss = useCallback(
     (id: string) =>
@@ -419,8 +422,7 @@ export function useCreateJob() {
         body: JSON.stringify(request),
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok)
-        throw new Error(body.message ?? "Translation could not be queued.");
+      if (!response.ok) throw new Error(body.message ?? translate("errors.queue"));
       return body;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
@@ -454,14 +456,13 @@ export function useCreateBatchJobs() {
         results?: BatchJobResult[];
         message?: string;
       };
-      if (!response.ok)
-        throw new Error(body.message ?? "Translations could not be queued.");
+      if (!response.ok) throw new Error(body.message ?? translate("errors.batchQueue"));
       if (
         !Array.isArray(body.results) ||
         body.results.length !== request.items.length ||
         !body.results.every(isBatchJobResult)
       )
-        throw new Error("Batch response has an invalid shape.");
+        throw new Error(translate("errors.invalidBatchResponse"));
       return body.results;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
@@ -476,7 +477,7 @@ export function useRetryJob() {
         method: "POST",
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok) throw new Error(body.message ?? "Job could not be retried.");
+      if (!response.ok) throw new Error(body.message ?? translate("errors.retry"));
       return body;
     },
     onSuccess: (job, jobId) => updateJobAfterMutation(queryClient, job, jobId),
@@ -491,7 +492,7 @@ export function useCancelJob() {
         method: "POST",
       });
       const body = (await response.json()) as Job & { message?: string };
-      if (!response.ok) throw new Error(body.message ?? "Job could not be cancelled.");
+      if (!response.ok) throw new Error(body.message ?? translate("errors.cancel"));
       return body;
     },
     onSuccess: (job, jobId) => updateJobAfterMutation(queryClient, job, jobId),
@@ -510,7 +511,7 @@ export function useDeleteJob() {
         deleted: boolean;
         message?: string;
       };
-      if (!response.ok) throw new Error(body.message ?? "Job could not be deleted.");
+      if (!response.ok) throw new Error(body.message ?? translate("errors.delete"));
       return body;
     },
     onSuccess: (_result, jobId) => {
@@ -529,7 +530,7 @@ export function useClearCompletedJobs() {
         message?: string;
       };
       if (!response.ok)
-        throw new Error(body.message ?? "Completed Jobs could not be cleared.");
+        throw new Error(body.message ?? translate("errors.clearCompleted"));
       return body;
     },
     onSuccess: () => {

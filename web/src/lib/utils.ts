@@ -1,49 +1,48 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import { getActiveLocale, translate } from "../i18n";
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const localDateTime = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  timeZoneName: "short",
-});
-
-const utcDateTime = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "medium",
-  timeZone: "UTC",
-});
-
-const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-
 export function formatLocalTimestamp(value: string | null): string {
-  if (value === null) return "Not recorded";
+  if (value === null) return translate("time.notRecorded");
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
-    ? "Timestamp unavailable"
-    : localDateTime.format(date);
+    ? translate("time.timestampUnavailable")
+    : new Intl.DateTimeFormat(getActiveLocale(), {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }).format(date);
 }
 
 export function formatUtcTimestamp(value: string | null): string {
-  if (value === null) return "Not recorded";
+  if (value === null) return translate("time.notRecorded");
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
-    ? "Timestamp unavailable"
-    : `${utcDateTime.format(date)} UTC`;
+    ? translate("time.timestampUnavailable")
+    : `${new Intl.DateTimeFormat(getActiveLocale(), {
+        dateStyle: "medium",
+        timeStyle: "medium",
+        timeZone: "UTC",
+      }).format(date)} ${translate("time.utc")}`;
 }
 
 export function formatRelativeTimestamp(value: string): string {
   const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return "Time unavailable";
+  if (Number.isNaN(date.valueOf())) return translate("time.unavailable");
 
   const seconds = (date.valueOf() - Date.now()) / 1000;
   const absoluteSeconds = Math.abs(seconds);
+  const relativeTime = new Intl.RelativeTimeFormat(getActiveLocale(), {
+    numeric: "auto",
+  });
   if (absoluteSeconds < 60) return relativeTime.format(Math.round(seconds), "second");
   if (absoluteSeconds < 3600)
     return relativeTime.format(Math.round(seconds / 60), "minute");
