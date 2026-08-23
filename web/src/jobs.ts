@@ -26,13 +26,24 @@ function uniqueJobs(jobs: Job[]): Job[] {
   });
 }
 
-function reconcileJobLists(activeJobs: Job[], historyJobs: Job[]): JobListData {
+function reconcileJobLists(
+  activeJobs: Job[],
+  historyJobs: Job[],
+  activeUpdatedAt: number,
+  historyUpdatedAt: number,
+): JobListData {
+  const uniqueActive = uniqueJobs(activeJobs);
   const uniqueHistory = uniqueJobs(historyJobs);
+  const activeIds = new Set(uniqueActive.map((job) => job.id));
   const historyIds = new Set(uniqueHistory.map((job) => job.id));
-  // History is fetched after active Jobs, so prefer its terminal snapshot on a race.
+  const activeIsNewer = activeUpdatedAt > historyUpdatedAt;
   return {
-    active_jobs: uniqueJobs(activeJobs).filter((job) => !historyIds.has(job.id)),
-    history_jobs: uniqueHistory,
+    active_jobs: activeIsNewer
+      ? uniqueActive
+      : uniqueActive.filter((job) => !historyIds.has(job.id)),
+    history_jobs: activeIsNewer
+      ? uniqueHistory.filter((job) => !activeIds.has(job.id))
+      : uniqueHistory,
     next_cursor: null,
   };
 }
@@ -270,6 +281,8 @@ export function useJobs({
         ...reconcileJobLists(
           activeQuery.data?.active_jobs ?? [],
           pages.flatMap((page) => page.history_jobs),
+          activeQuery.dataUpdatedAt,
+          historyQuery.dataUpdatedAt,
         ),
         next_cursor: pages.at(-1)?.next_cursor ?? null,
         matching_count: pages[0]?.matching_count,

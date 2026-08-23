@@ -1602,6 +1602,42 @@ describe("product shell", () => {
     expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
   });
 
+  it("prefers a fresher active retry over a cached terminal history Job", async () => {
+    const failed = embeddedJob("retry-race-job", "Failed");
+    const queued = {
+      ...failed,
+      status: "Queued" as const,
+      started_at: null,
+      finished_at: null,
+      queue_position: 1,
+      error: null,
+    };
+    let activeJob: JobFixture | null = null;
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs?limit=1")
+        return jobListResponse(activeJob ? [activeJob] : []);
+      if (input === "/api/jobs") return jobListResponse([failed]);
+      return jsonResponse({ term_maps: [] });
+    });
+    const { queryClient } = renderWithFetch("/jobs", fetchMock);
+
+    expect(
+      await screen.findByRole("heading", { name: "Completed and past Jobs" }),
+    ).toBeInTheDocument();
+    activeJob = queued;
+    await queryClient.invalidateQueries({ queryKey: ["jobs", "active"] });
+
+    expect(
+      await screen.findByRole("heading", { name: "Active Jobs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Completed and past Jobs" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
+  });
+
   it("renders queued and running Job states with queue context", async () => {
     const statuses = ["Queued", "Extracting", "Translating"] as const;
     for (const status of statuses) {
