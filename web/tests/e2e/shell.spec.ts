@@ -20,6 +20,21 @@ async function expectResponsiveShell(page: Page, mobile: boolean) {
   }
 }
 
+async function expectAccessibleProductRoutes(page: Page, dark = false) {
+  if (dark)
+    await page.addInitScript(() => localStorage.setItem("cueweaver.theme", "dark"));
+  for (const [path, title] of routes) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    if (dark) await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(
+      results.violations,
+      `${path}${dark ? " dark theme" : ""} accessibility violations`,
+    ).toEqual([]);
+  }
+}
+
 async function stubProductStatus(page: Page, providerReady = true) {
   await page.route("/api/status", (route) =>
     route.fulfill({
@@ -345,6 +360,28 @@ test("mobile shell renders every product route", async ({ page }) => {
   await expectResponsiveShell(page, true);
 });
 
+test("theme switching stays separate from mobile navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/translate");
+
+  await expect(page.locator(".sidebar-theme-toggle")).toBeVisible();
+  await expect(page.locator(".page-theme-toggle")).toBeHidden();
+  await expect(
+    page.getByRole("navigation", { name: "Mobile navigation" }),
+  ).toBeHidden();
+  await page.locator(".sidebar-theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".sidebar-theme-toggle")).toBeHidden();
+  await expect(page.locator(".page-theme-toggle")).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link"),
+  ).toHaveCount(3);
+  await page.locator(".page-theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
 test.describe("accessibility regressions", () => {
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
@@ -352,15 +389,14 @@ test.describe("accessibility regressions", () => {
   ]) {
     test(`${viewport.name} product routes have no axe violations`, async ({ page }) => {
       await page.setViewportSize(viewport);
+      await expectAccessibleProductRoutes(page);
+    });
 
-      for (const [path, title] of routes) {
-        await page.goto(path);
-        await expect(
-          page.getByRole("heading", { name: title, exact: true }),
-        ).toBeVisible();
-        const results = await new AxeBuilder({ page }).analyze();
-        expect(results.violations, `${path} accessibility violations`).toEqual([]);
-      }
+    test(`${viewport.name} dark product routes have no axe violations`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await expectAccessibleProductRoutes(page, true);
     });
 
     test(`${viewport.name} active translation configuration has no axe violations`, async ({

@@ -5,12 +5,12 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex h-9 max-md:min-h-11 items-center justify-center gap-2 rounded-md px-3 text-[length:var(--font-control)] leading-5 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:translate-y-px",
+  "inline-flex h-9 max-md:min-h-11 items-center justify-center gap-2 rounded-md px-3 text-[length:var(--font-control)] leading-5 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--canvas)] disabled:pointer-events-none disabled:opacity-50 active:translate-y-px",
   {
     variants: {
       variant: {
-        default: "bg-indigo-600 text-white hover:bg-indigo-700",
-        outline: "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+        default: "button-default",
+        outline: "button-outline",
       },
     },
     defaultVariants: { variant: "default" },

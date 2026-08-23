@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
+import { PageHeader } from "./components/page-header";
 import {
   APPROVED_ERROR_CONTEXT_KEYS,
   useClearCompletedJobs,
@@ -135,12 +136,10 @@ export function JobsPage() {
 
   return (
     <>
-      <header className="page-header">
-        <div>
-          <h1>Jobs</h1>
-          <p>Review durable translation history, diagnostics, and retryable work.</p>
-        </div>
-      </header>
+      <PageHeader
+        title="Jobs"
+        detail="Review durable translation history, diagnostics, and retryable work."
+      />
       {recordAttention && recordHealth && <RecordHealthNotice health={recordHealth} />}
       <div className={cn("job-layout", jobId && "has-selection")}>
         <section className="job-list-panel" aria-labelledby="job-list-title">

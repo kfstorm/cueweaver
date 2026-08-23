@@ -5,6 +5,9 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./app";
 import "./styles.css";
+import { initializeTheme } from "./theme";
+
+initializeTheme();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
