@@ -29,6 +29,13 @@ import { useProductStatus } from "./status";
 
 const RUNNING_JOB_MESSAGE = "Running Jobs cannot be cancelled.";
 
+type ClearFeedback = {
+  title: string;
+  tone: "success" | "warning" | "error";
+  message: string;
+  role: "status" | "alert";
+};
+
 export function JobNotificationRegion({
   notifications,
   dismiss,
@@ -105,18 +112,39 @@ export function JobsPage() {
   const recordHealth = productStatus.data?.job_records;
   const recordAttention =
     (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
-  const [clearSuccess, setClearSuccess] = useState<string | null>(null);
+  const [clearFeedback, setClearFeedback] = useState<ClearFeedback | null>(null);
 
   const clearCompletedJobs = () => {
     const prompt = `Clear all completed Job history? This removes ${completedCount} completed Job${completedCount === 1 ? "" : "s"} and residual Work data. Media and published output are preserved.`;
     if (!window.confirm(prompt)) {
       return;
     }
+    setClearFeedback(null);
     clearCompleted.mutate(undefined, {
       onSuccess: (result) => {
-        setClearSuccess(
-          `Cleared ${result.deleted.length} completed ${result.deleted.length === 1 ? "Job" : "Jobs"}. Media and published subtitles were not deleted.`,
-        );
+        const cleared = `Cleared ${result.deleted.length} completed ${result.deleted.length === 1 ? "Job" : "Jobs"}.`;
+        if (result.failed.length === 0) {
+          setClearFeedback({
+            title: "History cleared",
+            tone: "success",
+            role: "status",
+            message: `${cleared} Media and published subtitles were not deleted.`,
+          });
+        } else if (result.deleted.length > 0) {
+          setClearFeedback({
+            title: "History partially cleared",
+            tone: "warning",
+            role: "status",
+            message: `${cleared} ${result.failed.length} completed ${result.failed.length === 1 ? "Job could not" : "Jobs could not"} be cleared. See the details below.`,
+          });
+        } else {
+          setClearFeedback({
+            title: "History could not be cleared",
+            tone: "error",
+            role: "alert",
+            message: "No completed Jobs were cleared. See the details below.",
+          });
+        }
         if (jobId && result.deleted.includes(jobId)) navigateToJobList();
       },
     });
@@ -206,9 +234,13 @@ export function JobsPage() {
               </span>
             </div>
           </div>
-          {clearSuccess && (
-            <Guidance title="History cleared" tone="success" role="status">
-              {clearSuccess}
+          {clearFeedback && (
+            <Guidance
+              title={clearFeedback.title}
+              tone={clearFeedback.tone}
+              role={clearFeedback.role}
+            >
+              {clearFeedback.message}
             </Guidance>
           )}
           {clearCompleted.isError && (
@@ -217,8 +249,15 @@ export function JobsPage() {
             </p>
           )}
           {clearCompleted.data && clearCompleted.data.failed.length > 0 && (
-            <div className="form-error" role="alert">
-              <p>Some Completed Jobs could not be cleared.</p>
+            <div
+              className="form-error"
+              role={clearCompleted.data.deleted.length === 0 ? "status" : "alert"}
+            >
+              <p>
+                {clearCompleted.data.deleted.length === 0
+                  ? "No Completed Jobs could be cleared."
+                  : "Some Completed Jobs could not be cleared."}
+              </p>
               <ul>
                 {clearCompleted.data.failed.map((failure) => (
                   <li key={failure.id}>
@@ -384,12 +423,9 @@ function JobList({
   selectedId: string | undefined;
   onSelect: (path: string) => void;
 }) {
-  const uniqueJobs = jobs.filter(
-    (job, index) => jobs.findIndex((candidate) => candidate.id === job.id) === index,
-  );
   return (
     <div className="job-list" role="list" aria-label="Translation Jobs">
-      {uniqueJobs.map((job) => (
+      {jobs.map((job) => (
         <JobListItem
           key={job.id}
           job={job}
@@ -599,8 +635,10 @@ function JobDetail({
 
       {retryable && (
         <Guidance title="Action available" tone="info">
-          Review the error below, fix the provider, Media, subtitle source, or Term map
-          problem, then choose Retry Job.
+          Review the error below and fix the provider, Media, or subtitle source
+          problem, then choose Retry Job. Retry reuses this Job&apos;s saved request,
+          including its Term map. To change the Term map or other translation settings,
+          start a new translation.
         </Guidance>
       )}
 

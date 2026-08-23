@@ -1582,6 +1582,26 @@ describe("product shell", () => {
     );
   });
 
+  it("reconciles a Job that appears in both active and history responses", async () => {
+    const active = translatingEmbeddedJob("reconciled-job");
+    const terminal = { ...completedJob(active), status: "Completed" };
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/status") return statusResponse();
+      if (input === "/api/jobs?limit=1") return jobListResponse([active]);
+      if (input === "/api/jobs") return jobListResponse([terminal]);
+      return jsonResponse({ term_maps: [] });
+    });
+    renderWithFetch("/jobs", fetchMock);
+
+    expect(
+      await screen.findByRole("heading", { name: "Completed and past Jobs" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Active Jobs" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("Movie.mkv")).toHaveLength(1);
+  });
+
   it("renders queued and running Job states with queue context", async () => {
     const statuses = ["Queued", "Extracting", "Translating"] as const;
     for (const status of statuses) {
@@ -1751,6 +1771,9 @@ describe("product shell", () => {
     renderWithFetch("/jobs", retry.fetchMock);
 
     fireEvent.click(await screen.findByRole("button", { name: /Movie\.mkv/ }));
+    expect(screen.getByText("Action available").parentElement).toHaveTextContent(
+      "Retry reuses this Job's saved request, including its Term map. To change the Term map or other translation settings, start a new translation.",
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Retry Job" }));
 
     await waitFor(() =>
@@ -1968,6 +1991,10 @@ describe("product shell", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Some Completed Jobs could not be cleared",
     );
+    expect(screen.getByText("History partially cleared")).toBeInTheDocument();
+    expect(
+      screen.queryByText("History cleared", { exact: true }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Job clear-jo: Job Work data could not be cleaned up",
     );
@@ -1988,6 +2015,54 @@ describe("product shell", () => {
         screen.queryByText("Some Completed Jobs could not be cleared."),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  it("does not announce success when every completed Job fails to clear", async () => {
+    const first = {
+      ...embeddedJob("clear-all-failed-a", "Failed"),
+      status: "Completed",
+    };
+    const second = {
+      ...embeddedJob("clear-all-failed-b", "Failed"),
+      status: "Completed",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/status") return statusResponse();
+        if (input === "/api/jobs/completed" && init?.method === "DELETE") {
+          return jsonResponse({
+            deleted: [],
+            failed: [
+              {
+                id: first.id,
+                error_code: "job_work_cleanup_failed",
+                message: "Job Work data could not be cleaned up",
+              },
+              {
+                id: second.id,
+                error_code: "job_work_cleanup_failed",
+                message: "Job Work data could not be cleaned up",
+              },
+            ],
+          });
+        }
+        if (input.startsWith("/api/jobs")) return jobListResponse([first, second]);
+        return jsonResponse({ term_maps: [] });
+      });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderWithFetch("/jobs", fetchMock);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Clear completed history (2)" }),
+    );
+
+    expect(await screen.findByText("History could not be cleared")).toBeInTheDocument();
+    expect(
+      screen.queryByText("History cleared", { exact: true }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("No Completed Jobs could be cleared.")).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("keeps global cleanup disabled when filtered rows have no Completed Jobs", async () => {

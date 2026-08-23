@@ -17,6 +17,26 @@ function updateJobAfterMutation(queryClient: QueryClient, job: Job, jobId: strin
   void queryClient.invalidateQueries({ queryKey: ["jobs"] });
 }
 
+function uniqueJobs(jobs: Job[]): Job[] {
+  const seen = new Set<string>();
+  return jobs.filter((job) => {
+    if (seen.has(job.id)) return false;
+    seen.add(job.id);
+    return true;
+  });
+}
+
+function reconcileJobLists(activeJobs: Job[], historyJobs: Job[]): JobListData {
+  const uniqueHistory = uniqueJobs(historyJobs);
+  const historyIds = new Set(uniqueHistory.map((job) => job.id));
+  // History is fetched after active Jobs, so prefer its terminal snapshot on a race.
+  return {
+    active_jobs: uniqueJobs(activeJobs).filter((job) => !historyIds.has(job.id)),
+    history_jobs: uniqueHistory,
+    next_cursor: null,
+  };
+}
+
 export interface Job {
   id: string;
   attempt: number;
@@ -247,8 +267,10 @@ export function useJobs({
   const pages = historyQuery.data?.pages;
   const data: JobListData | undefined = pages
     ? {
-        active_jobs: activeQuery.data?.active_jobs ?? [],
-        history_jobs: pages.flatMap((page) => page.history_jobs),
+        ...reconcileJobLists(
+          activeQuery.data?.active_jobs ?? [],
+          pages.flatMap((page) => page.history_jobs),
+        ),
         next_cursor: pages.at(-1)?.next_cursor ?? null,
         matching_count: pages[0]?.matching_count,
         completed_count: pages[0]?.completed_count,
