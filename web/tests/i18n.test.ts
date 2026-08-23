@@ -14,6 +14,12 @@ import {
   translate,
 } from "../src/i18n";
 
+function placeholders(value: string): string[] {
+  return [
+    ...new Set([...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1])),
+  ].sort();
+}
+
 afterEach(() => {
   setActiveLocale("en");
 });
@@ -77,6 +83,18 @@ describe("interface locale selection", () => {
       if (locale !== "en") expect(getUntranslatedKeys(locale), locale).toEqual([]);
     }
     expect(getTranslationKeys().length).toBeGreaterThan(100);
+  });
+
+  it("preserves the English placeholder set in every locale", () => {
+    const english = getLocaleTable("en");
+    for (const locale of SUPPORTED_LOCALES) {
+      const table = getLocaleTable(locale);
+      for (const key of getTranslationKeys()) {
+        expect(placeholders(table[key]), `${locale}.${key}`).toEqual(
+          placeholders(english[key]),
+        );
+      }
+    }
   });
 
   it("translates the destructive Term map guidance", () => {
