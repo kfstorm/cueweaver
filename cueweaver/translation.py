@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 from collections.abc import Mapping
 from os import PathLike
@@ -17,8 +18,47 @@ from PySubtrans import (
     init_project,
     init_translation_provider,
 )
+from PySubtrans.SettingsType import SettingsError, SettingsType
+from PySubtrans.TranslationProvider import TranslationProvider
 
 from .terminology import filter_terminology_for_text
+
+_PROVIDER_REQUIRED_ENVIRONMENT = {
+    "Azure": (
+        "AZURE_API_KEY",
+        "AZURE_API_BASE",
+        "AZURE_API_VERSION",
+        "AZURE_DEPLOYMENT_NAME",
+    ),
+    "Bedrock": (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "BEDROCK_MODEL",
+    ),
+    "Claude": ("CLAUDE_API_KEY",),
+    # PySubtrans supplies a localhost default for servers running in the container.
+    "Custom Server": (),
+    "DeepSeek": ("DEEPSEEK_API_KEY",),
+    "Gemini": ("GEMINI_API_KEY",),
+    "Mistral": ("MISTRAL_API_KEY",),
+    "OpenAI": ("OPENAI_API_KEY",),
+    "OpenRouter": ("OPENROUTER_API_KEY",),
+}
+
+_PROVIDER_ENVIRONMENT_SETTINGS = {
+    "Bedrock": {
+        "access_key": "AWS_ACCESS_KEY_ID",
+        "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+        "aws_region": "AWS_REGION",
+        "model": "BEDROCK_MODEL",
+        "max_tokens": "BEDROCK_MAX_TOKENS",
+        "temperature": "BEDROCK_TEMPERATURE",
+        "rate_limit": "BEDROCK_RATE_LIMIT",
+        "proxy": "BEDROCK_PROXY",
+    },
+    "Claude": {"thinking": "CLAUDE_THINKING"},
+}
 
 
 class PySubtransTranslator:
@@ -27,7 +67,41 @@ class PySubtransTranslator:
     @property
     def available(self) -> bool:
         """Report provider configuration without exposing its value."""
-        return bool(init_options().provider)
+        return self.availability_message is None
+
+    @property
+    def availability_message(self) -> str | None:
+        """Explain why local provider configuration is not ready."""
+        provider = os.environ.get("PROVIDER", "").strip()
+        if not provider:
+            return "Set PROVIDER and the matching provider environment variables."
+
+        providers = TranslationProvider.get_providers()
+        if provider not in providers:
+            supported = ", ".join(sorted(providers))
+            return (
+                f"Unsupported PROVIDER '{provider}'. Supported providers: {supported}."
+            )
+
+        missing = [
+            name
+            for name in _PROVIDER_REQUIRED_ENVIRONMENT[provider]
+            if not os.environ.get(name, "").strip()
+        ]
+        if missing:
+            return (
+                f"Set {', '.join(missing)} for PROVIDER={provider}, then restart "
+                "CueWeaver."
+            )
+
+        try:
+            TranslationProvider.create_provider(
+                provider,
+                SettingsType(_provider_settings_from_environment(provider)),
+            )
+        except (SettingsError, TypeError, ValueError):
+            return f"Check the {provider} provider environment variables."
+        return None
 
     def translate(
         self,
@@ -44,7 +118,13 @@ class PySubtransTranslator:
         working_source = _prepare_working_source(
             source, target_language, user_overrides, work_directory
         )
+        provider = os.environ.get("PROVIDER", "").strip()
+        provider_settings = _provider_settings_from_environment(provider)
+        option_overrides: dict[str, Any] = {"provider": provider}
+        if provider_settings:
+            option_overrides["provider_settings"] = {provider: provider_settings}
         options = init_options(
+            **option_overrides,
             target_language=target_language,
             prompt=(
                 "Translate these subtitles to "
@@ -138,6 +218,15 @@ def _should_disable_thinking(provider: str, model: str | None) -> bool:
         and model is not None
         and model.strip().casefold().startswith("deepseek-")
     )
+
+
+def _provider_settings_from_environment(provider: str) -> dict[str, str]:
+    settings = _PROVIDER_ENVIRONMENT_SETTINGS.get(provider, {})
+    return {
+        setting: value
+        for setting, environment_name in settings.items()
+        if (value := os.environ.get(environment_name))
+    }
 
 
 def _build_terminology_seed(

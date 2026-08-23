@@ -82,7 +82,10 @@ def _create_api_app(
     def product_status() -> dict[str, object]:
         provider: dict[str, object] = {"ready": provider_ready}
         if not provider_ready:
-            provider["message"] = PROVIDER_MESSAGE
+            message = getattr(translator, "availability_message", None)
+            provider["message"] = (
+                message if isinstance(message, str) else PROVIDER_MESSAGE
+            )
         return {
             "api": {"ready": True},
             "roots": {"ready": True},

@@ -8,7 +8,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "langcodes[data]>=3.5.0",
     "pydantic>=2.13.4",
-    "pysubtrans==1.6.0",
+    "pysubtrans[azure,bedrock,claude,gemini,mistral,openai]==1.6.0",
     "starlette>=1.6.0",
     "uvicorn>=0.35.0",
 ]
@@ -16,6 +16,10 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+# PySubtrans 1.6.0 uses the Mistral SDK v1 client API.
+override-dependencies = ["mistralai<2"]
 
 [dependency-groups]
 dev = [
