@@ -891,31 +891,50 @@ class Jobs:
     ) -> dict[str, object]:
         record = copy_job_record(loaded_record)
         request = record.get("request")
-        output_path = (
-            self._media_root / str(request["output_path"])
-            if isinstance(request, dict) and isinstance(request.get("output_path"), str)
-            else None
+        publication = record.get("publication")
+        publication_path = (
+            publication.get("path") if isinstance(publication, dict) else None
         )
+        expected_digest = (
+            publication.get("content_digest") if isinstance(publication, dict) else None
+        )
+        output_path: Path | None = None
+        if (
+            isinstance(request, dict)
+            and isinstance(request.get("output_path"), str)
+            and isinstance(publication_path, str)
+            and request["output_path"] == publication_path
+            and isinstance(expected_digest, str)
+        ):
+            try:
+                output_path = self._media_path(publication_path, "invalid_output_path")
+            except ServiceError:
+                output_path = None
         if (
             output_path is not None
             and not output_path.is_symlink()
             and output_path.is_file()
         ):
-            finished_at = _timestamp()
-            transition_status(record, "Completed", at=finished_at, terminal=True)
-            record["finished_at"] = finished_at
-            record["error"] = None
-            record["publication"] = {
-                "path": str(output_path.relative_to(self._media_root)),
-                "content_digest": _content_digest(output_path),
-            }
-            record["cleanup_pending"] = self._job_work_directory_exists(
-                str(record["id"])
-            )
-            self._write_record(str(record["id"]), record)
-            if record["cleanup_pending"]:
-                self._retry_pending_cleanup(str(record["id"]), record)
-            return record
+            try:
+                actual_digest = _content_digest(output_path)
+            except OSError:
+                actual_digest = None
+            if actual_digest == expected_digest:
+                finished_at = _timestamp()
+                transition_status(record, "Completed", at=finished_at, terminal=True)
+                record["finished_at"] = finished_at
+                record["error"] = None
+                record["publication"] = {
+                    "path": str(output_path.relative_to(self._media_root)),
+                    "content_digest": actual_digest,
+                }
+                record["cleanup_pending"] = self._job_work_directory_exists(
+                    str(record["id"])
+                )
+                self._write_record(str(record["id"]), record)
+                if record["cleanup_pending"]:
+                    self._retry_pending_cleanup(str(record["id"]), record)
+                return record
         interrupted = _interrupted_record(record)
         interrupted["error"] = {
             "code": "publication_interrupted",
@@ -1008,7 +1027,9 @@ class Jobs:
                 AtomicOutputPublisher(),
                 extraction=self._extraction,
                 publication_guard=self._publication_guard,
-                before_publication=lambda: self._begin_publication(job_id, request),
+                before_publication=lambda digest: self._begin_publication(
+                    job_id, request, digest
+                ),
                 should_stop=self._closed.is_set,
                 finalize=finalize,
             ).execute(
@@ -1161,13 +1182,15 @@ class Jobs:
                 self._write_record(job_id, record)
                 return request, embedded, self._jobs_root / job_id, record
 
-    def _begin_publication(self, job_id: str, request: dict[str, object]) -> None:
+    def _begin_publication(
+        self, job_id: str, request: dict[str, object], output_digest: str
+    ) -> None:
         with self._lock:
             record = self._records[job_id]
             transition_status(record, "Publishing", at=_timestamp())
             record["publication"] = {
                 "path": request["output_path"],
-                "content_digest": None,
+                "content_digest": output_digest,
             }
             record["cleanup_pending"] = False
             self._write_record(job_id, record)

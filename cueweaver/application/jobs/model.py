@@ -279,6 +279,10 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
             )
         )
         and (
+            "cleanup_pending" not in record
+            or isinstance(record["cleanup_pending"], bool)
+        )
+        and (
             "output_suffix" not in request
             or (
                 isinstance(request["output_suffix"], str)

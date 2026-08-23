@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
@@ -57,14 +58,14 @@ class Translation:
         output: OutputPublisher,
         *,
         publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
-        before_publication: Callable[[], None] | None = None,
+        before_publication: Callable[[str], None] | None = None,
         on_publication_failure: Callable[[Exception], None] | None = None,
         after_publication: Callable[[], None] | None = None,
     ) -> None:
         self._translator = translator
         self._output = output
         self._publication_guard = publication_guard or nullcontext
-        self._before_publication = before_publication or (lambda: None)
+        self._before_publication = before_publication or (lambda _digest: None)
         self._on_publication_failure = on_publication_failure or (lambda _error: None)
         self._after_publication = after_publication or (lambda: None)
 
@@ -89,7 +90,7 @@ class Translation:
             temporary_path.write_bytes(content)
 
         with self._publication_guard():
-            self._before_publication()
+            self._before_publication(hashlib.sha256(content).hexdigest())
             try:
                 self._output.publish(
                     request.output_path, write, overwrite=request.overwrite

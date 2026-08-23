@@ -1279,7 +1279,8 @@ a {
 }
 
 .status-queued,
-.status-translating {
+.status-translating,
+.status-publishing {
   background: var(--accent-soft);
   color: var(--accent-hover);
 }

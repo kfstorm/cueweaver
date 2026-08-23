@@ -160,7 +160,7 @@ function jobListResponse(
   next_cursor: string | null = null,
   completedCount = jobs.filter((job) => job.status === "Completed").length,
 ) {
-  const activeStatuses = ["Queued", "Extracting", "Translating"];
+  const activeStatuses = ["Queued", "Extracting", "Translating", "Publishing"];
   return jsonResponse({
     active_jobs: jobs.filter((job) => activeStatuses.includes(job.status)),
     history_jobs: jobs.filter((job) => !activeStatuses.includes(job.status)),
@@ -922,6 +922,9 @@ describe("product shell", () => {
       screen.getByRole("option", { name: "Translating status" }),
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("option", { name: "Publishing status" }),
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole("option", { name: "Completed history" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Failed history" })).toBeInTheDocument();
@@ -937,6 +940,7 @@ describe("product shell", () => {
       "Queued",
       "Extracting",
       "Translating",
+      "Publishing",
       "Completed",
       "Failed",
       "Interrupted",

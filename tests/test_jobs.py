@@ -275,6 +275,10 @@ def test_restarts_reconcile_publishing_job_when_output_exists(tmp_path: Path):
     work_directory.mkdir(parents=True)
     (work_directory / "checkpoint").write_text("checkpoint", encoding="utf-8")
     record = persisted_job_record(job_id, status="Publishing")
+    record["publication"] = {
+        "path": "Movie.zh-Hans.srt",
+        "content_digest": hashlib.sha256(SRT).hexdigest(),
+    }
     SqliteJobRecordStore(work_root / "jobs").write(job_id, record)
 
     jobs = Jobs(FakeTranslator(), media_root, work_root)
@@ -286,6 +290,45 @@ def test_restarts_reconcile_publishing_job_when_output_exists(tmp_path: Path):
         reconciled["publication"]["content_digest"] == hashlib.sha256(SRT).hexdigest()
     )
     assert not work_directory.exists()
+    jobs.close()
+
+
+def test_restarts_do_not_accept_an_old_overwrite_output(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    job_id = "old-overwrite-output"
+    output = media_root / "Movie.zh-Hans.srt"
+    output.write_bytes(b"old output")
+    record = persisted_job_record(job_id, status="Publishing")
+    record["request"]["output_conflict_policy"] = "overwrite"
+    record["publication"] = {
+        "path": "Movie.zh-Hans.srt",
+        "content_digest": hashlib.sha256(SRT).hexdigest(),
+    }
+    SqliteJobRecordStore(work_root / "jobs").write(job_id, record)
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    interrupted = jobs.get(job_id)
+    assert interrupted["status"] == "Interrupted"
+    assert output.read_bytes() == b"old output"
+    jobs.close()
+
+
+def test_restarts_reject_publishing_output_outside_media_root(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    job_id = "invalid-publishing-output"
+    outside = tmp_path / "outside.srt"
+    outside.write_bytes(SRT)
+    record = persisted_job_record(job_id, status="Publishing")
+    record["publication"] = {
+        "path": "../outside.srt",
+        "content_digest": hashlib.sha256(SRT).hexdigest(),
+    }
+    SqliteJobRecordStore(work_root / "jobs").write(job_id, record)
+
+    jobs = Jobs(FakeTranslator(), media_root, work_root)
+
+    assert jobs.get(job_id)["status"] == "Interrupted"
     jobs.close()
 
 
@@ -333,6 +376,16 @@ def test_restart_retries_pending_work_cleanup(tmp_path: Path, monkeypatch):
     assert second.get(job_id)["cleanup_pending"] is False
     assert not work_directory.exists()
     second.close()
+
+
+def test_record_store_rejects_non_boolean_cleanup_pending(tmp_path: Path):
+    record = persisted_job_record("invalid-cleanup", status="Completed")
+    record["cleanup_pending"] = "false"
+
+    with pytest.raises(ServiceError) as raised:
+        SqliteJobRecordStore(tmp_path / "jobs").write("invalid-cleanup", record)
+
+    assert raised.value.error_code == "invalid_job_record"
 
 
 def status_history_entry(

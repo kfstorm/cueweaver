@@ -100,7 +100,7 @@ class JobExecution:
         *,
         extraction: Extraction | None = None,
         publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
-        before_publication: Callable[[], None] | None = None,
+        before_publication: Callable[[str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
         finalize: Callable[[JobExecutionOutcome], bool] | None = None,
     ) -> None:
@@ -114,10 +114,10 @@ class JobExecution:
         self._output_digest: str | None = None
         self._cleanup_pending = False
 
-    def _before_publication(self) -> None:
+    def _before_publication(self, output_digest: str) -> None:
         self._check_publication_allowed()
         if self._before_publication_callback is not None:
-            self._before_publication_callback()
+            self._before_publication_callback(output_digest)
 
     def execute(
         self,

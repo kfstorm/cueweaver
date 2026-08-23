@@ -77,6 +77,7 @@ export type JobStatus =
   | "Queued"
   | "Extracting"
   | "Translating"
+  | "Publishing"
   | "Completed"
   | "Failed"
   | "Interrupted"
