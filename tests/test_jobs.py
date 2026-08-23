@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -208,7 +209,7 @@ def test_sqlite_record_store_imports_legacy_json_and_retires_the_snapshot(
     tmp_path: Path,
 ):
     jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
+    jobs_root.mkdir(parents=True)
     record = persisted_job_record("legacy-job")
     (jobs_root / "legacy-job.json").write_text(json.dumps(record), encoding="utf-8")
 
@@ -263,6 +264,41 @@ def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
     loaded = SqliteJobRecordStore(jobs_root).load()
 
     assert loaded[0]["status"] == "Completed"
+
+
+def test_sqlite_corruption_preserves_legacy_snapshot_for_recovery(tmp_path: Path):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    work_root = tmp_path / "work"
+    jobs_root = work_root / "jobs"
+    jobs_root.mkdir(parents=True)
+    snapshot = jobs_root / "recoverable-job.json"
+    snapshot_bytes = json.dumps(persisted_job_record("recoverable-job")).encode()
+    snapshot.write_bytes(snapshot_bytes)
+    (work_root / "jobs.sqlite3").write_bytes(b"not a sqlite database")
+
+    with pytest.raises(ServiceError) as raised:
+        Jobs(FakeTranslator(), media_root, work_root)
+
+    assert raised.value.error_code == "job_store_unavailable"
+    assert snapshot.read_bytes() == snapshot_bytes
+
+
+def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(jobs_root)
+    store.write("corrupt-record", persisted_job_record("corrupt-record"))
+    with sqlite3.connect(jobs_root / "jobs.sqlite3") as connection:
+        connection.execute(
+            "UPDATE jobs SET record_json = ? WHERE id = ?",
+            ("{}", "corrupt-record"),
+        )
+        connection.commit()
+
+    with pytest.raises(ServiceError) as raised:
+        store.load()
+
+    assert raised.value.error_code == "job_store_corrupt"
 
 
 def test_restarts_reconcile_publishing_job_when_output_exists(tmp_path: Path):

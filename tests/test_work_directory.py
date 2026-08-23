@@ -1,3 +1,4 @@
+import os
 import selectors
 import subprocess
 import sys
@@ -6,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cueweaver.adapters.term_maps import FileTermMapStore
+from cueweaver.application.jobs import Jobs
 from cueweaver.work import WorkRoot, WorkRootLease
 
 
@@ -91,3 +93,84 @@ def test_work_root_lease_blocks_another_process_until_release(tmp_path: Path):
     released = WorkRootLease(lease_path)
     released.acquire()
     released.release()
+
+
+def test_sigkill_releases_lease_and_restart_marks_active_job_interrupted(
+    tmp_path: Path,
+):
+    media_root = tmp_path / "media"
+    work_root = tmp_path / "work"
+    media_root.mkdir()
+    (media_root / "Movie.mkv").write_bytes(b"media")
+    (media_root / "Movie.en.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nSource\n", encoding="utf-8"
+    )
+    child_code = """
+import sys
+import threading
+import time
+from pathlib import Path
+from cueweaver.application.jobs import CreateJobRequest, Jobs
+
+started = threading.Event()
+
+class Translator:
+    available = True
+
+    def translate(self, _source, _target_language, **_kwargs):
+        started.wait()
+        print("started", flush=True)
+        while True:
+            time.sleep(1)
+
+jobs = Jobs(Translator(), Path(sys.argv[1]), Path(sys.argv[2]))
+job = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
+print(job["id"], flush=True)
+started.set()
+time.sleep(30)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(media_root), str(work_root)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout is not None
+        pending = b""
+
+        def read_line() -> str:
+            nonlocal pending
+            while b"\n" not in pending:
+                assert selector.select(timeout=5), "Job child did not emit a line"
+                chunk = os.read(child.stdout.fileno(), 4096)
+                assert chunk, "Job child exited before emitting a complete line"
+                pending += chunk
+            line, pending = pending.split(b"\n", maxsplit=1)
+            return line.decode()
+
+        selector = selectors.DefaultSelector()
+        try:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            job_id = read_line()
+            assert job_id
+            assert read_line() == "started"
+        finally:
+            selector.close()
+        child.kill()
+        assert child.wait(timeout=5) < 0
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+
+    class RecoveryTranslator:
+        available = True
+
+        def translate(self, _source, _target_language, **_kwargs) -> bytes:
+            return b"1\n00:00:00,000 --> 00:00:01,000\nRecovered\n"
+
+    jobs = Jobs(RecoveryTranslator(), media_root, work_root)
+    try:
+        assert jobs.get(job_id)["status"] == "Interrupted"
+    finally:
+        jobs.close()

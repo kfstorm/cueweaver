@@ -63,6 +63,13 @@ then their snapshots are retired. The Work root also contains `.jobs.lease`,
 which prevents multiple CueWeaver processes from using the same Work root.
 Do not remove the Work volume while Jobs are active.
 
+After an unclean process stop, the next startup marks Jobs that were in
+`Extracting` or `Translating` as `Interrupted` and reconciles `Publishing`
+Jobs against their durable output. The operating system releases the lease
+after a process crash; do not delete `.jobs.lease` manually. If SQLite cannot
+be opened, CueWeaver refuses startup; preserve the entire Work volume before
+restoring or inspecting a backup.
+
 ## Translation Provider Configuration
 
 CueWeaver supports these providers in the built-in image:

@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 IMAGE="cueweaver-e2e"
 CONTAINER="cueweaver-e2e-$$"
 ROOTS="$(mktemp -d)"
-mkdir "$ROOTS/media" "$ROOTS/work"
+mkdir "$ROOTS/media" "$ROOTS/work" "$ROOTS/corrupt-work"
 chmod 755 "$ROOTS" "$ROOTS/media" "$ROOTS/work"
 RUN_USER="$(id -u):$(id -g)"
 printf '%s' '<movie><title>Example movie</title><year>2024</year></movie>' \
@@ -17,6 +17,8 @@ printf '%s\n' \
   '00:00:00,000 --> 00:00:01,000' \
   'Example subtitle' \
   >"$ROOTS/media/Example.en.srt"
+printf '%s' 'not a sqlite database' >"$ROOTS/corrupt-work/jobs.sqlite3"
+cp "$ROOTS/corrupt-work/jobs.sqlite3" "$ROOTS/corrupt-work/expected.sqlite3"
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {
   docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
@@ -46,7 +48,27 @@ for _attempt in {1..30}; do
   if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
     CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
       pnpm --dir web test:e2e
-    docker restart "$CONTAINER" >/dev/null
+    set +e
+    CORRUPT_LOG="$ROOTS/corrupt-startup.log"
+    timeout 30s docker run --rm --user "$RUN_USER" \
+      --env CUEWEAVER_MEDIA_ROOT=/media \
+      --env CUEWEAVER_WORK_ROOT=/work \
+      --volume "$ROOTS/media:/media" \
+      --volume "$ROOTS/corrupt-work:/work" \
+      "$IMAGE" uvicorn cueweaver.e2e:create_e2e_app_from_env --factory \
+      --host 0.0.0.0 --port 8000 >"$CORRUPT_LOG" 2>&1
+    _corrupt_status=$?
+    set -e
+    if [[ $_corrupt_status -eq 0 || $_corrupt_status -eq 124 ]] ||
+      ! grep --quiet "Job database cannot be opened" "$CORRUPT_LOG"; then
+      cat "$CORRUPT_LOG" >&2
+      printf '%s\n' 'Corrupt SQLite database unexpectedly allowed startup' >&2
+      exit 1
+    fi
+    cmp --silent "$ROOTS/corrupt-work/jobs.sqlite3" \
+      "$ROOTS/corrupt-work/expected.sqlite3"
+    docker kill --signal KILL "$CONTAINER" >/dev/null
+    docker start "$CONTAINER" >/dev/null
     for _restart_attempt in {1..30}; do
       if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
         CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
