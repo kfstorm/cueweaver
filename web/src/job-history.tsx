@@ -209,7 +209,6 @@ export function JobsPage() {
                   <option value="Queued">Queued status</option>
                   <option value="Extracting">Extracting status</option>
                   <option value="Translating">Translating status</option>
-                  <option value="Publishing">Publishing status</option>
                   <option value="Completed">Completed history</option>
                   <option value="Failed">Failed history</option>
                   <option value="Interrupted">Interrupted history</option>
@@ -877,7 +876,7 @@ async function copyJobId(jobId: string): Promise<boolean> {
 }
 
 function isRunningJob(status: Job["status"]): boolean {
-  return status === "Extracting" || status === "Translating" || status === "Publishing";
+  return status === "Extracting" || status === "Translating";
 }
 
 function hasJobFilters(search: string, status: JobStatusFilter): boolean {
@@ -890,7 +889,6 @@ function isJobStatusFilter(value: string): value is JobStatusFilter {
     "Queued",
     "Extracting",
     "Translating",
-    "Publishing",
     "Completed",
     "Failed",
     "Interrupted",

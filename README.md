@@ -63,12 +63,15 @@ then their snapshots are retired. The Work root also contains `.jobs.lease`,
 which prevents multiple CueWeaver processes from using the same Work root.
 Do not remove the Work volume while Jobs are active.
 
-After an unclean process stop, the next startup marks Jobs that were in
-`Extracting` or `Translating` as `Interrupted` and reconciles `Publishing`
-Jobs against their durable output. The operating system releases the lease
-after a process crash; do not delete `.jobs.lease` manually. If SQLite cannot
-be opened, CueWeaver refuses startup; preserve the entire Work volume before
-restoring or inspecting a backup.
+After an unclean process stop, the next startup restores `Queued` Jobs in
+queue order and marks Jobs that were in `Extracting` or `Translating` as
+`Interrupted`. A subtitle is written to a same-directory temporary file before
+it is atomically published, so readers never observe a partial output. A
+completed Job is persisted before its Work directory is removed; cleanup
+failure leaves the Job `Completed` and logs the leftover directory. The
+operating system releases the lease after a process crash; do not delete
+`.jobs.lease` manually. If SQLite cannot be opened, CueWeaver refuses startup;
+preserve the entire Work volume before restoring or inspecting a backup.
 
 ## Translation Provider Configuration
 
@@ -256,7 +259,7 @@ Most users can leave the advanced settings at their defaults.
 - Set `CUSTOM_SUPPORTS_CONVERSATION=false` when the remote service uses a completion endpoint rather than a chat endpoint. Set `CUSTOM_SUPPORTS_SYSTEM_MESSAGES=false` when it does not support system messages.
 - If a request is rejected for authentication, check the provider's API key and restart the container.
 - Changing any provider environment variable requires a container restart. The Work volume can be kept across restarts; it contains job history and resumable translation state.
-- Queued Jobs are restored in queue order after a restart. Jobs that were already extracting or translating are marked interrupted and can be retried from the Jobs page. Jobs interrupted during publishing are reconciled from their durable output; completed Jobs with leftover Work data retry cleanup on restart.
+- Queued Jobs are restored in queue order after a restart. Jobs that were already extracting or translating are marked interrupted and can be retried from the Jobs page. Completed Jobs are persisted before best-effort Work-directory cleanup; cleanup failures leave them completed.
 
 ## Use CueWeaver
 

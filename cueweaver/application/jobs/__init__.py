@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import builtins
+import logging
 import queue
 import shutil
 import tempfile
 import threading
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Protocol, cast
 from unicodedata import category
@@ -29,7 +29,6 @@ from ..translation import Translator
 from .execution import (
     EmbeddedExecutionInput,
     JobExecution,
-    JobExecutionFinalizationError,
     JobExecutionInput,
     JobExecutionOutcome,
     JobExecutionProgress,
@@ -70,6 +69,7 @@ APPROVED_ERROR_CONTEXT_KEYS = frozenset(
 )
 OUTPUT_CONFLICT_POLICIES = frozenset({"append-number", "overwrite", "skip"})
 OUTPUT_EXISTS_REASON = "Output path already exists"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -104,6 +104,7 @@ class Jobs:
         directory_term_maps: DirectoryTermMaps | None = None,
         *,
         record_store: JobRecordStore | None = None,
+        lease: WorkRootLease | None = None,
     ) -> None:
         self._translator = translator
         self._term_maps = term_maps
@@ -111,7 +112,7 @@ class Jobs:
         self._extraction = extraction
         self._media_root = media_root.resolve()
         self._work = WorkRoot(work_root)
-        self._lease = WorkRootLease(self._work.path / ".jobs.lease")
+        self._lease = lease or WorkRootLease(self._work.path / ".jobs.lease")
         self._jobs_root = self._work.jobs_directory
         self._record_store = (
             record_store
@@ -122,7 +123,6 @@ class Jobs:
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
-        self._unsaved_record_ids: set[str] = set()
         self._recovered_queue_ids: list[str] = []
         self._next_queue_sequence = 0
         self._lock = threading.Lock()
@@ -478,7 +478,6 @@ class Jobs:
             "Queued",
             "Extracting",
             "Translating",
-            "Publishing",
             *TERMINAL_JOB_STATUSES,
         }:
             raise ServiceError("invalid_job_status", "Job status filter is invalid")
@@ -501,8 +500,7 @@ class Jobs:
         active_records = [
             record
             for record in records
-            if record.get("status")
-            in {"Queued", "Extracting", "Translating", "Publishing"}
+            if record.get("status") in {"Queued", "Extracting", "Translating"}
             if (status == "all" or record.get("status") == status)
             and _job_matches_search(record, normalized_search)
         ]
@@ -552,47 +550,14 @@ class Jobs:
     def _query_records(
         self, statuses: tuple[str, ...] | None = None
     ) -> builtins.list[dict[str, object]]:
-        if isinstance(self._record_store, SqliteJobRecordStore):
-            with self._lock:
-                dirty_ids = set(self._unsaved_record_ids)
-                dirty_records = {
-                    str(record["id"]): copy_job_record(record)
-                    for record in tuple(self._records.values())
-                    if str(record["id"]) in dirty_ids
-                }
-            records = self._record_store.query(None if dirty_ids else statuses)
-            records_by_id = {
-                str(record["id"]): record
-                for record in records
-                if str(record["id"]) not in dirty_ids
-            }
-            records_by_id.update(dirty_records)
-            records = list(records_by_id.values())
-        else:
-            with self._lock:
-                records = [copy_job_record(record) for record in self._records.values()]
+        with self._lock:
+            records = [copy_job_record(record) for record in self._records.values()]
         if statuses is None:
             return records
         return [record for record in records if record.get("status") in statuses]
 
     def _completed_count(self, records: builtins.list[dict[str, object]]) -> int:
-        if not isinstance(self._record_store, SqliteJobRecordStore):
-            return sum(record.get("status") == "Completed" for record in records)
-        count = self._record_store.count("Completed")
-        for record in records:
-            job_id = record.get("id")
-            if not isinstance(job_id, str) or job_id not in self._unsaved_record_ids:
-                continue
-            persisted = self._record_store.get(job_id)
-            persisted_completed = (
-                persisted is not None and persisted.get("status") == "Completed"
-            )
-            current_completed = record.get("status") == "Completed"
-            if current_completed and not persisted_completed:
-                count += 1
-            elif persisted_completed and not current_completed:
-                count -= 1
-        return count
+        return sum(record.get("status") == "Completed" for record in records)
 
     def get(self, job_id: str) -> dict[str, object]:
         with self._lifecycle_lock:
@@ -601,14 +566,6 @@ class Jobs:
     def _get(self, job_id: str) -> dict[str, object]:
         with self._lock:
             record = self._records.get(job_id)
-        if record is not None:
-            return self._record_with_queue_position(record)
-        get_record = getattr(self._record_store, "get", None)
-        if callable(get_record):
-            record = get_record(job_id)
-        else:
-            with self._lock:
-                record = self._records.get(job_id)
         if record is None:
             raise ServiceError("job_not_found", "Job does not exist")
         return self._record_with_queue_position(record)
@@ -662,7 +619,6 @@ class Jobs:
             ) from error
         with self._lock:
             self._records.pop(job_id, None)
-            self._unsaved_record_ids.discard(job_id)
 
     def _attempt_delete_terminal_job(self, job_id: str) -> ServiceError | None:
         try:
@@ -946,103 +902,20 @@ class Jobs:
             status = loaded_record.get("status")
             assert isinstance(job_id, str)
             assert isinstance(status, str)
-            if status == "Publishing":
-                record = self._reconcile_publishing_record(loaded_record)
-            elif status in {"Queued", "Extracting", "Translating"}:
+            record = copy_job_record(loaded_record)
+            if status in {"Extracting", "Translating"}:
+                record = _interrupted_record(record)
+                self._write_record(job_id, record)
+            elif status == "Queued":
                 normalize_record(loaded_record)
-                if status == "Queued":
-                    record = loaded_record
-                    self._recovered_queue_ids.append(job_id)
-                else:
-                    record = _interrupted_record(loaded_record)
-                    # Recovery is the only startup write for an active Job. The
-                    # repository commits the interrupted state before the worker
-                    # starts.
-                    self._write_record(job_id, record)
-            else:
                 record = loaded_record
+                self._recovered_queue_ids.append(job_id)
+            else:
                 normalize_record(record)
-                if record.get("status") == "Completed" and record.get(
-                    "cleanup_pending"
-                ):
-                    self._retry_pending_cleanup(job_id, record)
             self._next_queue_sequence = max(
                 self._next_queue_sequence, queue_sequence(record)
             )
-            self._records[job_id] = record
-
-    def _reconcile_publishing_record(
-        self, loaded_record: dict[str, object]
-    ) -> dict[str, object]:
-        record = copy_job_record(loaded_record)
-        request = record.get("request")
-        publication = record.get("publication")
-        publication_path = (
-            publication.get("path") if isinstance(publication, dict) else None
-        )
-        expected_digest = (
-            publication.get("content_digest") if isinstance(publication, dict) else None
-        )
-        output_path: Path | None = None
-        if (
-            isinstance(request, dict)
-            and isinstance(request.get("output_path"), str)
-            and isinstance(publication_path, str)
-            and request["output_path"] == publication_path
-            and isinstance(expected_digest, str)
-        ):
-            try:
-                output_path = self._media_path(publication_path, "invalid_output_path")
-            except ServiceError:
-                output_path = None
-        if (
-            output_path is not None
-            and not output_path.is_symlink()
-            and output_path.is_file()
-        ):
-            try:
-                actual_digest = _content_digest(output_path)
-            except OSError:
-                actual_digest = None
-            if actual_digest == expected_digest:
-                finished_at = _timestamp()
-                transition_status(record, "Completed", at=finished_at, terminal=True)
-                record["finished_at"] = finished_at
-                record["error"] = None
-                record["publication"] = {
-                    "path": str(output_path.relative_to(self._media_root)),
-                    "content_digest": actual_digest,
-                }
-                record["cleanup_pending"] = self._job_work_directory_exists(
-                    str(record["id"])
-                )
-                self._write_record(str(record["id"]), record)
-                if record["cleanup_pending"]:
-                    self._retry_pending_cleanup(str(record["id"]), record)
-                return record
-        interrupted = _interrupted_record(record)
-        interrupted["error"] = {
-            "code": "publication_interrupted",
-            "message": "Job publication was interrupted before output was durable",
-        }
-        self._write_record(str(record["id"]), interrupted)
-        return interrupted
-
-    def _retry_pending_cleanup(self, job_id: str, record: dict[str, object]) -> None:
-        try:
-            shutil.rmtree(self._job_work_directory(job_id))
-        except FileNotFoundError:
-            pass
-        except OSError:
-            return
-        record["cleanup_pending"] = False
-        self._write_record(job_id, record)
-
-    def _job_work_directory_exists(self, job_id: str) -> bool:
-        try:
-            return self._job_work_directory(job_id).exists()
-        except ServiceError:
-            return False
+            self._records[job_id] = copy_job_record(record)
 
     def _run(self) -> None:
         try:
@@ -1055,14 +928,8 @@ class Jobs:
                         continue
                     self._execute(job_id)
                 except Exception as error:
-                    # A persistence error must not kill the serial worker or strand a Job.
                     if job_id is not None:
-                        self._mark_failed_after_worker_error(
-                            job_id,
-                            error,
-                            force=isinstance(error, JobExecutionFinalizationError)
-                            or self._closed.is_set(),
-                        )
+                        self._mark_failed_after_worker_error(job_id, error)
                 finally:
                     self._pending.task_done()
         finally:
@@ -1076,12 +943,6 @@ class Jobs:
         outcome: JobExecutionOutcome
         try:
             work_directory = self._job_work_directory(job_id)
-
-            def finalize(outcome_to_persist: JobExecutionOutcome) -> bool:
-                self._finish_execution_locked(
-                    job_id, outcome_to_persist, request, embedded, work_directory
-                )
-                return True
 
             subtitle_path: Path | None = None
             on_progress: Callable[[JobExecutionProgress], bool] | None = None
@@ -1114,12 +975,7 @@ class Jobs:
                 self._translator,
                 AtomicOutputPublisher(),
                 extraction=self._extraction,
-                publication_guard=self._publication_guard,
-                before_publication=lambda digest: self._begin_publication(
-                    job_id, request, digest
-                ),
                 should_stop=self._closed.is_set,
-                finalize=finalize,
             ).execute(
                 JobExecutionInput(
                     subtitle_path=subtitle_path,
@@ -1142,8 +998,6 @@ class Jobs:
             )
         except JobExecutionProgressPersistenceError:
             raise
-        except JobExecutionFinalizationError:
-            raise
         except ServiceError as error:
             outcome = JobExecutionOutcome("Failed", error=error)
         except Exception:
@@ -1154,13 +1008,7 @@ class Jobs:
                     "Extraction failed" if embedded else "Translation failed",
                 ),
             )
-        if not outcome.terminal_persisted:
-            self._finish_execution(job_id, outcome, request, embedded, work_directory)
-
-    @contextmanager
-    def _publication_guard(self) -> Iterator[None]:
-        with self._lifecycle_lock:
-            yield
+        self._finish_execution(job_id, outcome, request, embedded, work_directory)
 
     def _finish_execution(
         self,
@@ -1175,10 +1023,8 @@ class Jobs:
                 self._finish_execution_locked(
                     job_id, outcome, request, embedded, work_directory
                 )
-        except JobExecutionFinalizationError:
-            raise
         except Exception as error:
-            raise JobExecutionFinalizationError from error
+            raise RuntimeError("Job outcome could not be persisted") from error
 
     def _finish_execution_locked(
         self,
@@ -1189,23 +1035,27 @@ class Jobs:
         work_directory: Path,
     ) -> None:
         if outcome.status == "Completed":
-            self._finish(
-                job_id,
-                "Completed",
-                None,
-                output_digest=outcome.output_digest,
-                cleanup_pending=outcome.cleanup_pending,
-            )
+            self._finish(job_id, "Completed", None)
+            try:
+                shutil.rmtree(work_directory)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                logger.warning(
+                    "Could not clean Work data for completed Job %s: %s",
+                    job_id,
+                    cleanup_error,
+                )
             return
         if outcome.status == "Interrupted":
             self._finish_interrupted(job_id)
             return
-        if self._closed.is_set() and not outcome.preserve_failure:
+        if self._closed.is_set():
             self._finish_interrupted(job_id)
             return
-        error = outcome.error
-        assert error is not None
-        context = self._error_context(error.context)
+        outcome_error = outcome.error
+        assert outcome_error is not None
+        context = self._error_context(outcome_error.context)
         if embedded:
             context = _embedded_error_context(
                 context, request, self._media_root, work_directory
@@ -1213,7 +1063,11 @@ class Jobs:
         self._finish(
             job_id,
             "Failed",
-            {"code": error.error_code, "message": error.message, **context},
+            {
+                "code": outcome_error.error_code,
+                "message": outcome_error.message,
+                **context,
+            },
         )
 
     def _embedded_term_map(self, request: dict[str, object]) -> dict[str, str] | None:
@@ -1243,7 +1097,7 @@ class Jobs:
                 transition_status(record, progress.phase, at=_timestamp())
                 try:
                     self._write_record(job_id, record)
-                except OSError as error:
+                except Exception as error:
                     raise JobExecutionProgressPersistenceError from error
                 self._records[job_id] = record
         return True
@@ -1258,6 +1112,7 @@ class Jobs:
                 record = self._records.get(job_id)
                 if record is None or record.get("status") != "Queued":
                     return None
+                record = copy_job_record(record)
                 request = record["request"]
                 assert isinstance(request, dict)
                 embedded = "stream_index" in request
@@ -1269,19 +1124,6 @@ class Jobs:
                 request["output_path"] = str(output_path.relative_to(self._media_root))
                 self._write_record(job_id, record)
                 return request, embedded, self._jobs_root / job_id, record
-
-    def _begin_publication(
-        self, job_id: str, request: dict[str, object], output_digest: str
-    ) -> None:
-        with self._lock:
-            record = self._records[job_id]
-            transition_status(record, "Publishing", at=_timestamp())
-            record["publication"] = {
-                "path": request["output_path"],
-                "content_digest": output_digest,
-            }
-            record["cleanup_pending"] = False
-            self._write_record(job_id, record)
 
     def _execution_output_path(self, request: dict[str, object]) -> Path:
         output = self._media_path(str(request["output_path"]), "invalid_output_path")
@@ -1328,44 +1170,30 @@ class Jobs:
         job_id: str,
         status: str,
         error: dict[str, object] | None,
-        *,
-        output_digest: str | None = None,
-        cleanup_pending: bool = False,
     ) -> None:
         with self._lock:
-            record = self._records[job_id]
+            record = copy_job_record(self._records[job_id])
             finished_at = _timestamp()
             transition_status(record, status, at=finished_at, terminal=True)
             record["finished_at"] = finished_at
             record["error"] = error
-            if status == "Completed":
-                request = record.get("request")
-                if isinstance(request, dict):
-                    record["publication"] = {
-                        "path": request["output_path"],
-                        "content_digest": output_digest,
-                    }
-                record["cleanup_pending"] = cleanup_pending
             self._write_record(job_id, record)
 
     def _finish_interrupted(self, job_id: str) -> None:
         with self._lock:
             interrupted = _interrupted_record(self._records[job_id])
-            self._records[job_id] = interrupted
-            # A failed write is recovered on the next startup without blocking shutdown.
             with suppress(OSError):
                 self._write_record(job_id, interrupted)
 
-    def _mark_failed_after_worker_error(
-        self, job_id: str, error: Exception, *, force: bool = False
-    ) -> None:
+    def _mark_failed_after_worker_error(self, job_id: str, error: Exception) -> None:
         with self._lifecycle_lock:
-            if self._closed.is_set() and not force:
+            if self._closed.is_set():
                 return
             with self._lock:
                 record = self._records.get(job_id)
                 if record is None:
                     return
+                record = copy_job_record(record)
                 finished_at = _timestamp()
                 transition_status(record, "Failed", at=finished_at, terminal=True)
                 record["finished_at"] = finished_at
@@ -1373,17 +1201,20 @@ class Jobs:
                     "code": "job_worker_failed",
                     "message": "Job execution could not be persisted",
                 }
-                with suppress(Exception):
+                try:
                     self._write_record(job_id, record)
+                except Exception as persistence_error:
+                    logger.error(
+                        "Could not persist worker failure for Job %s: %s",
+                        job_id,
+                        persistence_error,
+                    )
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
-        record["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
-        try:
-            self._record_store.write(job_id, record)
-        except Exception:
-            self._unsaved_record_ids.add(job_id)
-            raise
-        self._unsaved_record_ids.discard(job_id)
+        persisted = copy_job_record(record)
+        persisted["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
+        self._record_store.write(job_id, persisted)
+        self._records[job_id] = persisted
 
     def _ensure_jobs_root(self) -> None:
         self._check_jobs_root()
@@ -1479,14 +1310,6 @@ def _interrupted_record(record: dict[str, object]) -> dict[str, object]:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _content_digest(path: Path) -> str:
-    digest = sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _history_sort_key(record: dict[str, object]) -> tuple[str, str]:

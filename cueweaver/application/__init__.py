@@ -8,7 +8,7 @@ from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
-from ..work import WorkRoot
+from ..work import WorkRoot, WorkRootLease
 from .browsing import MediaBrowser
 from .directory_term_maps import DirectoryTermMaps
 from .discovery import Discovery
@@ -36,6 +36,8 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         configured_work_root = WorkRoot(work_root or Path.cwd())
+        lease = WorkRootLease(configured_work_root.path / ".jobs.lease")
+        lease.acquire()
         storage_lock = DurableFileLock(
             configured_work_root.term_maps_directory / ".lock"
         )
@@ -48,21 +50,28 @@ class CueWeaverApplication:
             lock=storage_lock,
         )
         directory_term_map_store.set_recovery(term_map_store.recover_pending_deletions)
-        term_map_store.recover_pending_deletions()
-        self.term_maps = TermMaps(term_map_store)
-        if media_root is not None:
-            self.directory_term_maps = DirectoryTermMaps(
-                directory_term_map_store, self.term_maps, media_root
-            )
-        if work_root is not None and media_root is not None:
-            self.jobs = Jobs(
-                configured_translator,
-                media_root,
-                work_root,
-                self.term_maps,
-                self.extraction,
-                self.directory_term_maps,
-            )
+        try:
+            term_map_store.recover_pending_deletions()
+            self.term_maps = TermMaps(term_map_store)
+            if media_root is not None:
+                self.directory_term_maps = DirectoryTermMaps(
+                    directory_term_map_store, self.term_maps, media_root
+                )
+            if work_root is not None and media_root is not None:
+                self.jobs = Jobs(
+                    configured_translator,
+                    media_root,
+                    work_root,
+                    self.term_maps,
+                    self.extraction,
+                    self.directory_term_maps,
+                    lease=lease,
+                )
+            else:
+                lease.release()
+        except Exception:
+            lease.release()
+            raise
 
 
 __all__ = ["CueWeaverApplication"]

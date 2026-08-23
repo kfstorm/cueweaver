@@ -19,7 +19,6 @@ JobStatus = Literal[
     "Queued",
     "Extracting",
     "Translating",
-    "Publishing",
     "Completed",
     "Failed",
     "Interrupted",
@@ -34,7 +33,6 @@ JOB_STATUSES = frozenset(
         "Queued",
         "Extracting",
         "Translating",
-        "Publishing",
         "Completed",
         "Failed",
         "Interrupted",
@@ -85,8 +83,6 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
         "started_at",
         "finished_at",
         "error",
-        "cleanup_pending",
-        "publication",
     )
     if not summary:
         fields += ("extraction", "status_history")
@@ -279,10 +275,6 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
             )
         )
         and (
-            "cleanup_pending" not in record
-            or isinstance(record["cleanup_pending"], bool)
-        )
-        and (
             "output_suffix" not in request
             or (
                 isinstance(request["output_suffix"], str)
@@ -448,6 +440,11 @@ def normalize_record(record: JobRecord) -> None:
     record.setdefault("started_at", None)
     record.setdefault("finished_at", None)
     record.setdefault("error", None)
+    record.pop("publication", None)
+    record.pop("cleanup_pending", None)
+    if record.get("status") == "Publishing":
+        # Records written by the pre-simplification PR were still in-flight.
+        record["status"] = "Translating"
     request = record["request"]
     assert isinstance(request, dict)
     request.setdefault("term_map", None)
@@ -468,6 +465,7 @@ def normalize_record(record: JobRecord) -> None:
 
 def migrate_record(record: JobRecord) -> tuple[JobRecord | None, bool, bool]:
     """Return the v1 record, whether it was migrated, and whether it is future data."""
+    record = _remove_retired_recovery_fields(record)
     if "schema_version" not in record:
         legacy = True
     else:
@@ -490,6 +488,20 @@ def migrate_record(record: JobRecord) -> tuple[JobRecord | None, bool, bool]:
     normalize_record(migrated)
     migrated["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
     return migrated, legacy, False
+
+
+def _remove_retired_recovery_fields(record: JobRecord) -> JobRecord:
+    simplified = copy_job_record(record)
+    if simplified.get("status") == "Publishing":
+        simplified["status"] = "Translating"
+    history = simplified.get("status_history")
+    if isinstance(history, list):
+        for entry in history:
+            if isinstance(entry, dict) and entry.get("status") == "Publishing":
+                entry["status"] = "Translating"
+    simplified.pop("publication", None)
+    simplified.pop("cleanup_pending", None)
+    return simplified
 
 
 def queue_sequence(record: Mapping[str, object]) -> int:

@@ -7,7 +7,7 @@ import os
 import sqlite3
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -89,7 +89,6 @@ class FileJobRecordStore:
             if record_path != canonical_path:
                 record_path.unlink()
                 processed_paths.add(canonical_path)
-                _fsync_directory(self._jobs_root)
             records.append(record)
         return records
 
@@ -103,25 +102,15 @@ class FileJobRecordStore:
         _require_valid_job_id(job_id)
         self._ensure_jobs_root()
         destination = self._jobs_root / f"{job_id}.json"
-        previous = destination.read_bytes() if destination.exists() else None
         descriptor, raw_path = tempfile.mkstemp(
             dir=self._jobs_root, prefix=f".{job_id}."
         )
         temporary = Path(raw_path)
-        replaced = False
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as file:
                 json.dump(record, file, ensure_ascii=True, indent=2)
                 file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
             temporary.replace(destination)
-            replaced = True
-            _fsync_directory(self._jobs_root)
-        except OSError:
-            if replaced:
-                _restore_record(destination, previous)
-            raise
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -129,24 +118,21 @@ class FileJobRecordStore:
         _require_valid_job_id(job_id)
         self._ensure_jobs_root()
         record_path = self._jobs_root / f"{job_id}.json"
-        previous: bytes | None = None
-        removed = False
-        try:
-            previous = record_path.read_bytes() if record_path.exists() else None
-            record_path.unlink(missing_ok=True)
-            removed = previous is not None
-            _fsync_directory(self._jobs_root)
-        except OSError:
-            if removed and previous is not None:
-                try:
-                    _restore_record(record_path, previous)
-                except OSError:
-                    # Keep the best-effort restoration from hiding the original failure.
-                    record_path.write_bytes(previous)
-            raise
+        record_path.unlink(missing_ok=True)
 
     def _ensure_jobs_root(self) -> None:
         _ensure_jobs_root(self._jobs_root)
+
+
+_UPSERT_JOB_SQL = """
+INSERT INTO jobs (
+    id, record_json, created_at, queue_sequence
+) VALUES (?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    record_json = excluded.record_json,
+    created_at = excluded.created_at,
+    queue_sequence = excluded.queue_sequence
+"""
 
 
 class SqliteJobRecordStore:
@@ -160,151 +146,69 @@ class SqliteJobRecordStore:
         self._initialized = False
 
     def load(self) -> list[JobRecord]:
-        if self._jobs_root.exists() or self._jobs_root.is_symlink():
-            self._ensure_jobs_root()
-        # Import legacy JSON only until the SQLite migration marker is set.
-        database_exists = self._database_path.exists()
-        if database_exists:
-            self._initialize()
-        if not database_exists or not self._migration_complete():
-            legacy_records = (
-                self._legacy_store.load() if self._jobs_root.exists() else []
-            )
-            for record in legacy_records:
-                if not database_exists or (
-                    not self._has_record(record) and not self._is_deleted(record)
-                ):
-                    self._upsert(record)
-            if self._database_path.exists():
-                self._mark_migration_complete()
-        if not self._database_path.exists():
-            return []
-        self._initialize()
+        self._ensure_migrated()
         try:
             with self._connection() as connection:
                 rows = connection.execute(
-                    "SELECT record_json FROM jobs ORDER BY queue_sequence, created_at, id"
+                    "SELECT id, record_json FROM jobs "
+                    "ORDER BY queue_sequence, created_at, id"
                 ).fetchall()
         except sqlite3.Error as error:
             raise ServiceError(
                 "job_store_unavailable", "Job records cannot be loaded"
             ) from error
         records: list[JobRecord] = []
+        migrated_records: list[JobRecord] = []
         for row in rows:
             try:
-                record = json.loads(row[0])
+                record = json.loads(row[1])
             except (TypeError, ValueError, json.JSONDecodeError) as error:
                 raise ServiceError(
                     "job_store_corrupt", "Job database contains invalid record data"
                 ) from error
-            if not isinstance(record, dict) or not valid_record(record, strict=True):
+            if not isinstance(record, dict):
                 raise ServiceError(
                     "job_store_corrupt", "Job database contains an invalid record"
                 )
-            records.append(record)
-        self._retire_legacy_snapshots()
+            migrated, _legacy, future = migrate_record(record)
+            if migrated is None or future:
+                raise ServiceError(
+                    "job_store_corrupt", "Job database contains an invalid record"
+                )
+            if migrated.get("id") != row[0]:
+                raise ServiceError(
+                    "job_store_corrupt", "Job database contains a mismatched record"
+                )
+            records.append(migrated)
+            if migrated != record:
+                migrated_records.append(migrated)
+        for record in migrated_records:
+            self._upsert(record)
         return records
 
     def health(self) -> JobRecordHealth:
         return self._legacy_store.health()
 
-    def get(self, job_id: str) -> JobRecord | None:
-        self._initialize()
-        try:
-            with self._connection() as connection:
-                row = connection.execute(
-                    "SELECT record_json FROM jobs WHERE id = ?", (job_id,)
-                ).fetchone()
-        except sqlite3.Error as error:
-            raise ServiceError(
-                "job_store_unavailable", "Job records cannot be queried"
-            ) from error
-        return self._decode_record(row[0]) if row is not None else None
-
-    def query(self, statuses: tuple[str, ...] | None = None) -> list[JobRecord]:
-        self._initialize()
-        try:
-            with self._connection() as connection:
-                if statuses:
-                    placeholders = ", ".join("?" for _ in statuses)
-                    rows = connection.execute(
-                        """
-                        SELECT record_json FROM jobs
-                        WHERE json_extract(record_json, '$.status') IN ("""
-                        + placeholders
-                        + ") ORDER BY queue_sequence, created_at, id",
-                        statuses,
-                    ).fetchall()
-                else:
-                    rows = connection.execute(
-                        "SELECT record_json FROM jobs "
-                        "ORDER BY queue_sequence, created_at, id"
-                    ).fetchall()
-        except sqlite3.Error as error:
-            raise ServiceError(
-                "job_store_unavailable", "Job records cannot be queried"
-            ) from error
-        return [self._decode_record(row[0]) for row in rows]
-
-    def count(self, status: str) -> int:
-        self._initialize()
-        try:
-            with self._connection() as connection:
-                row = connection.execute(
-                    """
-                    SELECT COUNT(*) FROM jobs
-                    WHERE json_extract(record_json, '$.status') = ?
-                    """,
-                    (status,),
-                ).fetchone()
-        except sqlite3.Error as error:
-            raise ServiceError(
-                "job_store_unavailable", "Job records cannot be counted"
-            ) from error
-        return int(row[0]) if row is not None else 0
-
     def write(self, job_id: str, record: JobRecord) -> None:
         _require_valid_job_id(job_id)
+        self._ensure_migrated()
         self._upsert(record)
 
     def remove(self, job_id: str) -> None:
         _require_valid_job_id(job_id)
-        if not self._database_path.exists():
-            self._legacy_store.remove(job_id)
-            return
-        self._initialize()
+        self._ensure_migrated()
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-                connection.execute(
-                    "INSERT OR IGNORE INTO deleted_jobs (id) VALUES (?)", (job_id,)
-                )
                 connection.commit()
         except sqlite3.Error as error:
             raise ServiceError(
                 "job_store_unavailable", "Job record could not be deleted"
             ) from error
 
-    def _has_record(self, record: JobRecord) -> bool:
-        job_id = record.get("id")
-        if not isinstance(job_id, str):
-            return False
-        with self._connection() as connection:
-            row = connection.execute(
-                "SELECT 1 FROM jobs WHERE id = ?", (job_id,)
-            ).fetchone()
-        return row is not None
-
-    def _is_deleted(self, record: JobRecord) -> bool:
-        job_id = record.get("id")
-        if not isinstance(job_id, str):
-            return False
-        with self._connection() as connection:
-            row = connection.execute(
-                "SELECT 1 FROM deleted_jobs WHERE id = ?", (job_id,)
-            ).fetchone()
-        return row is not None
+    def _ensure_jobs_root(self) -> None:
+        _ensure_jobs_root(self._jobs_root)
 
     def _migration_complete(self) -> bool:
         with self._connection() as connection:
@@ -313,16 +217,69 @@ class SqliteJobRecordStore:
             ).fetchone()
         return row is not None and row[0] == "1"
 
-    def _mark_migration_complete(self) -> None:
+    def _ensure_migrated(self) -> None:
+        if self._jobs_root.exists() or self._jobs_root.is_symlink():
+            self._ensure_jobs_root()
+        self._initialize()
+        if self._migration_complete():
+            self._drop_legacy_tombstones()
+            self._retire_legacy_snapshots()
+            return
+        deleted_ids = self._legacy_deleted_ids()
+        legacy_records = (
+            self._legacy_store.load()
+            if self._jobs_root.exists() or self._jobs_root.is_symlink()
+            else []
+        )
+        legacy_records = [
+            record for record in legacy_records if record.get("id") not in deleted_ids
+        ]
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                for record in legacy_records:
+                    job_id, raw_record, created_at, sequence = self._prepare_record(
+                        record
+                    )
+                    connection.execute(
+                        _UPSERT_JOB_SQL,
+                        (job_id, raw_record, created_at, sequence),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO metadata (key, value)
+                    VALUES ('legacy_import_complete', '1')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """
+                )
+                connection.execute("DROP TABLE IF EXISTS deleted_jobs")
+                connection.commit()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Legacy Job records could not be imported"
+            ) from error
+        self._retire_legacy_snapshots()
+
+    def _legacy_deleted_ids(self) -> set[str]:
         with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                INSERT INTO metadata (key, value) VALUES ('legacy_import_complete', '1')
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """
-            )
-            connection.commit()
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'deleted_jobs'"
+            ).fetchone()
+            if exists is None:
+                return set()
+            return {row[0] for row in connection.execute("SELECT id FROM deleted_jobs")}
+
+    def _drop_legacy_tombstones(self) -> None:
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("DROP TABLE IF EXISTS deleted_jobs")
+                connection.commit()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Legacy Job metadata could not be retired"
+            ) from error
 
     def _initialize(self) -> None:
         with self._schema_lock:
@@ -342,16 +299,13 @@ class SqliteJobRecordStore:
                         CREATE TABLE IF NOT EXISTS jobs (
                             id TEXT PRIMARY KEY,
                             record_json TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        queue_sequence INTEGER NOT NULL
-                    );
-                    CREATE TABLE IF NOT EXISTS metadata (
-                        key TEXT PRIMARY KEY,
-                        value TEXT NOT NULL
-                    );
-                    CREATE TABLE IF NOT EXISTS deleted_jobs (
-                        id TEXT PRIMARY KEY
-                    );
+                            created_at TEXT NOT NULL,
+                            queue_sequence INTEGER NOT NULL
+                        );
+                        CREATE TABLE IF NOT EXISTS metadata (
+                            key TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        );
                         """
                     )
             except sqlite3.Error as error:
@@ -362,6 +316,22 @@ class SqliteJobRecordStore:
 
     def _upsert(self, record: JobRecord) -> None:
         self._initialize()
+        job_id, raw_record, created_at, sequence = self._prepare_record(record)
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    _UPSERT_JOB_SQL,
+                    (job_id, raw_record, created_at, sequence),
+                )
+                connection.commit()
+        except sqlite3.Error as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job record could not be persisted"
+            ) from error
+
+    @staticmethod
+    def _prepare_record(record: JobRecord) -> tuple[str, str, str, int]:
         migrated, _was_migrated, future = migrate_record(record)
         if migrated is not None:
             record = migrated
@@ -379,32 +349,7 @@ class SqliteJobRecordStore:
         sequence = record.get("queue_sequence")
         if not isinstance(created_at, str) or not isinstance(sequence, int):
             raise ServiceError("invalid_job_record", "Job record metadata is invalid")
-        try:
-            with self._connection() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    """
-                    INSERT INTO jobs (
-                        id, record_json, created_at, queue_sequence
-                    ) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        record_json = excluded.record_json,
-                        created_at = excluded.created_at,
-                        queue_sequence = excluded.queue_sequence
-                    """,
-                    (
-                        job_id,
-                        raw_record,
-                        created_at,
-                        sequence,
-                    ),
-                )
-                connection.execute("DELETE FROM deleted_jobs WHERE id = ?", (job_id,))
-                connection.commit()
-        except sqlite3.Error as error:
-            raise ServiceError(
-                "job_store_unavailable", "Job record could not be persisted"
-            ) from error
+        return job_id, raw_record, created_at, sequence
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -415,10 +360,6 @@ class SqliteJobRecordStore:
                 timeout=30,
                 isolation_level=None,
             )
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = FULL")
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 30000")
             yield connection
         except sqlite3.Error as error:
             raise ServiceError(
@@ -428,37 +369,11 @@ class SqliteJobRecordStore:
             if connection is not None:
                 connection.close()
 
-    def _ensure_jobs_root(self) -> None:
-        _ensure_jobs_root(self._jobs_root)
-
     def _retire_legacy_snapshots(self) -> None:
         if not self._jobs_root.exists():
             return
-        removed = False
         for record_path in self._jobs_root.glob("*.json"):
-            removed = _retire_snapshot(record_path) or removed
-        if removed:
-            try:
-                _fsync_directory(self._jobs_root)
-            except OSError as error:
-                raise ServiceError(
-                    "job_store_unavailable",
-                    "Legacy Job snapshots could not be retired",
-                ) from error
-
-    @staticmethod
-    def _decode_record(raw_record: str) -> JobRecord:
-        try:
-            record = json.loads(raw_record)
-        except (TypeError, ValueError, json.JSONDecodeError) as error:
-            raise ServiceError(
-                "job_store_corrupt", "Job database contains invalid record data"
-            ) from error
-        if not isinstance(record, dict) or not valid_record(record, strict=True):
-            raise ServiceError(
-                "job_store_corrupt", "Job database contains an invalid record"
-            )
-        return record
+            _retire_snapshot_best_effort(record_path)
 
 
 def _read_record_bytes(record_path: Path) -> bytes | None:
@@ -466,6 +381,11 @@ def _read_record_bytes(record_path: Path) -> bytes | None:
         return record_path.read_bytes()
     except OSError:
         return None
+
+
+def _retire_snapshot_best_effort(record_path: Path) -> None:
+    with suppress(OSError):
+        record_path.unlink()
 
 
 def _require_valid_job_id(job_id: str) -> None:
@@ -486,18 +406,6 @@ def _ensure_jobs_root(jobs_root: Path) -> None:
             "invalid_work_directory",
             "Job Work root cannot be created",
         ) from error
-
-
-def _retire_snapshot(record_path: Path) -> bool:
-    try:
-        record_path.unlink()
-    except FileNotFoundError:
-        return False
-    except OSError as error:
-        raise ServiceError(
-            "job_store_unavailable", "Legacy Job snapshots could not be retired"
-        ) from error
-    return True
 
 
 def _classify_record(
@@ -580,16 +488,12 @@ def _quarantine(
         try:
             with os.fdopen(descriptor, "wb") as file:
                 file.write(raw_record)
-                file.flush()
-                os.fsync(file.fileno())
             temporary.replace(destination)
             record_path.unlink()
         finally:
             temporary.unlink(missing_ok=True)
     else:
         record_path.replace(destination)
-    _fsync_directory(directory)
-    _fsync_directory(record_path.parent)
 
 
 def _quarantine_count(jobs_root: Path, category: str) -> int:
@@ -602,34 +506,6 @@ def _quarantine_count(jobs_root: Path, category: str) -> int:
         )
     except OSError:
         return 0
-
-
-def _fsync_directory(directory: Path) -> None:
-    directory_descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)
-
-
-def _restore_record(destination: Path, previous: bytes | None) -> None:
-    if previous is None:
-        destination.unlink(missing_ok=True)
-        _fsync_directory(destination.parent)
-        return
-    descriptor, raw_path = tempfile.mkstemp(
-        dir=destination.parent, prefix=f".{destination.name}.restore."
-    )
-    temporary = Path(raw_path)
-    try:
-        with os.fdopen(descriptor, "wb") as file:
-            file.write(previous)
-            file.flush()
-            os.fsync(file.fileno())
-        temporary.replace(destination)
-        _fsync_directory(destination.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 __all__ = [

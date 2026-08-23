@@ -1,12 +1,9 @@
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
 
-from cueweaver.adapters.directory_term_maps import FileDirectoryTermMapStore
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.term_maps import TermMapDetail
@@ -277,42 +274,3 @@ def test_directory_term_map_resolution_is_independent_of_target_language(
     )
 
     assert english.json() == chinese.json()
-
-
-def test_directory_term_map_writes_are_serialized_last_successful_write_wins(
-    tmp_path: Path, monkeypatch
-):
-    client = make_client(tmp_path)
-    (tmp_path / "media" / "Series").mkdir(parents=True)
-    first = create_term_map(client, "First")
-    second = create_term_map(client, "Second")
-
-    second_started = Event()
-    first_write_done = Event()
-    original_bind = FileDirectoryTermMapStore.bind
-
-    def blocking_bind(store: object, directory: str, term_map_id: str, validate=None):
-        if term_map_id == first["id"]:
-            assert second_started.wait(timeout=5)
-            result = original_bind(store, directory, term_map_id, validate)
-            first_write_done.set()
-            return result
-        second_started.set()
-        assert first_write_done.wait(timeout=5)
-        return original_bind(store, directory, term_map_id, validate)
-
-    monkeypatch.setattr(FileDirectoryTermMapStore, "bind", blocking_bind)
-
-    def bind(term_map_id: object) -> int:
-        with make_client(tmp_path) as concurrent_client:
-            return directory_request(
-                concurrent_client, "PUT", "Series", term_map_id=term_map_id
-            ).status_code
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(bind, (first["id"], second["id"])))
-
-    assert statuses == [200, 200]
-    assert (
-        directory_request(client, "GET", "Series").json()["local"]["id"] == second["id"]
-    )

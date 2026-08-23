@@ -100,7 +100,10 @@ def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
     )
 
     assert work_root.is_dir()
-    assert list(work_root.iterdir()) == [work_root / ".jobs.lease"]
+    assert set(work_root.iterdir()) == {
+        work_root / ".jobs.lease",
+        work_root / "jobs.sqlite3",
+    }
 
 
 @pytest.mark.parametrize("operation", ["read", "write", "mkdir", "replace"])
