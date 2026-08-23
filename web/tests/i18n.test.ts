@@ -70,26 +70,29 @@ describe("interface locale selection", () => {
     expect(detectLocale(null, ["xx-YY"])).toBe("en");
   });
 
-  it("provides translated shell labels for every supported locale", () => {
-    const requiredKeys = [
-      "language.label",
-      "navigation.translate",
-      "navigation.jobs",
-      "navigation.termMaps",
-      "translate.title",
-      "jobs.title",
-      "termMaps.title",
-      "jobs.notificationCompleted",
-      "jobs.notificationFailed",
-      "jobs.notificationDetails",
-    ] as const;
-
+  it("provides translated values for every key in every non-English locale", () => {
     for (const locale of SUPPORTED_LOCALES) {
       const table = getLocaleTable(locale);
-      for (const key of requiredKeys) expect(table[key]).toBeTruthy();
+      for (const key of getTranslationKeys()) expect(table[key]).toBeTruthy();
       if (locale !== "en") expect(getUntranslatedKeys(locale), locale).toEqual([]);
     }
     expect(getTranslationKeys().length).toBeGreaterThan(100);
+  });
+
+  it("translates the destructive Term map guidance", () => {
+    expect(getLocaleTable("zh-CN")["termMaps.replaceHelp"]).toContain(
+      "删除当前所有映射",
+    );
+    expect(getLocaleTable("zh-CN")["termMaps.deleteHelp"]).toContain("永久删除术语表");
+    for (const locale of SUPPORTED_LOCALES.filter((value) => value !== "en")) {
+      const table = getLocaleTable(locale);
+      expect(table["termMaps.replaceHelp"], locale).not.toBe(
+        getLocaleTable("en")["termMaps.replaceHelp"],
+      );
+      expect(table["termMaps.deleteHelp"], locale).not.toBe(
+        getLocaleTable("en")["termMaps.deleteHelp"],
+      );
+    }
   });
 
   it("interpolates values without changing the business language code", () => {
