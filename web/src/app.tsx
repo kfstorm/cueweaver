@@ -19,6 +19,7 @@ import {
   type DragEvent,
   type FormEvent,
   type MutableRefObject,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,6 +27,7 @@ import {
   NavLink,
   Navigate,
   Outlet,
+  Link,
   Route,
   Routes,
   useNavigate,
@@ -33,6 +35,7 @@ import {
 
 import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
+import { Guidance, QuickStart } from "./components/ui/guidance";
 import { Input, Select, Textarea } from "./components/ui/input";
 import {
   useMediaDirectory,
@@ -148,6 +151,94 @@ function Shell() {
   );
 }
 
+function TranslationRuntimeNotice() {
+  const status = useProductStatus();
+  if (status.isPending) return null;
+  if (status.isError) {
+    return (
+      <Guidance
+        title="CueWeaver is not reachable"
+        tone="error"
+        action={
+          <Button type="button" variant="outline" onClick={() => void status.refetch()}>
+            Try again
+          </Button>
+        }
+      >
+        The app could not check whether translation is available. Try again before
+        starting a Job.
+      </Guidance>
+    );
+  }
+  if (!status.data.api.ready || !status.data.roots.ready) {
+    return (
+      <Guidance title="CueWeaver needs attention" tone="warning">
+        The Media or Work directory is unavailable. Check the configured mounts and
+        permissions before starting a translation. You can still manage saved Term maps
+        and review existing Jobs.
+      </Guidance>
+    );
+  }
+  if (!status.data.translation_provider.ready) {
+    return (
+      <Guidance title="Translation is not configured" tone="warning">
+        Set <code>PROVIDER</code> and the matching provider environment variables, then
+        restart CueWeaver. You can still browse Media and manage Term maps.
+      </Guidance>
+    );
+  }
+  return null;
+}
+
+type TranslationStepState = {
+  batchMode: boolean;
+  selectedMedia: string | null;
+  batchMediaCount: number;
+  batchReadyCount: number;
+  selectedCandidate: SubtitleCandidate | undefined;
+  targetLanguage: string;
+  outputSuffixError: string | null;
+  providerReady: boolean;
+  providerPending: boolean;
+  runtimeReady: boolean;
+  runtimeError: boolean;
+};
+
+function getNextTranslationStep({
+  batchMode,
+  selectedMedia,
+  batchMediaCount,
+  batchReadyCount,
+  selectedCandidate,
+  targetLanguage,
+  outputSuffixError,
+  providerReady,
+  providerPending,
+  runtimeReady,
+  runtimeError,
+}: TranslationStepState): string {
+  if (providerPending) return "Checking whether CueWeaver is ready.";
+  if (runtimeError) return "CueWeaver status could not be checked. Try again.";
+  if (!runtimeReady) return "Check the Media and Work directory configuration.";
+  if (!batchMode && selectedMedia === null) return "Next: choose a Media item.";
+  if (batchMode && batchMediaCount === 0) {
+    return "Next: choose one or more Media items.";
+  }
+  if (batchMode && batchReadyCount < batchMediaCount) {
+    const remaining = batchMediaCount - batchReadyCount;
+    return `Next: choose a subtitle for ${remaining} selected Media ${remaining === 1 ? "item" : "items"}.`;
+  }
+  if (!batchMode && selectedCandidate === undefined) {
+    return "Next: choose one subtitle source.";
+  }
+  if (!targetLanguage.trim()) return "Next: choose a target language.";
+  if (outputSuffixError) return outputSuffixError;
+  if (!providerReady) {
+    return "Translation is unavailable until the provider is configured and CueWeaver is restarted.";
+  }
+  const count = batchMode ? batchMediaCount : 1;
+  return `Ready. Starting will create ${count} background ${count === 1 ? "Job" : "Jobs"}.`;
+}
 const isBatchError = (result: BatchJobResult): result is BatchJobError =>
   "error_code" in result;
 const isBatchSkipped = (result: BatchJobResult): result is BatchJobSkipped =>
@@ -355,6 +446,12 @@ function Translate() {
     ? outputNameParts(selectedMedia, outputFormat)
     : null;
   const outputSuffixError = validateOutputSuffix(outputSuffix);
+  const providerReady =
+    !status.isError && status.data?.translation_provider.ready === true;
+  const runtimeReady =
+    !status.isError &&
+    status.data?.api.ready === true &&
+    status.data?.roots.ready === true;
   const updateTargetLanguage = (value: string) => {
     setTargetLanguage(value);
     if (!suffixEdited.current) setOutputSuffix(value);
@@ -371,14 +468,27 @@ function Translate() {
         selectedCandidate.format !== undefined)) &&
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
-    (outputConflictPolicy === "skip" ||
-      status.data?.translation_provider.ready === true) &&
+    runtimeReady &&
+    (outputConflictPolicy === "skip" || providerReady) &&
     !createJob.isSuccess &&
     !createBatchJobs.isSuccess &&
     !createJob.isPending &&
     !createBatchJobs.isPending;
   const queuedJob =
     createJob.data && !isSkippedJobResult(createJob.data) ? createJob.data : undefined;
+  const nextTranslationStep = getNextTranslationStep({
+    batchMode,
+    selectedMedia,
+    batchMediaCount: batchPaths.length,
+    batchReadyCount: batchItems.length,
+    selectedCandidate,
+    targetLanguage,
+    outputSuffixError,
+    providerReady: outputConflictPolicy === "skip" || providerReady,
+    providerPending: status.isPending,
+    runtimeReady,
+    runtimeError: status.isError,
+  });
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
@@ -403,8 +513,20 @@ function Translate() {
     <>
       <PageHeader
         title="Translate"
-        detail="Prepare a subtitle translation from your mounted media library."
+        detail="Choose a Media item and subtitle, then create a background translation Job."
       />
+      <QuickStart
+        steps={[
+          "Choose a Media item and one subtitle source.",
+          "Choose the language you want the subtitle translated into.",
+          "Start the Job and follow it in Jobs.",
+        ]}
+      />
+      <p className="page-note">
+        CueWeaver runs translations in the background. When a Job completes, the
+        translated subtitle is saved beside the Media item.
+      </p>
+      <TranslationRuntimeNotice />
       <section className="workflow-panel" aria-labelledby="source-title">
         <div className="step-index">01</div>
         <div className="step-content">
@@ -432,6 +554,9 @@ function Translate() {
             />
             Batch mode
           </label>
+          <p className="field-help">
+            Translate several Media items with the same language and output settings.
+          </p>
           <div className="media-discovery-layout">
             <MediaBrowser
               directory={directory}
@@ -502,6 +627,9 @@ function Translate() {
                   >
                     Select unique
                   </Button>
+                  <span className="field-help">
+                    Automatically select Media with exactly one complete subtitle.
+                  </span>
                 </div>
               )}
               {batchMode &&
@@ -654,7 +782,9 @@ function Translate() {
         <div className="step-index">02</div>
         <div className="step-content">
           <h2 id="configure-title">Configure translation</h2>
-          <p>Select an External or Embedded subtitle and enter the target language.</p>
+          <p>
+            Select a subtitle source and choose the language you want to translate into.
+          </p>
           <label htmlFor="common-target-language">
             Common target language
             <Select
@@ -702,7 +832,8 @@ function Translate() {
             </label>
           )}
           <span id="target-language-help" className="field-help">
-            Choose a common language or select Custom language code.
+            Choose a common language or enter a BCP 47 code such as zh-Hans, pt-BR, or
+            ja.
           </span>
           <div className="term-map-field">
             <label htmlFor="term-map-select">Term map for this translation</label>
@@ -749,6 +880,17 @@ function Translate() {
               Follow the Directory default, explicitly use no Term map, or choose a
               specific Term map for this translation.
             </span>
+            <span className="field-help">
+              A Term map is a reusable set of source and target terms that should stay
+              consistent. You can follow the Directory default, choose one, or continue
+              without one.
+            </span>
+            {termMaps.data?.term_maps.length === 0 && (
+              <span className="field-help">
+                No saved Term maps. You can continue without one or{" "}
+                <Link to="/term-maps">create a Term map first</Link>.
+              </span>
+            )}
             {termMaps.isPending && (
               <span className="field-help" role="status">
                 Loading Term maps
@@ -774,6 +916,9 @@ function Translate() {
           </div>
           <details className="advanced-settings">
             <summary>Advanced settings</summary>
+            <p className="field-help">
+              Optional terminology controls. The defaults work for most translations.
+            </p>
             <div className="advanced-fields">
               <label className="checkbox-field">
                 <input
@@ -785,6 +930,9 @@ function Translate() {
                 />
                 Dynamic terminology
               </label>
+              <span className="field-help">
+                Let the translator identify useful terms while it works.
+              </span>
               <label className="checkbox-field">
                 <input
                   type="checkbox"
@@ -795,6 +943,9 @@ function Translate() {
                 />
                 Subtitle terminology filtering
               </label>
+              <span className="field-help">
+                Focus terminology handling on text found in the chosen subtitle.
+              </span>
             </div>
           </details>
           {batchMode
@@ -818,7 +969,8 @@ function Translate() {
                     className="field-help"
                     aria-live="polite"
                   >
-                    Applied to every queued translation.
+                    Applied to every queued translation. The suffix becomes part of each
+                    output filename.
                   </p>
                   <OutputSuffixError error={outputSuffixError} />
                   <OutputConflictPolicy
@@ -845,6 +997,9 @@ function Translate() {
                   />
                   <p id="output-suffix-help" className="field-help" aria-live="polite">
                     Output filename: <strong>{outputParts.name(outputSuffix)}</strong>
+                  </p>
+                  <p className="field-help">
+                    The suffix does not change the target language.
                   </p>
                   <OutputSuffixError error={outputSuffixError} />
                   <OutputConflictPolicy
@@ -888,6 +1043,7 @@ function Translate() {
           />
         ) : (
           <>
+            <p className="next-action">{nextTranslationStep}</p>
             <ProviderState />
             <Button
               disabled={!canSubmit}
@@ -1021,6 +1177,11 @@ function DirectoryTermMapPanel({
           <p id="directory-default-help" className="field-help">
             Applies to Media beneath the current directory unless a Job overrides or
             disables it.
+          </p>
+          <p className="field-help">
+            This Term map is offered automatically for Media in this directory and its
+            child directories. A translation can still choose another Term map or use
+            none.
           </p>
         </div>
         {query.isPending && <span role="status">Loading binding...</span>}
@@ -1427,7 +1588,10 @@ function SubtitleDiscovery({
       <div className="subtitle-heading">
         <div>
           <h3>Choose a subtitle</h3>
-          <p>Sources discovered for {mediaName}.</p>
+          <p>
+            Choose the subtitle text you want to translate. External subtitles sit
+            beside the Media; Embedded subtitles are stored inside it.
+          </p>
         </div>
         <Button type="button" variant="outline" onClick={onClear}>
           Choose another Media
@@ -1454,7 +1618,11 @@ function SubtitleDiscovery({
         {!query.isFetching && query.data && batchMode && candidates.length > 1 && (
           <>
             <EmptyMessage>
-              Multiple subtitles found. Select one candidate to continue.
+              <span>Multiple subtitles found. Select one candidate to continue.</span>
+              <span className="field-help">
+                More than one subtitle is available. Choose the source you want to
+                translate.
+              </span>
             </EmptyMessage>
             {onToggleExpanded && (
               <Button type="button" variant="outline" onClick={onToggleExpanded}>
@@ -1468,9 +1636,18 @@ function SubtitleDiscovery({
           candidates.length === 0 &&
           (candidateFilter || query.data.unsupported_candidates.length === 0) && (
             <EmptyMessage>
-              {candidateFilter
-                ? "No subtitle candidates match this filter."
-                : "No subtitles were found for this Media."}
+              {candidateFilter ? (
+                "No subtitle candidates match this filter."
+              ) : (
+                <>
+                  <span>No subtitles were found for this Media.</span>
+                  <span className="field-help">
+                    No usable subtitles were found. Add an External subtitle such as
+                    Movie.en.srt beside the Media item, or choose Media with an Embedded
+                    text subtitle.
+                  </span>
+                </>
+              )}
             </EmptyMessage>
           )}
         {!query.isFetching &&
@@ -1647,7 +1824,10 @@ function UnsupportedSubtitleEntry({
       </span>
       <span className="subtitle-copy">
         <strong>Unavailable subtitle</strong>
-        <small>{candidate.reason}</small>
+        <small>
+          <span>{candidate.reason}</span>. This is not a supported text subtitle. Choose
+          another source.
+        </small>
       </span>
       <span className="disabled-note">Not selectable</span>
     </div>
@@ -1743,9 +1923,29 @@ function MediaBrowser({
           />
         )}
         {query.data && entries?.length === 0 && (
-          <EmptyMessage>
-            {filter ? "No matching Media or directories." : "This directory is empty."}
-          </EmptyMessage>
+          <div className="browser-message browser-message-stack">
+            {filter ? (
+              <>
+                <span>No matching Media or directories.</span>
+                <span className="field-help">No names match this filter.</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onFilterChange("")}
+                >
+                  Clear filter
+                </Button>
+              </>
+            ) : (
+              <>
+                <span>This directory is empty.</span>
+                <span className="field-help">
+                  This directory contains no supported Media items or subdirectories.
+                  CueWeaver reads Media from the configured Media root.
+                </span>
+              </>
+            )}
+          </div>
         )}
         {entries?.map((entry) => (
           <MediaEntry
@@ -1781,7 +1981,7 @@ function MediaBrowser({
   );
 }
 
-function EmptyMessage({ children }: { children: string }) {
+function EmptyMessage({ children }: { children: ReactNode }) {
   return <div className="browser-message">{children}</div>;
 }
 
@@ -1896,6 +2096,7 @@ function TermMapsPage() {
   const replace = useReplaceTermMap();
   const remove = useDeleteTermMap();
   const [name, setName] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -1907,6 +2108,7 @@ function TermMapsPage() {
   const [loadedName, setLoadedName] = useState("");
   const [replacement, setReplacement] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState("");
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const selectedIdRef = useRef(selectedId);
   const resetRename = rename.reset;
   const resetReplace = replace.reset;
@@ -1995,6 +2197,7 @@ function TermMapsPage() {
       { name, content },
       {
         onSuccess: () => {
+          setSuccessMessage("Term map saved. It is now available on Translate.");
           fileReadGeneration.current += 1;
           setFileLoading(false);
           setName("");
@@ -2022,6 +2225,7 @@ function TermMapsPage() {
       { id: selectedId, name: renameName },
       {
         onSuccess: (summary) => {
+          setSuccessMessage("Term map name saved.");
           if (selectedIdRef.current === selectedId) setRenameName(summary.name);
           if (selectedIdRef.current === selectedId) setLoadedName(summary.name);
         },
@@ -2035,6 +2239,9 @@ function TermMapsPage() {
       { id: selectedId, name: confirmation },
       {
         onSuccess: () => {
+          setSuccessMessage(
+            "Term map deleted. Directory defaults using it were cleared.",
+          );
           if (selectedIdRef.current === selectedId) {
             selectedIdRef.current = null;
             setSelectedId(null);
@@ -2049,34 +2256,64 @@ function TermMapsPage() {
     <>
       <PageHeader
         title="Term maps"
-        detail="Keep reusable terminology precise and available across translations."
+        detail="Create an optional Term map for names and phrases that should stay consistent."
       />
+      <Guidance title="What is a Term map?">
+        A Term map pairs text from the source subtitle with the translation you prefer.
+        Use one for character names, places, brands, or phrases that must stay
+        consistent. You do not need one to translate subtitles.
+      </Guidance>
+      <section className="concept-help" aria-label="How to create a Term map">
+        <strong>How to create one</strong>
+        <ol>
+          <li>List important terms from the source language.</li>
+          <li>Pair each term with the translation you prefer.</li>
+          <li>Paste the JSON or import a .json file below.</li>
+        </ol>
+        <pre>{`{
+  "New York": "Nueva York",
+  "The Captain": "La capitana"
+}`}</pre>
+        <p>
+          The left side is source subtitle text. The right side is the preferred
+          translation.
+        </p>
+      </section>
+      {successMessage && (
+        <Guidance title="Saved" tone="success" role="status">
+          {successMessage}
+        </Guidance>
+      )}
       <div className="term-map-layout">
         <section className="term-map-upload" aria-labelledby="upload-title">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">New resource</p>
-              <h2 id="upload-title">Upload a Term map</h2>
+              <p className="eyebrow">Optional Term map</p>
+              <h2 id="upload-title">Create or import a Term map</h2>
             </div>
             <UploadSimpleIcon size={20} aria-hidden="true" />
           </div>
           <form onSubmit={submit}>
             <label>
-              Name
+              <span>Name</span>
               <Input
+                ref={nameInputRef}
                 required
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Name it by media, season, language pair, and version."
               />
             </label>
+            <span className="field-help">
+              A name that helps you recognize where to use it.
+            </span>
             <div
               className="term-map-dropzone"
               onDragOver={(event) => event.preventDefault()}
               onDrop={handleFileDrop}
             >
               <strong>Import JSON file</strong>
-              <span>Use a .json file as one supported input path.</span>
+              <span>Choose a .json file, or paste JSON below.</span>
               <Button
                 type="button"
                 variant="outline"
@@ -2098,7 +2335,7 @@ function TermMapsPage() {
               {fileName && <span className="field-help">Loaded {fileName}</span>}
             </div>
             <label htmlFor="term-map-content">
-              Paste JSON directly
+              <span>Or paste JSON</span>
               <Textarea
                 id="term-map-content"
                 aria-label="JSON content"
@@ -2119,7 +2356,7 @@ function TermMapsPage() {
               />
             </label>
             <p id="upload-help" className="field-help">
-              Or paste a non-empty object of Source-to-Target strings, up to 1 MiB.
+              Use a non-empty object of source-to-target strings, up to 1 MiB.
             </p>
             {fileLoading ? (
               <p className="upload-status" role="status">
@@ -2146,7 +2383,7 @@ function TermMapsPage() {
             )}
             {create.isPending && (
               <p className="upload-status" role="status">
-                Uploading Term map
+                Saving Term map
               </p>
             )}
             <Button
@@ -2191,7 +2428,17 @@ function TermMapsPage() {
               <div className="term-map-empty">
                 <ListChecksIcon size={24} aria-hidden="true" />
                 <h3>No Term maps yet</h3>
-                <p>Upload a JSON Term map to make consistent terminology reusable.</p>
+                <p>
+                  Create one from names or phrases whose translations should remain
+                  consistent.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => nameInputRef.current?.focus()}
+                >
+                  Create your first Term map
+                </Button>
               </div>
             )}
           </div>
@@ -2206,6 +2453,7 @@ function TermMapsPage() {
                 onClick={() => {
                   selectedIdRef.current = map.id;
                   setSelectedId(map.id);
+                  setSuccessMessage(null);
                   setRenameName(map.name);
                   setLoadedName(map.name);
                   setReplacement(null);
@@ -2324,8 +2572,8 @@ function TermMapsPage() {
                   <table>
                     <thead>
                       <tr>
-                        <th>Source</th>
-                        <th>Target</th>
+                        <th>Source subtitle text</th>
+                        <th>Preferred translation</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2342,7 +2590,12 @@ function TermMapsPage() {
                   )}
                 </div>
                 <div className="term-map-management">
-                  <h3>Replace JSON content</h3>
+                  <h3>Replace all JSON content</h3>
+                  <p className="field-help">
+                    This removes every current mapping and saves the JSON below. It does
+                    not merge the two versions. Existing Jobs keep the Term map used
+                    when they were queued.
+                  </p>
                   <Textarea
                     aria-label="Replacement JSON content"
                     value={replacementText}
@@ -2372,6 +2625,9 @@ function TermMapsPage() {
                         },
                         {
                           onSuccess: () => {
+                            setSuccessMessage(
+                              `Term map replaced with ${replacementValidation.entryCount} mappings.`,
+                            );
                             if (selectedIdRef.current === selected.data.id) {
                               setReplacement(null);
                             }
@@ -2386,8 +2642,9 @@ function TermMapsPage() {
                   <div className="term-map-delete">
                     <h3>Delete Term map</h3>
                     <p>
-                      Enter &quot;{selected.data.name}&quot; to confirm permanent
-                      deletion.
+                      Permanent deletion removes this Term map and clears Directory
+                      defaults that use it. Media, Jobs, and published subtitles are not
+                      deleted. Enter &quot;{selected.data.name}&quot; to confirm.
                     </p>
                     <Input
                       aria-label="Confirm Term map name"

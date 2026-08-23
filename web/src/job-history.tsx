@@ -10,6 +10,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
+import { Guidance } from "./components/ui/guidance";
 import {
   APPROVED_ERROR_CONTEXT_KEYS,
   useClearCompletedJobs,
@@ -104,6 +105,7 @@ export function JobsPage() {
   const recordHealth = productStatus.data?.job_records;
   const recordAttention =
     (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
+  const [clearSuccess, setClearSuccess] = useState<string | null>(null);
 
   const clearCompletedJobs = () => {
     const prompt = `Clear all completed Job history? This removes ${completedCount} completed Job${completedCount === 1 ? "" : "s"} and residual Work data. Media and published output are preserved.`;
@@ -112,6 +114,9 @@ export function JobsPage() {
     }
     clearCompleted.mutate(undefined, {
       onSuccess: (result) => {
+        setClearSuccess(
+          `Cleared ${result.deleted.length} completed ${result.deleted.length === 1 ? "Job" : "Jobs"}. Media and published subtitles were not deleted.`,
+        );
         if (jobId && result.deleted.includes(jobId)) navigateToJobList();
       },
     });
@@ -201,6 +206,11 @@ export function JobsPage() {
               </span>
             </div>
           </div>
+          {clearSuccess && (
+            <Guidance title="History cleared" tone="success" role="status">
+              {clearSuccess}
+            </Guidance>
+          )}
           {clearCompleted.isError && (
             <p className="form-error" role="alert">
               {clearCompleted.error.message}
@@ -250,6 +260,15 @@ export function JobsPage() {
                     ? "Try a different search or clear the filters."
                     : "Submitted translations will appear here with their current state."}
                 </p>
+                {!hasJobFilters(search, status) && (
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => navigate("/translate")}
+                  >
+                    Start a translation
+                  </Button>
+                )}
                 {hasJobFilters(search, status) && (
                   <Button
                     variant="outline"
@@ -365,9 +384,12 @@ function JobList({
   selectedId: string | undefined;
   onSelect: (path: string) => void;
 }) {
+  const uniqueJobs = jobs.filter(
+    (job, index) => jobs.findIndex((candidate) => candidate.id === job.id) === index,
+  );
   return (
     <div className="job-list" role="list" aria-label="Translation Jobs">
-      {jobs.map((job) => (
+      {uniqueJobs.map((job) => (
         <JobListItem
           key={job.id}
           job={job}
@@ -487,6 +509,7 @@ function JobDetail({
         </div>
         <div className="job-detail-context">
           <JobStatus status={job.status} />
+          <p className="job-status-explanation">{jobStatusExplanation(job.status)}</p>
           <div className="job-id-control">
             <code title={job.id}>{job.id}</code>
             <Button
@@ -574,10 +597,20 @@ function JobDetail({
         </p>
       )}
 
+      {retryable && (
+        <Guidance title="Action available" tone="info">
+          Review the error below, fix the provider, Media, subtitle source, or Term map
+          problem, then choose Retry Job.
+        </Guidance>
+      )}
+
       {job.error && <JobError error={job.error} />}
 
       <section className="job-detail-section" aria-labelledby="job-summary-title">
         <h3 id="job-summary-title">Request summary</h3>
+        <p className="section-intro">
+          These are the settings saved when this Job was created.
+        </p>
         <dl className="job-summary">
           <SummaryItem label="Media" value={job.request.media_path} />
           <SummaryItem label="Source" value={sourceSummary(job)} />
@@ -594,7 +627,7 @@ function JobDetail({
             value={termMapPolicy(job.request.term_map_mode)}
           />
           <SummaryItem
-            label="Term map snapshot"
+            label="Term map used when queued"
             value={termMap?.name ?? "Not recorded"}
           />
           <SummaryItem label="Attempt" value={String(job.attempt)} />
@@ -628,7 +661,9 @@ function JobDetail({
       </section>
 
       <section className="job-detail-section" aria-labelledby="job-output-title">
-        <h3 id="job-output-title">Final output</h3>
+        <h3 id="job-output-title">
+          {job.status === "Completed" ? "Saved output" : "Planned output"}
+        </h3>
         <p className="job-final-output">{job.request.output_path}</p>
       </section>
 
@@ -669,10 +704,13 @@ function JobError({ error }: { error: NonNullable<Job["error"]> }) {
       </div>
       <details>
         <summary>Show approved diagnostic context</summary>
+        <p className="field-help">
+          Technical details are provided for troubleshooting.
+        </p>
         <dl className="job-summary">
           <SummaryItem label="Error code" value={error.code} />
-          {context.map(([key, value]) => (
-            <SummaryItem key={key} label={key} value={String(value)} />
+          {context.map(([key, value], index) => (
+            <SummaryItem key={`${key}-${index}`} label={key} value={String(value)} />
           ))}
         </dl>
       </details>
@@ -716,6 +754,22 @@ function StatusHistory({ entries }: { entries: JobStatusHistoryEntry[] }) {
 
 function JobStatus({ status }: { status: Job["status"] }) {
   return <span className={`job-status status-${status.toLowerCase()}`}>{status}</span>;
+}
+
+const JOB_STATUS_EXPLANATIONS: ReadonlyArray<[Job["status"], string]> = [
+  ["Queued", "Waiting for the worker. Only one Job runs at a time."],
+  ["Extracting", "Preparing an Embedded subtitle for translation."],
+  ["Translating", "The translation provider is translating the subtitle."],
+  ["Completed", "The translated subtitle was saved successfully."],
+  ["Failed", "Translation stopped because of an error. Fix the cause, then retry."],
+  ["Interrupted", "CueWeaver stopped before the Job finished. It can be retried."],
+  ["Cancelled", "The Job was cancelled before translation."],
+];
+
+function jobStatusExplanation(status: Job["status"]): string {
+  return (
+    JOB_STATUS_EXPLANATIONS.find(([candidate]) => candidate === status)?.[1] ?? status
+  );
 }
 
 function confirmCancelJob(jobId: string): boolean {

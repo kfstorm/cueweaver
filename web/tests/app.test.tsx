@@ -270,10 +270,11 @@ function statusResponse(
     corrupt: { count: number; location: string };
     unsupported: { count: number; location: string };
   },
+  runtime: { apiReady?: boolean; rootsReady?: boolean } = {},
 ) {
   return jsonResponse({
-    api: { ready: true },
-    roots: { ready: true },
+    api: { ready: runtime.apiReady ?? true },
+    roots: { ready: runtime.rootsReady ?? true },
     translation_provider: providerReady
       ? { ready: true }
       : {
@@ -642,6 +643,11 @@ function renderRoute(
     MediaDiscovery | Error | Promise<MediaDiscovery | Error>
   > = [],
   termMaps: TermMapSummary[] = [],
+  runtime: {
+    apiReady?: boolean;
+    rootsReady?: boolean;
+    statusFailure?: boolean;
+  } = {},
 ) {
   let discoveryCall = 0;
   const fetchMock = vi
@@ -675,7 +681,10 @@ function renderRoute(
       if (String(input) === "/api/term-maps") {
         return Promise.resolve(jsonResponse({ term_maps: [...termMaps] }));
       }
-      return Promise.resolve(statusResponse(providerReady));
+      if (runtime.statusFailure) {
+        return Promise.reject(new Error("status unavailable"));
+      }
+      return Promise.resolve(statusResponse(providerReady, undefined, runtime));
     });
   return renderWithFetch(path, fetchMock);
 }
@@ -806,6 +815,34 @@ describe("product shell", () => {
       ),
     );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("blocks translation when the Media or Work root is unavailable", async () => {
+    renderRoute("/translate", true, undefined, undefined, false, [], [], {
+      rootsReady: false,
+    });
+
+    await selectExternalSubtitle();
+    await enterCustomTargetLanguage("zh-Hans");
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    expect(
+      screen.getByText("Check the Media and Work directory configuration."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the status failure recovery action aligned with the next step", async () => {
+    renderRoute("/translate", true, undefined, undefined, false, [], [], {
+      statusFailure: true,
+    });
+
+    expect(await screen.findByText("CueWeaver is not reachable")).toBeInTheDocument();
+    expect(
+      screen.getByText("CueWeaver status could not be checked. Try again."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("does not offer submission before the workflow exists", async () => {
@@ -3749,7 +3786,22 @@ describe("product shell", () => {
     );
   });
 
-  it("allows Skip submission when the Translation provider is unavailable", async () => {
+  it("blocks all translation submission when the provider is unavailable", async () => {
+    renderRoute("/translate", false);
+
+    await selectExternalSubtitle();
+    await enterCustomTargetLanguage("zh-Hans");
+    fireEvent.click(screen.getByLabelText("Overwrite existing output"));
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Translation is unavailable until the provider is configured and CueWeaver is restarted.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("preserves skip submission when the provider is unavailable", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
@@ -3757,14 +3809,7 @@ describe("product shell", () => {
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
-    await waitFor(() =>
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "/api/jobs",
-        expect.objectContaining({
-          body: expect.stringContaining('"output_conflict_policy":"skip"'),
-        }),
-      ),
-    );
+    await expectQueuedJob({ media_path: "Movie.mkv", subtitle_path: "Movie.en.srt" });
   });
 
   it("keeps the real filename in the accessible Media name", async () => {
