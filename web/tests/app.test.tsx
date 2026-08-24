@@ -820,6 +820,7 @@ describe("product shell", () => {
     const view = renderWithFetch("/translate", fetchMock);
     expect(await screen.findByRole("heading", { name: "翻译" })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("zh-CN");
+    expect(window.localStorage.getItem("cueweaver.ui-locale")).toBeNull();
     expect(screen.getAllByRole("switch", { name: "深色模式" })[0]).toHaveTextContent(
       "关",
     );

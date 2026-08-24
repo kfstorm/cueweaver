@@ -678,9 +678,7 @@ interface I18nContextValue {
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    const locale = detectLocale();
-    setActiveLocale(locale);
-    storeLocale(locale);
+    setActiveLocale(detectLocale());
   }, []);
 
   return <I18nextProvider i18n={i18nInstance}>{children}</I18nextProvider>;
