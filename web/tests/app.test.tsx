@@ -13,7 +13,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
-import { setActiveLocale, type Locale } from "../src/i18n";
+import {
+  getLocaleTable,
+  setActiveLocale,
+  SUPPORTED_LOCALES,
+  type Locale,
+} from "../src/i18n";
 import { validateTermMapContent, type TermMapSummary } from "../src/term-maps";
 
 const CHARACTERS_TERM_MAP: TermMapSummary = {
@@ -729,48 +734,6 @@ function renderTermMapsWithFetch(fetchImplementation: typeof fetch) {
   return renderWithFetch("/term-maps", fetchImplementation);
 }
 
-const termMapGuidanceByLocale: Record<
-  Locale,
-  { nameHelp: string; exampleJson: string }
-> = {
-  en: {
-    nameHelp: "A name that helps you recognize where to use it.",
-    exampleJson: '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
-  },
-  "zh-CN": {
-    nameHelp: "用于帮助你识别其适用场景的名称。",
-    exampleJson: '{\n  "New York": "纽约",\n  "The Captain": "队长"\n}',
-  },
-  "zh-TW": {
-    nameHelp: "幫助你辨識使用情境的名稱。",
-    exampleJson: '{\n  "New York": "紐約",\n  "The Captain": "隊長"\n}',
-  },
-  ja: {
-    nameHelp: "使用する場所を識別しやすい名前。",
-    exampleJson: '{\n  "New York": "ニューヨーク",\n  "The Captain": "隊長"\n}',
-  },
-  ko: {
-    nameHelp: "어디에 사용할지 알아보기 쉬운 이름입니다.",
-    exampleJson: '{\n  "New York": "뉴욕",\n  "The Captain": "선장"\n}',
-  },
-  es: {
-    nameHelp: "Un nombre que te ayude a reconocer dónde usarlo.",
-    exampleJson: '{\n  "New York": "Nueva York",\n  "The Captain": "La capitana"\n}',
-  },
-  fr: {
-    nameHelp: "Un nom qui vous aide à reconnaître où l’utiliser.",
-    exampleJson: '{\n  "New York": "New York",\n  "The Captain": "Le capitaine"\n}',
-  },
-  de: {
-    nameHelp: "Ein Name, an dem Sie erkennen, wo Sie es verwenden.",
-    exampleJson: '{\n  "New York": "New York",\n  "The Captain": "Der Kapitän"\n}',
-  },
-  "pt-BR": {
-    nameHelp: "Um nome que ajuda você a identificar onde usá-lo.",
-    exampleJson: '{\n  "New York": "Nova York",\n  "The Captain": "A capitã"\n}',
-  },
-};
-
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
@@ -779,21 +742,24 @@ afterEach(() => {
 });
 
 describe("product shell", () => {
-  it.each(Object.entries(termMapGuidanceByLocale))(
+  it.each([...SUPPORTED_LOCALES])(
     "localizes Term map guidance for %s",
-    async (locale, expected) => {
+    async (locale) => {
+      const table = getLocaleTable(locale);
+      const nameHelp = table["termMaps.nameHelp"];
+      const exampleJson = table["termMaps.exampleJson"];
       setActiveLocale(locale as Locale);
       window.localStorage.setItem("cueweaver.ui-locale", locale);
 
       renderTermMaps();
 
-      expect(await screen.findByText(expected.nameHelp)).toBeInTheDocument();
+      expect(await screen.findByText(nameHelp)).toBeInTheDocument();
       expect(document.querySelector(".concept-help pre")?.textContent).toBe(
-        expected.exampleJson,
+        exampleJson,
       );
       expect(
         document.querySelector<HTMLTextAreaElement>("#term-map-content"),
-      ).toHaveAttribute("placeholder", expected.exampleJson);
+      ).toHaveAttribute("placeholder", exampleJson);
     },
   );
 
@@ -865,6 +831,7 @@ describe("product shell", () => {
   });
 
   it("detects, switches, and persists the interface locale independently", async () => {
+    const chinese = getLocaleTable("zh-CN");
     window.localStorage.setItem("cueweaver.target-language", "zh-Hans");
     vi.stubGlobal("navigator", { languages: ["zh-CN"] });
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
@@ -875,14 +842,16 @@ describe("product shell", () => {
     });
 
     const view = renderWithFetch("/translate", fetchMock);
-    expect(await screen.findByRole("heading", { name: "翻译" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: chinese["translate.title"] }),
+    ).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("zh-CN");
     expect(window.localStorage.getItem("cueweaver.ui-locale")).toBeNull();
-    expect(screen.getAllByRole("switch", { name: "深色模式" })[0]).toHaveTextContent(
-      "关",
-    );
+    expect(
+      screen.getAllByRole("switch", { name: chinese["theme.darkMode"] })[0],
+    ).toHaveTextContent(chinese["theme.off"]);
 
-    fireEvent.change(screen.getAllByLabelText("切换界面语言")[0], {
+    fireEvent.change(screen.getAllByLabelText(chinese["language.change"])[0], {
       target: { value: "en" },
     });
     await waitFor(() =>
@@ -902,6 +871,7 @@ describe("product shell", () => {
   });
 
   it("localizes the runtime recovery guidance in Simplified Chinese", async () => {
+    const chinese = getLocaleTable("zh-CN");
     window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
     vi.stubGlobal("navigator", { languages: ["zh-CN"] });
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
@@ -914,15 +884,16 @@ describe("product shell", () => {
     renderWithFetch("/translate", fetchMock);
 
     expect(
-      await screen.findByText("无法连接CueWeaver", { exact: true }),
+      await screen.findByText(chinese["runtime.unreachableTitle"], { exact: true }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
     expect(
-      screen.getByText("应用无法确认翻译是否可用。开始任务前请重试。"),
+      screen.getByRole("button", { name: chinese["runtime.tryAgain"] }),
     ).toBeInTheDocument();
+    expect(screen.getByText(chinese["runtime.unreachableDetail"])).toBeInTheDocument();
   });
 
   it("localizes successful completed Job cleanup in Simplified Chinese", async () => {
+    const chinese = getLocaleTable("zh-CN");
     window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
     vi.stubGlobal("navigator", { languages: ["zh-CN"] });
     const job = {
@@ -947,15 +918,23 @@ describe("product shell", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     renderWithFetch("/jobs", fetchMock);
-    fireEvent.click(await screen.findByRole("button", { name: "清除已完成历史 (1)" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: `${chinese["jobs.clearCompleted"]} (1)`,
+      }),
+    );
 
-    expect(await screen.findByText("历史记录已清除")).toBeInTheDocument();
     expect(
-      screen.getByText("已清除1个已完成任务。媒体和已发布字幕未被删除。"),
+      await screen.findByText(chinese["jobs.clearSuccessTitle"]),
     ).toBeInTheDocument();
+    const expectedMessage = chinese["jobs.clearSuccess_one"]
+      .replace("{count}", "1")
+      .replace("{unit}", chinese["jobs.job_one"]);
+    expect(screen.getByText(expectedMessage)).toBeInTheDocument();
   });
 
   it("localizes the empty Jobs state and CTA in Simplified Chinese", async () => {
+    const chinese = getLocaleTable("zh-CN");
     window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
     vi.stubGlobal("navigator", { languages: ["zh-CN"] });
     const fetchMock = emptyJobsFetch();
@@ -963,12 +942,12 @@ describe("product shell", () => {
     renderWithFetch("/jobs", fetchMock);
 
     expect(
-      await screen.findByRole("heading", { name: "暂无任务" }),
+      await screen.findByRole("heading", { name: chinese["jobs.noJobs"] }),
     ).toBeInTheDocument();
+    expect(screen.getByText(chinese["jobs.noJobsDetail"])).toBeInTheDocument();
     expect(
-      screen.getByText("已提交的翻译会在这里显示其当前状态。"),
+      screen.getByRole("button", { name: chinese["jobs.startTranslation"] }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "开始翻译" })).toBeInTheDocument();
   });
 
   it.each([

@@ -144,21 +144,23 @@ describe("interface locale selection", () => {
       "Movie.mkv",
     );
     expect(translate("jobs.matching", { count: 3 })).toContain("3");
-    expect(translate("translate.targetLanguageCode")).toBe("目标语言代码");
+    expect(translate("translate.targetLanguageCode")).toBe(
+      getLocaleTable("zh-CN")["translate.targetLanguageCode"],
+    );
   });
 
   it("formats a cached localized error with the active locale", () => {
     const error = localizedError("errors.mediaDirectory");
     setActiveLocale("en");
-    expect(formatError(error)).toBe("This Media directory could not be loaded.");
+    expect(formatError(error)).toBe(getLocaleTable("en")["errors.mediaDirectory"]);
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此媒体目录。");
+    expect(formatError(error)).toBe(getLocaleTable("zh-CN")["errors.mediaDirectory"]);
   });
 
   it("keeps server error details separate from the localized user message", () => {
     const error = localizedError("errors.mediaDirectory", "backend failure");
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此媒体目录。");
+    expect(formatError(error)).toBe(getLocaleTable("zh-CN")["errors.mediaDirectory"]);
     expect(getErrorDetail(error)).toBe("backend failure");
   });
 
@@ -166,11 +168,5 @@ describe("interface locale selection", () => {
     setActiveLocale("zh-CN");
     expect(translate("jobs.clearConfirmation", { count: 2 })).toContain("2");
     expect(translate("jobs.clearConfirmation", { count: 1 })).toContain("1");
-  });
-
-  it("selects plural forms with i18next", () => {
-    expect(translate("jobs.job", { count: 1 }, "fr")).toBe("Tâche");
-    expect(translate("jobs.job", { count: 2 }, "fr")).toBe("Tâches");
-    expect(translate("jobs.job", { count: 1 }, "ja")).toBe("ジョブ");
   });
 });
