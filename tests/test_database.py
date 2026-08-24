@@ -3,8 +3,11 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import URL, create_engine
 
-from cueweaver.application.database import SqliteDatabase
+from cueweaver.application.database import SqliteDatabase, _migration_config
 from cueweaver.application.jobs.store import SqliteJobRecordStore
 
 
@@ -149,3 +152,63 @@ def test_sqlite_schema_rejects_partial_extraction_state(tmp_path: Path):
                 "0" * 64,
             ),
         )
+
+
+def test_normalized_migration_downgrade_recreates_the_legacy_schema(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "cueweaver.sqlite3"
+    database = SqliteDatabase(database_path)
+    database.initialize()
+    database.close()
+
+    engine = create_engine(URL.create("sqlite+pysqlite", database=str(database_path)))
+    config: Config = _migration_config()
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0001_application_schema")
+
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert tables == {
+            "alembic_version",
+            "app_metadata",
+            "directory_term_map_bindings",
+            "jobs",
+            "term_maps",
+        }
+        assert {row[1] for row in connection.execute("PRAGMA table_info(jobs)")} == {
+            "id",
+            "record_json",
+            "created_at",
+            "queue_sequence",
+        }
+        assert {
+            row[1] for row in connection.execute("PRAGMA table_info(term_maps)")
+        } == {
+            "id",
+            "name",
+            "name_folded",
+            "entry_count",
+            "updated_at",
+            "sequence",
+            "content_json",
+        }
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0001_application_schema",)
+
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+    engine.dispose()
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0002_normalize_relational_storage",)

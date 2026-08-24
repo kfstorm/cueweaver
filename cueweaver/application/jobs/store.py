@@ -247,7 +247,13 @@ def _record_from_row(session: Session, row: JobRow) -> JobRecord:
                 "content_digest": row.extraction_content_digest,
             }
         )
-    return record
+    history = record.get("status_history")
+    migrated, _legacy, future = migrate_record(record)
+    if not isinstance(history, list) or not history or migrated is None or future:
+        raise ServiceError(
+            "job_store_corrupt", "Job database contains an invalid record"
+        )
+    return migrated
 
 
 def _set_error_fields(row: JobRow, error: dict[str, object]) -> None:

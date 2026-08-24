@@ -7,6 +7,8 @@ state during this one-step migration.
 
 from alembic import op
 
+from cueweaver.migrations.legacy_schema import create_legacy_schema
+
 revision = "0002_normalize_relational_storage"
 down_revision = "0001_application_schema"
 branch_labels = None
@@ -223,3 +225,4 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS job_term_map_snapshots")
     op.execute("DROP TABLE IF EXISTS job_status_history")
     op.execute("DROP TABLE IF EXISTS jobs")
+    create_legacy_schema(op.execute, if_not_exists=False)

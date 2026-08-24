@@ -217,6 +217,38 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     assert store.load() == []
 
 
+def test_sqlite_record_store_rejects_a_future_schema_version(tmp_path: Path):
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
+    store.write(persisted_job_record("future-schema"))
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
+        connection.execute(
+            "UPDATE jobs SET schema_version = ? WHERE id = ?",
+            (2, "future-schema"),
+        )
+        connection.commit()
+
+    with pytest.raises(ServiceError) as raised:
+        store.load()
+
+    assert raised.value.error_code == "job_store_corrupt"
+
+
+def test_sqlite_record_store_rejects_a_job_without_status_history(tmp_path: Path):
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
+    store.write(persisted_job_record("missing-history"))
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
+        connection.execute(
+            "DELETE FROM job_status_history WHERE job_id = ?",
+            ("missing-history",),
+        )
+        connection.commit()
+
+    with pytest.raises(ServiceError) as raised:
+        store.load()
+
+    assert raised.value.error_code == "job_store_corrupt"
+
+
 @pytest.mark.parametrize(
     ("operation", "message"),
     [

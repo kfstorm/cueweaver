@@ -232,9 +232,14 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
                     )
                 )
                 session.commit()
-        except (DatabaseOpenError, DatabasePathError, SQLAlchemyError) as error:
+        except (DatabaseOpenError, DatabasePathError) as error:
             raise ServiceError(
                 "directory_term_maps_unavailable",
+                "Directory Term map binding cannot be saved",
+            ) from error
+        except SQLAlchemyError as error:
+            raise ServiceError(
+                "directory_term_map_write_failed",
                 "Directory Term map binding cannot be saved",
             ) from error
 
