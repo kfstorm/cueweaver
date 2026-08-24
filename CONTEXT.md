@@ -64,9 +64,10 @@ _Avoid_: request, task
 The application composition owns the SQLite database at
 `<work-root>/cueweaver.sqlite3` and the Work-root lease at
 `<work-root>/.cueweaver.lease`. SQLAlchemy ORM models and versioned Alembic
-migrations define the database schema. Jobs, Term maps, directory bindings, and
-application metadata are database records; the nested Job record remains a
-validated JSON payload for compatibility. Queued Jobs are
+migrations define a relational schema. Jobs use scalar request and lifecycle
+columns with relational status history and immutable Term map snapshot entries.
+Term maps use metadata and ordered relational entries; directory bindings remain
+relational records. Queued Jobs are
 restored in queue order; Jobs already in Extracting or Translating are marked
 Interrupted. Subtitle output is published through a same-directory temporary
 file and atomic rename/link. A completed Job is persisted before best-effort

@@ -186,9 +186,17 @@ def test_term_maps_are_persisted_in_sqlite_without_json_snapshots(tmp_path: Path
 
     with sqlite3.connect(tmp_path / "work" / "cueweaver.sqlite3") as connection:
         assert connection.execute(
-            "SELECT name, entry_count FROM term_maps WHERE id = ?",
+            "SELECT name FROM term_maps WHERE id = ?",
             (created["id"],),
-        ).fetchone() == ("Characters", 1)
+        ).fetchone() == ("Characters",)
+        assert connection.execute(
+            "SELECT source, source_folded, target FROM term_map_entries "
+            "WHERE term_map_id = ? ORDER BY position",
+            (created["id"],),
+        ).fetchall() == [("a", "a", "b")]
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(term_maps)")}
+        assert "content_json" not in columns
+        assert "entry_count" not in columns
     assert not (tmp_path / "work" / "term-maps").exists()
 
 

@@ -102,6 +102,10 @@ def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
         assert connection.execute(
             "SELECT COUNT(*) FROM directory_term_map_bindings"
         ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM term_map_entries WHERE term_map_id = ?",
+            (term_map["id"],),
+        ).fetchone() == (0,)
     restarted_again = make_client(tmp_path)
     assert restarted_again.get(f"/api/term-maps/{term_map['id']}").status_code == 400
     assert (
