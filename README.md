@@ -58,8 +58,9 @@ The `media` directory is the library shown in CueWeaver. Replace it with an exis
 The selected media directory must be writable so CueWeaver can save translated subtitles. The Work volume must be writable and persistent so CueWeaver can keep job history and resumable work.
 
 Application data is stored in the SQLite database at `cueweaver.sqlite3` in the
-Work root. The database contains Job records, Term maps, directory bindings,
-and application metadata. Schema upgrades run automatically through the
+Work root. The database contains relational Job lifecycle/request fields,
+status history, immutable Job Term map snapshots, Term map metadata and ordered
+entries, and directory bindings. Schema upgrades run automatically through the
 versioned migrations shipped with CueWeaver. The Work root also contains
 `.cueweaver.lease`, which prevents
 multiple CueWeaver processes from using the same Work root. Do not remove the

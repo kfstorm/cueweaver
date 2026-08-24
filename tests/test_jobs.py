@@ -186,39 +186,6 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     assert store.load() == []
 
 
-def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
-    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("corrupt-record", persisted_job_record("corrupt-record"))
-    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
-        connection.execute(
-            "UPDATE jobs SET record_json = ? WHERE id = ?",
-            ("{}", "corrupt-record"),
-        )
-        connection.commit()
-
-    with pytest.raises(ServiceError) as raised:
-        store.load()
-
-    assert raised.value.error_code == "job_store_corrupt"
-
-
-def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
-    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("row-id", persisted_job_record("row-id"))
-    mismatched = persisted_job_record("record-id")
-    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
-        connection.execute(
-            "UPDATE jobs SET record_json = ? WHERE id = ?",
-            (json.dumps(mismatched), "row-id"),
-        )
-        connection.commit()
-
-    with pytest.raises(ServiceError) as raised:
-        store.load()
-
-    assert raised.value.error_code == "job_store_corrupt"
-
-
 @pytest.mark.parametrize(
     ("operation", "message"),
     [
@@ -685,6 +652,48 @@ def test_follow_job_snapshot_survives_restart(tmp_path: Path):
             "id": term_map["id"],
             "name": "Characters",
         }
+
+
+def test_job_snapshot_is_independent_and_job_children_cascade(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    with make_client(media_root, work_root, FakeTranslator()) as client:
+        term_map, queued = create_term_map_job(client)
+        completed = wait_for_status(client, queued["id"], "Completed")
+
+        assert (
+            client.put(
+                f"/api/term-maps/{term_map['id']}",
+                json={"content": {"Captain": "舰长"}},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.request(
+                "DELETE",
+                f"/api/term-maps/{term_map['id']}",
+                json={"name": "Characters"},
+            ).status_code
+            == 200
+        )
+
+        restarted = make_client(media_root, work_root, FakeTranslator())
+        recovered = restarted.get(f"/api/jobs/{queued['id']}").json()
+        assert recovered["request"]["term_map"] == {
+            "id": term_map["id"],
+            "name": "Characters",
+        }
+        assert recovered["request"] == completed["request"]
+
+        assert restarted.delete(f"/api/jobs/{queued['id']}").status_code == 200
+        with sqlite3.connect(work_root / "cueweaver.sqlite3") as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM job_status_history WHERE job_id = ?",
+                (queued["id"],),
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM job_term_map_snapshots WHERE job_id = ?",
+                (queued["id"],),
+            ).fetchone() == (0,)
 
 
 def test_none_job_mode_is_accepted_without_a_term_map(tmp_path: Path):

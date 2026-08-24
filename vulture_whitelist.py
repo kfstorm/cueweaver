@@ -48,6 +48,7 @@ expat.ParserCreate().ExternalEntityRefHandler
 
 # SQLAlchemy and Alembic consume these declarations through reflection.
 TermMapRow.name_folded
+_OrderedTermMapEntryFields.source_folded
 name_folded
 revision
 down_revision

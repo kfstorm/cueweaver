@@ -13,7 +13,7 @@ from alembic.config import Config
 from sqlalchemy import URL, ForeignKey, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
-from sqlalchemy.types import Integer, String, Text
+from sqlalchemy.types import Boolean, Integer, String
 
 
 class Base(DeclarativeBase):
@@ -24,9 +24,67 @@ class JobRow(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    record_json: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+    started_at: Mapped[str | None] = mapped_column(String)
+    finished_at: Mapped[str | None] = mapped_column(String)
+    error_code: Mapped[str | None] = mapped_column(String)
+    error_message: Mapped[str | None] = mapped_column(String)
+    error_field: Mapped[str | None] = mapped_column(String)
+    error_media_path: Mapped[str | None] = mapped_column(String)
+    error_output_path: Mapped[str | None] = mapped_column(String)
+    error_path: Mapped[str | None] = mapped_column(String)
+    error_stream_index: Mapped[int | None] = mapped_column(Integer)
     queue_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    media_path: Mapped[str] = mapped_column(String, nullable=False)
+    subtitle_path: Mapped[str | None] = mapped_column(String)
+    stream_index: Mapped[int | None] = mapped_column(Integer)
+    target_language_code: Mapped[str] = mapped_column(String, nullable=False)
+    term_map_mode: Mapped[str] = mapped_column(String, nullable=False)
+    term_map_id: Mapped[str | None] = mapped_column(String)
+    term_map_name: Mapped[str | None] = mapped_column(String)
+    output_path: Mapped[str] = mapped_column(String, nullable=False)
+    source_format: Mapped[str] = mapped_column(String, nullable=False)
+    dynamic_terminology_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    subtitle_terminology_filter_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    output_suffix: Mapped[str] = mapped_column(String, nullable=False)
+    output_conflict_policy: Mapped[str] = mapped_column(String, nullable=False)
+    extraction_status: Mapped[str | None] = mapped_column(String)
+    extraction_path: Mapped[str | None] = mapped_column(String)
+    extraction_format: Mapped[str | None] = mapped_column(String)
+    extraction_content_digest: Mapped[str | None] = mapped_column(String)
+
+
+class JobStatusHistoryRow(Base):
+    __tablename__ = "job_status_history"
+
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[str] = mapped_column(String, nullable=False)
+    finished_at: Mapped[str | None] = mapped_column(String)
+
+
+class _OrderedTermMapEntryFields:
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    source_folded: Mapped[str] = mapped_column(String, nullable=False)
+    target: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class JobTermMapSnapshotRow(_OrderedTermMapEntryFields, Base):
+    __tablename__ = "job_term_map_snapshots"
+
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class TermMapRow(Base):
@@ -35,10 +93,16 @@ class TermMapRow(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     name_folded: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    entry_count: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class TermMapEntryRow(_OrderedTermMapEntryFields, Base):
+    __tablename__ = "term_map_entries"
+
+    term_map_id: Mapped[str] = mapped_column(
+        ForeignKey("term_maps.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class DirectoryTermMapBindingRow(Base):
@@ -50,13 +114,6 @@ class DirectoryTermMapBindingRow(Base):
         nullable=False,
         index=True,
     )
-
-
-class AppMetadataRow(Base):
-    __tablename__ = "app_metadata"
-
-    key: Mapped[str] = mapped_column(String, primary_key=True)
-    value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class DatabasePathError(OSError):
@@ -149,12 +206,14 @@ def _migration_config() -> Config:
 
 
 __all__ = [
-    "AppMetadataRow",
     "Base",
     "DatabaseOpenError",
     "DatabasePathError",
     "DirectoryTermMapBindingRow",
     "JobRow",
+    "JobStatusHistoryRow",
+    "JobTermMapSnapshotRow",
     "SqliteDatabase",
+    "TermMapEntryRow",
     "TermMapRow",
 ]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -16,6 +15,7 @@ from ..application.database import (
     DatabasePathError,
     DirectoryTermMapBindingRow,
     SqliteDatabase,
+    TermMapEntryRow,
     TermMapRow,
 )
 from ..application.directory_term_maps import DirectoryTermMapStore
@@ -24,12 +24,11 @@ from ..application.term_maps import (
     TermMapDetail,
     TermMapStore,
     TermMapSummary,
-    validate_term_map_content,
 )
 
 
 class SqliteTermMapStore(TermMapStore):
-    """Persist Term maps as ORM rows."""
+    """Persist Term map metadata and ordered entries as relational rows."""
 
     def __init__(self, database: SqliteDatabase) -> None:
         self._database = database
@@ -37,15 +36,17 @@ class SqliteTermMapStore(TermMapStore):
     def list(self) -> list[TermMapSummary]:
         try:
             with self._database.session() as session:
-                rows = session.scalars(
-                    select(TermMapRow).order_by(TermMapRow.sequence, TermMapRow.id)
+                rows = session.execute(
+                    select(TermMapRow, func.count(TermMapEntryRow.position))
+                    .outerjoin(
+                        TermMapEntryRow,
+                        TermMapEntryRow.term_map_id == TermMapRow.id,
+                    )
+                    .group_by(TermMapRow.id)
+                    .order_by(TermMapRow.sequence, TermMapRow.id)
                 ).all()
-                return [_summary(row) for row in rows]
-        except (DatabaseOpenError, DatabasePathError) as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map metadata cannot be read"
-            ) from error
-        except SQLAlchemyError as error:
+                return [_summary(row, count) for row, count in rows]
+        except (DatabaseOpenError, DatabasePathError, SQLAlchemyError) as error:
             raise ServiceError(
                 "term_maps_unavailable", "Term map metadata cannot be read"
             ) from error
@@ -53,26 +54,23 @@ class SqliteTermMapStore(TermMapStore):
     def get(self, term_map_id: str) -> TermMapDetail:
         try:
             with self._database.session() as session:
-                row = session.get(TermMapRow, term_map_id)
-                if row is None:
-                    raise ServiceError(
-                        "term_map_not_found", "Term map does not exist", id=term_map_id
-                    )
-                content = _decode_content(row.content_json)
+                row = _require_row(session, term_map_id)
+                entries = session.scalars(
+                    select(TermMapEntryRow)
+                    .where(TermMapEntryRow.term_map_id == term_map_id)
+                    .order_by(TermMapEntryRow.position)
+                ).all()
+                content = {entry.source: entry.target for entry in entries}
                 return TermMapDetail(
                     id=row.id,
                     name=row.name,
-                    entry_count=row.entry_count,
+                    entry_count=len(entries),
                     updated_at=row.updated_at,
                     content=content,
                 )
         except ServiceError:
             raise
-        except (DatabaseOpenError, DatabasePathError) as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map metadata cannot be read"
-            ) from error
-        except SQLAlchemyError as error:
+        except (DatabaseOpenError, DatabasePathError, SQLAlchemyError) as error:
             raise ServiceError(
                 "term_maps_unavailable", "Term map metadata cannot be read"
             ) from error
@@ -87,14 +85,14 @@ class SqliteTermMapStore(TermMapStore):
                     id=_new_id(),
                     name=name,
                     name_folded=name.casefold(),
-                    entry_count=len(content),
                     updated_at=timestamp,
                     sequence=(sequence if sequence is not None else -1) + 1,
-                    content_json=_encode_content(content),
                 )
                 session.add(row)
+                _replace_entries(session, row.id, content)
+                count = _entry_count(session, row.id)
                 session.commit()
-                return _summary(row)
+                return _summary(row, count)
         except (
             DatabaseOpenError,
             DatabasePathError,
@@ -110,8 +108,9 @@ class SqliteTermMapStore(TermMapStore):
                 row.name = name
                 row.name_folded = name.casefold()
                 row.updated_at = _utc_timestamp()
+                count = _entry_count(session, term_map_id)
                 session.commit()
-                return _summary(row)
+                return _summary(row, int(count or 0))
         except ServiceError:
             raise
         except (
@@ -126,11 +125,11 @@ class SqliteTermMapStore(TermMapStore):
         try:
             with self._database.session() as session:
                 row = _require_row(session, term_map_id)
-                row.entry_count = len(content)
+                _replace_entries(session, term_map_id, content)
                 row.updated_at = _utc_timestamp()
-                row.content_json = _encode_content(content)
+                count = _entry_count(session, term_map_id)
                 session.commit()
-                return _summary(row)
+                return _summary(row, count)
         except ServiceError:
             raise
         except (DatabaseOpenError, DatabasePathError) as error:
@@ -152,12 +151,8 @@ class SqliteTermMapStore(TermMapStore):
                         "Enter the current Term map name to confirm deletion",
                         field="name",
                     )
-                summary = _summary(row)
-                session.execute(
-                    delete(DirectoryTermMapBindingRow).where(
-                        DirectoryTermMapBindingRow.term_map_id == term_map_id
-                    )
-                )
+                count = _entry_count(session, term_map_id)
+                summary = _summary(row, int(count or 0))
                 session.delete(row)
                 session.commit()
                 return summary
@@ -188,12 +183,7 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
                     )
                 ).all()
                 return {row.directory: row.term_map_id for row in rows}
-        except (DatabaseOpenError, DatabasePathError) as error:
-            raise ServiceError(
-                "directory_term_maps_unavailable",
-                "Directory Term map metadata cannot be read",
-            ) from error
-        except SQLAlchemyError as error:
+        except (DatabaseOpenError, DatabasePathError, SQLAlchemyError) as error:
             raise ServiceError(
                 "directory_term_maps_unavailable",
                 "Directory Term map metadata cannot be read",
@@ -245,16 +235,40 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
                     )
                 )
                 session.commit()
-        except (DatabaseOpenError, DatabasePathError) as error:
+        except (DatabaseOpenError, DatabasePathError, SQLAlchemyError) as error:
             raise ServiceError(
                 "directory_term_maps_unavailable",
                 "Directory Term map binding cannot be saved",
             ) from error
-        except SQLAlchemyError as error:
-            raise ServiceError(
-                "directory_term_map_write_failed",
-                "Directory Term map binding cannot be saved",
-            ) from error
+
+
+def _replace_entries(
+    session: Session, term_map_id: str, content: Mapping[str, str]
+) -> None:
+    session.execute(
+        delete(TermMapEntryRow).where(TermMapEntryRow.term_map_id == term_map_id)
+    )
+    for position, (source, target) in enumerate(content.items()):
+        session.add(
+            TermMapEntryRow(
+                term_map_id=term_map_id,
+                position=position,
+                source=source,
+                source_folded=source.casefold(),
+                target=target,
+            )
+        )
+
+
+def _entry_count(session: Session, term_map_id: str) -> int:
+    return int(
+        session.scalar(
+            select(func.count(TermMapEntryRow.position)).where(
+                TermMapEntryRow.term_map_id == term_map_id
+            )
+        )
+        or 0
+    )
 
 
 def _require_row(session: Session, term_map_id: str) -> TermMapRow:
@@ -266,29 +280,13 @@ def _require_row(session: Session, term_map_id: str) -> TermMapRow:
     return row
 
 
-def _summary(row: TermMapRow) -> TermMapSummary:
+def _summary(row: TermMapRow, entry_count: int) -> TermMapSummary:
     return TermMapSummary(
         id=row.id,
         name=row.name,
-        entry_count=row.entry_count,
+        entry_count=entry_count,
         updated_at=row.updated_at,
     )
-
-
-def _decode_content(raw: str) -> dict[str, str]:
-    try:
-        value = json.loads(raw)
-        if not isinstance(value, dict):
-            raise ValueError
-        return validate_term_map_content(value)
-    except (TypeError, ValueError, json.JSONDecodeError, ServiceError) as error:
-        raise ServiceError(
-            "term_map_unreadable", "Term map content is invalid"
-        ) from error
-
-
-def _encode_content(content: Mapping[str, str]) -> str:
-    return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 
 
 def _term_map_name_write_error(error: Exception, name: str) -> ServiceError:
