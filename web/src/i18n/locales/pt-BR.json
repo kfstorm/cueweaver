@@ -406,7 +406,7 @@
   "termMaps.namePlaceholder": "Nomeie-o pela mídia, temporada, par de idiomas e versão.",
   "termMaps.noMaps": "Nenhum mapas de termos ainda",
   "termMaps.noMapsDetail": "Envie um mapas de termos JSON para reutilizar a terminologia em vários tarefas.",
-  "termMaps.deleteConfirmation": "Excluir este mapas de termos? tarefas que já fazem referência a ele manterão a configuração registrada.",
+  "termMaps.deleteConfirmation": "Excluir este mapa de termos? Tarefas que já fazem referência a ele manterão a configuração registrada.",
   "errors.statusUnavailable": "O status do CueWeaver está indisponível.",
   "errors.mediaDirectory": "Não foi possível carregar este diretório de mídia.",
   "errors.subtitleDiscovery": "Não foi possível encontrar legendas.",

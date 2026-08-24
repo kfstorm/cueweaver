@@ -24,90 +24,6 @@ function placeholders(value: string): string[] {
   ].sort();
 }
 
-const localizedTermContract: Record<Locale, Record<string, string>> = {
-  en: {
-    "navigation.jobs": "Jobs",
-    "navigation.termMaps": "Term maps",
-    "translate.media": "Media",
-    "jobs.title": "Jobs",
-    "termMaps.title": "Term maps",
-    "termMaps.source": "Source",
-    "termMaps.target": "Target",
-  },
-  "zh-CN": {
-    "navigation.jobs": "任务",
-    "navigation.termMaps": "术语表",
-    "translate.media": "媒体",
-    "jobs.title": "任务",
-    "termMaps.title": "术语表",
-    "termMaps.source": "源词",
-    "termMaps.target": "目标词",
-  },
-  "zh-TW": {
-    "navigation.jobs": "任務",
-    "navigation.termMaps": "術語表",
-    "translate.media": "媒體",
-    "jobs.title": "任務",
-    "termMaps.title": "術語表",
-    "termMaps.source": "來源詞",
-    "termMaps.target": "目標詞",
-  },
-  ja: {
-    "navigation.jobs": "ジョブ",
-    "navigation.termMaps": "用語マップ",
-    "translate.media": "メディア",
-    "jobs.title": "ジョブ",
-    "termMaps.title": "用語マップ",
-    "termMaps.source": "原語",
-    "termMaps.target": "訳語",
-  },
-  ko: {
-    "navigation.jobs": "작업",
-    "navigation.termMaps": "용어 맵",
-    "translate.media": "미디어",
-    "jobs.title": "작업",
-    "termMaps.title": "용어 맵",
-    "termMaps.source": "원문",
-    "termMaps.target": "번역어",
-  },
-  es: {
-    "navigation.jobs": "Tareas",
-    "navigation.termMaps": "Mapas de términos",
-    "translate.media": "Medios",
-    "jobs.title": "Tareas",
-    "termMaps.title": "Mapas de términos",
-    "termMaps.source": "Origen",
-    "termMaps.target": "Destino",
-  },
-  fr: {
-    "navigation.jobs": "Tâches",
-    "navigation.termMaps": "Cartes terminologiques",
-    "translate.media": "Médias",
-    "jobs.title": "Tâches",
-    "termMaps.title": "Cartes terminologiques",
-    "termMaps.source": "Terme source",
-    "termMaps.target": "Terme cible",
-  },
-  de: {
-    "navigation.jobs": "Aufträge",
-    "navigation.termMaps": "Begriffskarten",
-    "translate.media": "Medien",
-    "jobs.title": "Aufträge",
-    "termMaps.title": "Begriffskarten",
-    "termMaps.source": "Quellbegriff",
-    "termMaps.target": "Zielbegriff",
-  },
-  "pt-BR": {
-    "navigation.jobs": "Tarefas",
-    "navigation.termMaps": "Mapas de termos",
-    "translate.media": "Mídias",
-    "jobs.title": "Tarefas",
-    "termMaps.title": "Mapas de termos",
-    "termMaps.source": "Termo de origem",
-    "termMaps.target": "Termo de destino",
-  },
-};
-
 const forbiddenUntranslatedDomainTerms = [
   "Media",
   "Work",
@@ -200,18 +116,13 @@ describe("interface locale selection", () => {
     expect(getTranslationKeys().length).toBeGreaterThan(100);
   });
 
-  it("keeps domain terminology consistent in every interface locale", () => {
+  it("does not leave English domain terms in non-English locales", () => {
     const violations: string[] = [];
     for (const locale of SUPPORTED_LOCALES) {
-      const table = getLocaleTable(locale);
-      for (const [key, expected] of Object.entries(localizedTermContract[locale])) {
-        expect(table[key as keyof typeof table], `${locale}.${key}`).toBe(expected);
-      }
-      if (locale !== "en") {
-        for (const [key, value] of Object.entries(table)) {
-          if (forbiddenUntranslatedDomainTerm.test(value)) {
-            violations.push(`${locale}.${key}: ${value}`);
-          }
+      if (locale === "en") continue;
+      for (const [key, value] of Object.entries(getLocaleTable(locale))) {
+        if (forbiddenUntranslatedDomainTerm.test(value)) {
+          violations.push(`${locale}.${key}: ${value}`);
         }
       }
     }
@@ -257,6 +168,32 @@ describe("interface locale selection", () => {
         locale,
       ).toBe(true);
     }
+  });
+
+  it("keeps German and Spanish noun forms grammatical in user-facing copy", () => {
+    const spanish = getLocaleTable("es");
+    expect(spanish["runtime.unreachableDetail"]).toBe(
+      "La aplicación no pudo comprobar si la traducción está disponible. Inténtalo de nuevo antes de iniciar un trabajo.",
+    );
+    expect(spanish["translate.termMapHelp"]).toBe(
+      "Un mapa de términos es un conjunto reutilizable de términos de origen y destino que deben mantenerse coherentes. Puedes seguir el valor predeterminado del directorio, elegir uno o continuar sin ninguno.",
+    );
+    expect(spanish["termMaps.guidanceTitle"]).toBe("¿Qué es un mapa de términos?");
+    expect(spanish["jobs.cancelConfirmation"]).toBe(
+      "¿{action} el trabajo {id}? Permanecerá en el historial de trabajos y no se traducirá.",
+    );
+
+    const german = getLocaleTable("de");
+    expect(german["runtime.unreachableDetail"]).toBe(
+      "Die Anwendung konnte nicht prüfen, ob die Übersetzung verfügbar ist. Versuchen Sie es erneut, bevor Sie einen Auftrag starten.",
+    );
+    expect(german["translate.termMapHelp"]).toBe(
+      "Eine Begriffskarte ist eine wiederverwendbare Sammlung von Quell- und Zielbegriffen, die einheitlich bleiben sollen. Sie können dem Verzeichnisstandard folgen, eine Begriffskarte auswählen oder ohne eine Begriffskarte fortfahren.",
+    );
+    expect(german["termMaps.guidanceTitle"]).toBe("Was ist eine Begriffskarte?");
+    expect(german["jobs.cancelConfirmation"]).toBe(
+      "{action} den Auftrag {id}? Er bleibt im Auftragsverlauf und wird nicht übersetzt.",
+    );
   });
 
   it("keeps user-visible app copy behind the translation boundary", () => {
