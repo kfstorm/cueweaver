@@ -1307,7 +1307,7 @@ test("Term map mutations update the browser state", async ({ page }) => {
 
   await page.getByLabel("Replacement JSON content").fill('{"Captain":"队长"}');
   await page.getByRole("button", { name: "Replace content" }).click();
-  await expect(page.getByText(/1 entries/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /People, entry/ })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Captain" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Ship" })).toBeHidden();
 

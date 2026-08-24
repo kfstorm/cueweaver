@@ -37,6 +37,7 @@ import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
 import { Guidance, QuickStart } from "./components/ui/guidance";
 import { Input, Select, Textarea } from "./components/ui/input";
+import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
 import {
   useMediaDirectory,
   useMediaDiscovery,
@@ -63,9 +64,16 @@ import {
   type TermMapMode,
 } from "./jobs";
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
-import { COMMON_TARGET_LANGUAGES } from "./languages";
 import { ThemeProvider } from "./theme-provider";
 import { ThemeToggle } from "./theme-toggle";
+import {
+  formatError,
+  getErrorDetail,
+  I18nProvider,
+  useI18n,
+  type TranslationKey,
+} from "./i18n";
+import { COMMON_TARGET_LANGUAGES, localizedLanguageLabel } from "./languages";
 import {
   useCreateTermMap,
   useDeleteTermMap,
@@ -79,34 +87,78 @@ import {
   validateTermMapContent,
 } from "./term-maps";
 
-const routes: Array<{ label: string; path: string; icon: Icon }> = [
-  { label: "Translate", path: "/translate", icon: TranslateIcon },
-  { label: "Jobs", path: "/jobs", icon: BriefcaseIcon },
-  { label: "Term maps", path: "/term-maps", icon: ListChecksIcon },
+const routes: Array<{
+  labelKey: "navigation.translate" | "navigation.jobs" | "navigation.termMaps";
+  path: string;
+  icon: Icon;
+}> = [
+  { labelKey: "navigation.translate", path: "/translate", icon: TranslateIcon },
+  { labelKey: "navigation.jobs", path: "/jobs", icon: BriefcaseIcon },
+  { labelKey: "navigation.termMaps", path: "/term-maps", icon: ListChecksIcon },
 ];
 const DIRECTORY_TERM_MAP_VALUE = "__directory_default__";
+const TARGET_LANGUAGE_STORAGE_KEY = "cueweaver.target-language";
+
+function readTargetLanguage(): string {
+  try {
+    return window.localStorage.getItem(TARGET_LANGUAGE_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeTargetLanguage(value: string): void {
+  try {
+    window.localStorage.setItem(TARGET_LANGUAGE_STORAGE_KEY, value);
+  } catch {
+    // The translation workflow does not depend on persistence.
+  }
+}
 
 function Navigation({ mobile = false }: { mobile?: boolean }) {
+  const { t } = useI18n();
   return (
     <nav
-      aria-label={mobile ? "Mobile navigation" : "Primary navigation"}
+      aria-label={t(mobile ? "navigation.mobile" : "navigation.primary")}
       className={mobile ? "mobile-nav" : "desktop-nav"}
     >
-      {routes.map(({ label, path, icon: RouteIcon }) => (
+      {routes.map(({ labelKey, path, icon: RouteIcon }) => (
         <NavLink
           key={path}
           to={path}
           className={({ isActive }) => cn("nav-link", isActive && "active")}
         >
           <RouteIcon aria-hidden="true" size={18} weight="regular" />
-          <span>{label}</span>
+          <span>{t(labelKey)}</span>
         </NavLink>
       ))}
+      {mobile && <LanguageSelector />}
     </nav>
   );
 }
 
+function LanguageSelector() {
+  const { locale, setLocale, t, localeOptions } = useI18n();
+  return (
+    <label className="language-selector">
+      <span className="language-selector-label">{t("language.label")}</span>
+      <Select
+        value={locale}
+        aria-label={t("language.change")}
+        onChange={(event) => setLocale(event.target.value as typeof locale)}
+      >
+        {localeOptions.map((option) => (
+          <option key={option.code} value={option.code}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+}
+
 function Shell() {
+  const { t } = useI18n();
   const status = useProductStatus();
   const jobs = useJobs();
   const jobNotifications = useJobNotifications(jobs.data);
@@ -128,19 +180,20 @@ function Shell() {
         <div className="runtime-summary">
           <span className={cn("status-dot", ready && "ready")} />
           {status.isPending
-            ? "Checking runtime"
+            ? t("runtime.checking")
             : status.data && !status.data.translation_provider.ready
-              ? "Provider needs configuration"
+              ? t("runtime.provider")
               : ready
-                ? "Runtime ready"
-                : "Runtime unavailable"}
+                ? t("runtime.ready")
+                : t("runtime.unavailable")}
         </div>
         {recordsNeedAttention && (
           <div className="runtime-warning" role="status">
-            Job records need attention
+            {t("runtime.recordsAttention")}
           </div>
         )}
         <ThemeToggle className="sidebar-theme-toggle" />
+        <LanguageSelector />
       </aside>
       <main className="workspace">
         <Outlet />
@@ -152,38 +205,35 @@ function Shell() {
 }
 
 function TranslationRuntimeNotice() {
+  const { t } = useI18n();
   const status = useProductStatus();
   if (status.isPending) return null;
   if (status.isError) {
     return (
       <Guidance
-        title="CueWeaver is not reachable"
+        title={t("runtime.unreachableTitle")}
         tone="error"
         action={
           <Button type="button" variant="outline" onClick={() => void status.refetch()}>
-            Try again
+            {t("runtime.tryAgain")}
           </Button>
         }
       >
-        The app could not check whether translation is available. Try again before
-        starting a Job.
+        {t("runtime.unreachableDetail")}
       </Guidance>
     );
   }
   if (!status.data.api.ready || !status.data.roots.ready) {
     return (
-      <Guidance title="CueWeaver needs attention" tone="warning">
-        The Media or Work directory is unavailable. Check the configured mounts and
-        permissions before starting a translation. You can still manage saved Term maps
-        and review existing Jobs.
+      <Guidance title={t("runtime.attentionTitle")} tone="warning">
+        {t("runtime.attentionDetail")}
       </Guidance>
     );
   }
   if (!status.data.translation_provider.ready) {
     return (
-      <Guidance title="Translation is not configured" tone="warning">
-        Set <code>PROVIDER</code> and the matching provider environment variables, then
-        restart CueWeaver. You can still browse Media and manage Term maps.
+      <Guidance title={t("runtime.providerNotConfiguredTitle")} tone="warning">
+        {t("runtime.providerNotConfiguredDetail")}
       </Guidance>
     );
   }
@@ -216,28 +266,32 @@ function getNextTranslationStep({
   providerPending,
   runtimeReady,
   runtimeError,
-}: TranslationStepState): string {
-  if (providerPending) return "Checking whether CueWeaver is ready.";
-  if (runtimeError) return "CueWeaver status could not be checked. Try again.";
-  if (!runtimeReady) return "Check the Media and Work directory configuration.";
-  if (!batchMode && selectedMedia === null) return "Next: choose a Media item.";
+  t,
+}: TranslationStepState & { t: ReturnType<typeof useI18n>["t"] }): string {
+  if (providerPending) return t("translate.nextChecking");
+  if (runtimeError) return t("translate.nextRuntimeError");
+  if (!runtimeReady) return t("translate.nextConfigureRoots");
+  if (!batchMode && selectedMedia === null) return t("translate.nextChooseMedia");
   if (batchMode && batchMediaCount === 0) {
-    return "Next: choose one or more Media items.";
+    return t("translate.nextChooseMediaBatch");
   }
   if (batchMode && batchReadyCount < batchMediaCount) {
     const remaining = batchMediaCount - batchReadyCount;
-    return `Next: choose a subtitle for ${remaining} selected Media ${remaining === 1 ? "item" : "items"}.`;
+    return t("translate.nextChooseSubtitleForMedia", { count: remaining });
   }
   if (!batchMode && selectedCandidate === undefined) {
-    return "Next: choose one subtitle source.";
+    return t("translate.nextChooseSubtitle");
   }
-  if (!targetLanguage.trim()) return "Next: choose a target language.";
+  if (!targetLanguage.trim()) return t("translate.nextChooseLanguage");
   if (outputSuffixError) return outputSuffixError;
   if (!providerReady) {
-    return "Translation is unavailable until the provider is configured and CueWeaver is restarted.";
+    return t("translate.nextProviderUnavailable");
   }
   const count = batchMode ? batchMediaCount : 1;
-  return `Ready. Starting will create ${count} background ${count === 1 ? "Job" : "Jobs"}.`;
+  return t("translate.nextReady", {
+    count,
+    unit: t("jobs.job", { count }),
+  });
 }
 const isBatchError = (result: BatchJobResult): result is BatchJobError =>
   "error_code" in result;
@@ -251,9 +305,10 @@ function OutputConflictPolicy({
   value: OutputConflictPolicy;
   onChange: (value: OutputConflictPolicy) => void;
 }) {
+  const { t } = useI18n();
   return (
     <fieldset className="output-conflict-policy">
-      <legend>If the output filename already exists</legend>
+      <legend>{t("translate.outputConflict")}</legend>
       <label>
         <input
           type="radio"
@@ -263,11 +318,11 @@ function OutputConflictPolicy({
           onChange={() => onChange("skip")}
         />
         <span>
-          Skip existing output
+          {t("translate.skipExisting")}
           {value === "skip" && (
             <span className="output-conflict-policy-hint">
               {" "}
-              (No Job if output exists)
+              {t("translate.noJobIfOutputExists")}
             </span>
           )}
         </span>
@@ -280,7 +335,7 @@ function OutputConflictPolicy({
           checked={value === "append-number"}
           onChange={() => onChange("append-number")}
         />
-        Append a number
+        {t("translate.appendNumberRecommended")}
       </label>
       <label>
         <input
@@ -290,7 +345,7 @@ function OutputConflictPolicy({
           checked={value === "overwrite"}
           onChange={() => onChange("overwrite")}
         />
-        Overwrite existing output
+        {t("translate.overwrite")}
       </label>
     </fieldset>
   );
@@ -305,6 +360,7 @@ function OutputSuffixError({ error }: { error: string | null }) {
 }
 
 function Translate() {
+  const { locale, t } = useI18n();
   const queryClient = useQueryClient();
   const createJob = useCreateJob();
   const createBatchJobs = useCreateBatchJobs();
@@ -326,11 +382,9 @@ function Translate() {
   const [mediaBrowserExpanded, setMediaBrowserExpanded] = useState(true);
   const [batchSubtitleFilter, setBatchSubtitleFilter] = useState("");
   const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
-  const [targetLanguage, setTargetLanguage] = useState(
-    () => window.localStorage.getItem("cueweaver.target-language") ?? "",
-  );
+  const [targetLanguage, setTargetLanguage] = useState(readTargetLanguage);
   const [targetLanguageChoice, setTargetLanguageChoice] = useState(() => {
-    const remembered = window.localStorage.getItem("cueweaver.target-language") ?? "";
+    const remembered = readTargetLanguage();
     if (remembered === "") return "";
     return COMMON_TARGET_LANGUAGES.some(({ code }) => code === remembered)
       ? remembered
@@ -445,7 +499,7 @@ function Translate() {
   const outputParts = selectedMedia
     ? outputNameParts(selectedMedia, outputFormat)
     : null;
-  const outputSuffixError = validateOutputSuffix(outputSuffix);
+  const outputSuffixError = validateOutputSuffix(outputSuffix, t);
   const providerReady =
     !status.isError && status.data?.translation_provider.ready === true;
   const runtimeReady =
@@ -488,6 +542,7 @@ function Translate() {
     providerPending: status.isPending,
     runtimeReady,
     runtimeError: status.isError,
+    t,
   });
 
   const resetTranslationWorkflow = () => {
@@ -511,26 +566,21 @@ function Translate() {
 
   return (
     <>
-      <PageHeader
-        title="Translate"
-        detail="Choose a Media item and subtitle, then create a background translation Job."
-      />
+      <PageHeader title={t("translate.title")} detail={t("translate.detail")} />
       <QuickStart
+        title={t("translate.quickStartTitle")}
         steps={[
-          "Choose a Media item and one subtitle source.",
-          "Choose the language you want the subtitle translated into.",
-          "Start the Job and follow it in Jobs.",
+          t("translate.quickStartStepOne"),
+          t("translate.quickStartStepTwo"),
+          t("translate.quickStartStepThree"),
         ]}
       />
-      <p className="page-note">
-        CueWeaver runs translations in the background. When a Job completes, the
-        translated subtitle is saved beside the Media item.
-      </p>
+      <p className="page-note">{t("translate.backgroundNote")}</p>
       <TranslationRuntimeNotice />
       <section className="workflow-panel" aria-labelledby="source-title">
         <div className="step-index">01</div>
         <div className="step-content">
-          <h2 id="source-title">Choose media</h2>
+          <h2 id="source-title">{t("translate.chooseMedia")}</h2>
           <label className="checkbox-field">
             <input
               type="checkbox"
@@ -552,11 +602,9 @@ function Translate() {
                 }
               }}
             />
-            Batch mode
+            {t("translate.batchMode")}
           </label>
-          <p className="field-help">
-            Translate several Media items with the same language and output settings.
-          </p>
+          <p className="field-help">{t("translate.batchDetail")}</p>
           <div className="media-discovery-layout">
             <MediaBrowser
               directory={directory}
@@ -606,17 +654,17 @@ function Translate() {
                       className="mobile-browser-restore"
                       onClick={() => setMediaBrowserExpanded(true)}
                     >
-                      Select another Media
+                      {t("translate.selectAnotherMedia")}
                     </Button>
                   )}
                   <label htmlFor="batch-subtitle-filter">
-                    Search subtitle candidates
+                    {t("translate.searchSubtitles")}
                     <Input
                       id="batch-subtitle-filter"
                       type="search"
                       value={batchSubtitleFilter}
                       onChange={(event) => setBatchSubtitleFilter(event.target.value)}
-                      placeholder="Language, name, path, format, or tags"
+                      placeholder={t("translate.searchMedia")}
                     />
                   </label>
                   <Button
@@ -625,11 +673,9 @@ function Translate() {
                     disabled={batchPaths.length === 0}
                     onClick={selectUniqueBatchCandidates}
                   >
-                    Select unique
+                    {t("translate.selectUnique")}
                   </Button>
-                  <span className="field-help">
-                    Automatically select Media with exactly one complete subtitle.
-                  </span>
+                  <span className="field-help">{t("translate.autoSelectHelp")}</span>
                 </div>
               )}
               {batchMode &&
@@ -765,9 +811,11 @@ function Translate() {
             isBinding={bindDirectoryTermMap.isPending}
             isRemoving={removeDirectoryTermMap.isPending}
             error={
-              bindDirectoryTermMap.error?.message ??
-              removeDirectoryTermMap.error?.message ??
-              null
+              bindDirectoryTermMap.error ? (
+                <LocalizedErrorMessage error={bindDirectoryTermMap.error} />
+              ) : removeDirectoryTermMap.error ? (
+                <LocalizedErrorMessage error={removeDirectoryTermMap.error} />
+              ) : null
             }
           />
         </div>
@@ -781,12 +829,10 @@ function Translate() {
       >
         <div className="step-index">02</div>
         <div className="step-content">
-          <h2 id="configure-title">Configure translation</h2>
-          <p>
-            Select a subtitle source and choose the language you want to translate into.
-          </p>
+          <h2 id="configure-title">{t("translate.configure")}</h2>
+          <p>{t("translate.configureDetail")}</p>
           <label htmlFor="common-target-language">
-            Common target language
+            {t("translate.commonTargetLanguage")}
             <Select
               id="common-target-language"
               value={targetLanguageChoice}
@@ -805,26 +851,26 @@ function Translate() {
               }
             >
               <option value="" disabled>
-                Choose a language
+                {t("translate.chooseLanguage")}
               </option>
-              <option value="custom">Custom language code</option>
+              <option value="custom">{t("translate.customLanguage")}</option>
               {COMMON_TARGET_LANGUAGES.map(({ code, label }) => (
                 <option key={code} value={code}>
-                  {label} — {code}
+                  {localizedLanguageLabel(code, label, locale)} — {code}
                 </option>
               ))}
             </Select>
           </label>
           {customTargetLanguage && (
             <label htmlFor="target-language-code" className="custom-language-field">
-              Target language code
+              {t("translate.targetLanguageCode")}
               <Input
                 id="target-language-code"
                 required
                 aria-describedby="target-language-help"
                 value={targetLanguage}
                 onChange={(event) => updateTargetLanguage(event.target.value)}
-                placeholder="zh-Hans"
+                placeholder={t("translate.targetLanguagePlaceholder")}
                 disabled={
                   batchMode ? batchItems.length === 0 : selectedCandidate === undefined
                 }
@@ -832,15 +878,14 @@ function Translate() {
             </label>
           )}
           <span id="target-language-help" className="field-help">
-            Choose a common language or enter a BCP 47 code such as zh-Hans, pt-BR, or
-            ja.
+            {t("translate.targetLanguageHelp")}
           </span>
           <div className="term-map-field">
-            <label htmlFor="term-map-select">Term map for this translation</label>
+            <label htmlFor="term-map-select">{t("translate.termMap")}</label>
             <Select
               id="term-map-select"
               ref={termMapSelectRef}
-              aria-label="Term map for this translation"
+              aria-label={t("translate.termMap")}
               aria-describedby="term-map-policy-help"
               value={
                 termMapMode === "follow"
@@ -866,10 +911,10 @@ function Translate() {
             >
               <option value={DIRECTORY_TERM_MAP_VALUE}>
                 {directoryTermMap.data?.effective
-                  ? `Follow Directory default (${directoryTermMap.data.effective.name})`
-                  : "Follow Directory default (none)"}
+                  ? `${t("translate.directoryDefault")} (${directoryTermMap.data.effective.name})`
+                  : `${t("translate.directoryDefault")} (${t("jobs.none")})`}
               </option>
-              <option value="">No Term map for this Job</option>
+              <option value="">{t("translate.noTermMapJob")}</option>
               {(termMaps.data?.term_maps ?? []).map((termMap) => (
                 <option key={termMap.id} value={termMap.id}>
                   {termMap.name}
@@ -877,30 +922,25 @@ function Translate() {
               ))}
             </Select>
             <span id="term-map-policy-help" className="field-help">
-              Follow the Directory default, explicitly use no Term map, or choose a
-              specific Term map for this translation.
+              {t("translate.termMapPolicyHelp")}
             </span>
-            <span className="field-help">
-              A Term map is a reusable set of source and target terms that should stay
-              consistent. You can follow the Directory default, choose one, or continue
-              without one.
-            </span>
+            <span className="field-help">{t("translate.termMapHelp")}</span>
             {termMaps.data?.term_maps.length === 0 && (
               <span className="field-help">
-                No saved Term maps. You can continue without one or{" "}
-                <Link to="/term-maps">create a Term map first</Link>.
+                {t("translate.noTermMapsHelp")}{" "}
+                <Link to="/term-maps">{t("termMaps.createFirst")}</Link>.
               </span>
             )}
             {termMaps.isPending && (
               <span className="field-help" role="status">
-                Loading Term maps
+                {t("translate.loadingTermMaps")}
               </span>
             )}
             {termMaps.isError && (
               <div className="field-recovery">
-                <span className="form-error" role="alert">
-                  {termMaps.error.message}
-                </span>
+                <div className="form-error" role="alert">
+                  <LocalizedErrorMessage error={termMaps.error} />
+                </div>
                 <Button
                   type="button"
                   variant="outline"
@@ -909,16 +949,14 @@ function Translate() {
                     void termMaps.refetch();
                   }}
                 >
-                  Try again
+                  {t("common.tryAgain")}
                 </Button>
               </div>
             )}
           </div>
           <details className="advanced-settings">
-            <summary>Advanced settings</summary>
-            <p className="field-help">
-              Optional terminology controls. The defaults work for most translations.
-            </p>
+            <summary>{t("translate.advanced")}</summary>
+            <p className="field-help">{t("translate.advancedHelp")}</p>
             <div className="advanced-fields">
               <label className="checkbox-field">
                 <input
@@ -928,10 +966,10 @@ function Translate() {
                     setDynamicTerminologyEnabled(event.target.checked)
                   }
                 />
-                Dynamic terminology
+                {t("translate.dynamicTerminology")}
               </label>
               <span className="field-help">
-                Let the translator identify useful terms while it works.
+                {t("translate.dynamicTerminologyHelp")}
               </span>
               <label className="checkbox-field">
                 <input
@@ -941,19 +979,21 @@ function Translate() {
                     setSubtitleTerminologyFilterEnabled(event.target.checked)
                   }
                 />
-                Subtitle terminology filtering
+                {t("translate.subtitleTerminology")}
               </label>
               <span className="field-help">
-                Focus terminology handling on text found in the chosen subtitle.
+                {t("translate.subtitleTerminologyHelp")}
               </span>
             </div>
           </details>
           {batchMode
             ? batchPaths.length > 0 && (
                 <div className="output-name-section">
-                  <span className="field-label">Shared output settings</span>
+                  <span className="field-label">
+                    {t("translate.sharedOutputSettings")}
+                  </span>
                   <label htmlFor="batch-output-suffix" className="field-label">
-                    Subtitle suffix
+                    {t("translate.outputSuffix")}
                   </label>
                   <Input
                     id="batch-output-suffix"
@@ -969,8 +1009,7 @@ function Translate() {
                     className="field-help"
                     aria-live="polite"
                   >
-                    Applied to every queued translation. The suffix becomes part of each
-                    output filename.
+                    {t("translate.appliedEvery")} {t("translate.appliedEveryDetail")}
                   </p>
                   <OutputSuffixError error={outputSuffixError} />
                   <OutputConflictPolicy
@@ -984,7 +1023,7 @@ function Translate() {
               outputParts && (
                 <div className="output-name-section">
                   <label htmlFor="output-suffix" className="field-label">
-                    Subtitle suffix
+                    {t("translate.outputSuffix")}
                   </label>
                   <Input
                     id="output-suffix"
@@ -996,11 +1035,10 @@ function Translate() {
                     }}
                   />
                   <p id="output-suffix-help" className="field-help" aria-live="polite">
-                    Output filename: <strong>{outputParts.name(outputSuffix)}</strong>
+                    {t("translate.outputFilename")}{" "}
+                    <strong>{outputParts.name(outputSuffix)}</strong>
                   </p>
-                  <p className="field-help">
-                    The suffix does not change the target language.
-                  </p>
+                  <p className="field-help">{t("translate.suffixTargetHelp")}</p>
                   <OutputSuffixError error={outputSuffixError} />
                   <OutputConflictPolicy
                     value={outputConflictPolicy}
@@ -1062,11 +1100,7 @@ function Translate() {
                         subtitleTerminologyFilterEnabled,
                     },
                     {
-                      onSuccess: () =>
-                        window.localStorage.setItem(
-                          "cueweaver.target-language",
-                          targetLanguage,
-                        ),
+                      onSuccess: () => storeTargetLanguage(targetLanguage),
                     },
                   );
                 } else if (
@@ -1095,34 +1129,29 @@ function Translate() {
                       subtitleTerminologyFilterEnabled,
                   };
                   createJob.mutate(request, {
-                    onSuccess: () => {
-                      window.localStorage.setItem(
-                        "cueweaver.target-language",
-                        targetLanguage,
-                      );
-                    },
+                    onSuccess: () => storeTargetLanguage(targetLanguage),
                   });
                 }
               }}
             >
               {createJob.isPending || createBatchJobs.isPending
-                ? "Queueing..."
+                ? t("translate.queueing")
                 : batchMode
-                  ? "Queue selected translations"
-                  : "Start translation"}
+                  ? t("translate.queueSelected")
+                  : t("translate.start")}
             </Button>
           </>
         )}
       </div>
       {createJob.isError && (
-        <p className="form-error" role="alert">
-          {createJob.error.message}
-        </p>
+        <div className="form-error" role="alert">
+          <LocalizedErrorMessage error={createJob.error} />
+        </div>
       )}
       {createBatchJobs.isError && (
-        <p className="form-error" role="alert">
-          {createBatchJobs.error.message}
-        </p>
+        <div className="form-error" role="alert">
+          <LocalizedErrorMessage error={createBatchJobs.error} />
+        </div>
       )}
     </>
   );
@@ -1153,8 +1182,9 @@ function DirectoryTermMapPanel({
   onRetry: () => void;
   isBinding: boolean;
   isRemoving: boolean;
-  error: string | null;
+  error: ReactNode;
 }) {
+  const { t } = useI18n();
   const local = query.data?.local;
   const effective = query.data?.effective;
   const focusAfterRetry = useRef(false);
@@ -1168,29 +1198,24 @@ function DirectoryTermMapPanel({
     <section className="directory-term-map" aria-labelledby="directory-term-map-title">
       <div className="directory-term-map-heading">
         <div>
-          <h3 id="directory-term-map-title">Directory default</h3>
+          <h3 id="directory-term-map-title">{t("translate.directoryDefault")}</h3>
           <p className="field-help">
             {directory
-              ? `Current directory: ${directory}`
-              : "Current directory: Media root"}
+              ? t("translate.currentDirectory", { name: directory })
+              : t("translate.currentDirectoryRoot")}
           </p>
           <p id="directory-default-help" className="field-help">
-            Applies to Media beneath the current directory unless a Job overrides or
-            disables it.
+            {t("translate.directoryDefaultHelp")}
           </p>
-          <p className="field-help">
-            This Term map is offered automatically for Media in this directory and its
-            child directories. A translation can still choose another Term map or use
-            none.
-          </p>
+          <p className="field-help">{t("translate.directoryDefaultScopeHelp")}</p>
         </div>
-        {query.isPending && <span role="status">Loading binding...</span>}
+        {query.isPending && <span role="status">{t("common.loading")}</span>}
       </div>
       {query.isError ? (
         <div className="field-recovery">
-          <p className="form-error" role="alert">
-            {query.error.message}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={query.error} />
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -1199,23 +1224,25 @@ function DirectoryTermMapPanel({
               void query.refetch();
             }}
           >
-            Try again
+            {t("common.tryAgain")}
           </Button>
         </div>
       ) : (
         <>
           <dl className="directory-term-map-state">
             <div>
-              <dt>Local binding</dt>
-              <dd>{local?.name ?? "None"}</dd>
+              <dt>{t("translate.localBinding")}</dt>
+              <dd>{local?.name ?? t("jobs.none")}</dd>
             </div>
             <div>
-              <dt>Effective Term map</dt>
+              <dt>{t("translate.effectiveTermMap")}</dt>
               <dd>
-                {effective?.name ?? "No default"}
+                {effective?.name ?? t("translate.noDefault")}
                 {effective && !local && query.data?.source_directory !== null && (
                   <span className="field-help">
-                    {`Inherited from ${query.data?.source_directory || "Media root"}`}
+                    {t("translate.inheritedFrom", {
+                      name: query.data?.source_directory || t("translate.mediaRoot"),
+                    })}
                   </span>
                 )}
               </dd>
@@ -1224,7 +1251,7 @@ function DirectoryTermMapPanel({
           <div className="directory-term-map-controls">
             <Select
               ref={selectRef}
-              aria-label="Directory default"
+              aria-label={t("translate.directoryDefault")}
               aria-describedby="directory-default-help"
               value={selectedId}
               onChange={(event) => onSelectedIdChange(event.target.value)}
@@ -1232,10 +1259,10 @@ function DirectoryTermMapPanel({
                 query.isPending || termMaps.length === 0 || isBinding || isRemoving
               }
             >
-              <option value="">Choose a Term map</option>
+              <option value="">{t("translate.chooseTermMap")}</option>
               {termMaps.map((termMap) => (
                 <option key={termMap.id} value={termMap.id}>
-                  Directory: {termMap.name}
+                  {t("translate.directoryOption", { name: termMap.name })}
                 </option>
               ))}
             </Select>
@@ -1246,10 +1273,10 @@ function DirectoryTermMapPanel({
               onClick={onBind}
             >
               {isBinding
-                ? "Binding..."
+                ? t("translate.binding")
                 : local
-                  ? "Replace local binding"
-                  : "Bind Term map"}
+                  ? t("translate.replaceLocalBinding")
+                  : t("translate.bindTermMap")}
             </Button>
             {local && (
               <Button
@@ -1258,17 +1285,19 @@ function DirectoryTermMapPanel({
                 disabled={isBinding || isRemoving}
                 onClick={onRemove}
               >
-                {isRemoving ? "Removing..." : "Remove local binding"}
+                {isRemoving
+                  ? t("translate.removing")
+                  : t("translate.removeLocalBinding")}
               </Button>
             )}
           </div>
           {error && (
             <div className="field-recovery">
-              <p className="form-error" role="alert">
+              <div className="form-error" role="alert">
                 {error}
-              </p>
+              </div>
               <Button type="button" variant="outline" onClick={onRetry}>
-                Try again
+                {t("common.tryAgain")}
               </Button>
             </div>
           )}
@@ -1287,38 +1316,39 @@ function QueueSuccess({
   onViewJob: () => void;
   onTranslateAnother: () => void;
 }) {
-  const media = job?.request?.media_path ?? "Media";
+  const { t } = useI18n();
+  const media = job?.request?.media_path ?? t("translate.mediaSummary");
   const targetLanguage =
-    job?.request?.target_language_code ?? "Target language unavailable";
+    job?.request?.target_language_code ?? t("translate.targetLanguageUnavailable");
 
   return (
     <section className="queue-success" aria-labelledby="queue-success-title">
       <div className="queue-success-heading" role="status">
         <CheckCircleIcon size={22} weight="fill" aria-hidden="true" />
         <div>
-          <p className="eyebrow">Queued Job</p>
-          <h2 id="queue-success-title">Translation queued</h2>
-          <p>The translation is ready to run in the queue.</p>
+          <p className="eyebrow">{t("translate.queuedEyebrow")}</p>
+          <h2 id="queue-success-title">{t("translate.queued")}</h2>
+          <p>{t("translate.queuedDetail")}</p>
         </div>
       </div>
       <dl className="queue-success-summary">
         <div>
-          <dt>Media</dt>
+          <dt>{t("translate.mediaSummary")}</dt>
           <dd title={media}>{media}</dd>
         </div>
         <div>
-          <dt>Target language</dt>
+          <dt>{t("translate.targetLanguage")}</dt>
           <dd>{targetLanguage}</dd>
         </div>
       </dl>
       <div className="queue-success-actions">
         {job?.id && (
           <Button type="button" onClick={onViewJob}>
-            View Job
+            {t("translate.viewJob")}
           </Button>
         )}
         <Button type="button" variant="outline" onClick={onTranslateAnother}>
-          Translate another
+          {t("translate.translateAnother")}
         </Button>
       </div>
     </section>
@@ -1332,29 +1362,34 @@ function SkipSuccess({
   result: SkippedJobResult;
   onTranslateAnother: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <section className="queue-success" aria-labelledby="skip-success-title">
       <div className="queue-success-heading" role="status">
         <CheckCircleIcon size={22} weight="fill" aria-hidden="true" />
         <div>
-          <p className="eyebrow">Translation skipped</p>
-          <h2 id="skip-success-title">Output already exists</h2>
-          <p>{result.reason}. No Job was created.</p>
+          <p className="eyebrow">{t("translate.skipped")}</p>
+          <h2 id="skip-success-title">{t("translate.outputExists")}</h2>
+          <p>{t("translate.noJobCreated")}</p>
+          <details>
+            <summary>{t("translate.showErrorDetails")}</summary>
+            <p className="field-help">{result.reason}</p>
+          </details>
         </div>
       </div>
       <dl className="queue-success-summary">
         <div>
-          <dt>Media</dt>
+          <dt>{t("translate.mediaSummary")}</dt>
           <dd title={result.media_path}>{result.media_path}</dd>
         </div>
         <div>
-          <dt>Output</dt>
+          <dt>{t("jobs.output")}</dt>
           <dd title={result.output_path}>{result.output_path}</dd>
         </div>
       </dl>
       <div className="queue-success-actions">
         <Button type="button" variant="outline" onClick={onTranslateAnother}>
-          Translate another
+          {t("translate.translateAnother")}
         </Button>
       </div>
     </section>
@@ -1372,6 +1407,7 @@ function BatchQueueResults({
   onViewJob: (jobId: string) => void;
   onTranslateAnother: () => void;
 }) {
+  const { t } = useI18n();
   const queuedCount = results.filter(
     (result) => !isBatchError(result) && !isBatchSkipped(result),
   ).length;
@@ -1386,19 +1422,36 @@ function BatchQueueResults({
       <div className="queue-success-heading" role="status">
         <CheckCircleIcon size={22} weight="fill" aria-hidden="true" />
         <div>
-          <p className="eyebrow">Batch submission</p>
-          <h2 id="batch-results-title">Batch results</h2>
+          <p className="eyebrow">{t("translate.batchResults")}</p>
+          <h2 id="batch-results-title">{t("translate.batchResults")}</h2>
           <p>
-            {queuedCount} {queuedCount === 1 ? "Job" : "Jobs"} queued
-            {skippedCount > 0 &&
-              ` · ${skippedCount} ${skippedCount === 1 ? "item" : "items"} skipped`}
-            {failedCount > 0 &&
-              ` · ${failedCount} ${failedCount === 1 ? "error" : "errors"}`}
-            .
+            {t("translate.batchSummary", {
+              queued: t("translate.queuedCount", {
+                count: queuedCount,
+                unit: t("translate.job", { count: queuedCount }),
+              }),
+              skipped:
+                skippedCount > 0
+                  ? ` · ${t("translate.skippedCount", {
+                      count: skippedCount,
+                      unit: t("translate.batchItem", { count: skippedCount }),
+                    })}`
+                  : "",
+              errors:
+                failedCount > 0
+                  ? ` · ${t("translate.errorCount", {
+                      count: failedCount,
+                      unit: t("translate.batchError", { count: failedCount }),
+                    })}`
+                  : "",
+            })}
           </p>
         </div>
       </div>
-      <div className="batch-result-list" aria-label="Batch submission results">
+      <div
+        className="batch-result-list"
+        aria-label={t("translate.batchSubmissionResults")}
+      >
         {mediaPaths.map((mediaPath, index) => {
           const result = results[index];
           return (
@@ -1413,7 +1466,7 @@ function BatchQueueResults({
       </div>
       <div className="queue-success-actions">
         <Button type="button" variant="outline" onClick={onTranslateAnother}>
-          Translate another
+          {t("translate.translateAnother")}
         </Button>
       </div>
     </section>
@@ -1429,13 +1482,14 @@ function BatchResultRow({
   result: BatchJobResult | undefined;
   onViewJob: (jobId: string) => void;
 }) {
+  const { t } = useI18n();
   const media = mediaPath.split("/").pop() ?? mediaPath;
   if (result === undefined) {
     return (
       <div
         className="batch-result-row"
         role="group"
-        aria-label={`${media} batch result`}
+        aria-label={`${media} ${t("translate.batchResult")}`}
       >
         {media}
       </div>
@@ -1447,12 +1501,20 @@ function BatchResultRow({
         <div
           className="batch-result-row batch-result-skipped"
           role="group"
-          aria-label={`${media} batch result`}
+          aria-label={`${media} ${t("translate.batchResult")}`}
         >
           <div>
             <strong>{media}</strong>
-            <span>Skipped: {result.reason}</span>
-            <small>Existing output: {result.output_path}</small>
+            <span>{t("translate.skipped")}</span>
+            <details>
+              <summary>{t("translate.showErrorDetails")}</summary>
+              <p className="field-help">
+                {t("translate.skippedReason", { reason: result.reason })}
+              </p>
+              <small>
+                {t("translate.existingOutput", { path: result.output_path })}
+              </small>
+            </details>
           </div>
         </div>
       );
@@ -1461,14 +1523,14 @@ function BatchResultRow({
       <div
         className="batch-result-row batch-result-success"
         role="group"
-        aria-label={`${media} batch result`}
+        aria-label={`${media} ${t("translate.batchResult")}`}
       >
         <div>
           <strong>{media}</strong>
-          <span>Queued as Job {result.id}</span>
+          <span>{t("translate.queuedAsJob", { id: result.id })}</span>
         </div>
         <Button type="button" variant="outline" onClick={() => onViewJob(result.id)}>
-          View Job
+          {t("translate.viewJob")}
         </Button>
       </div>
     );
@@ -1480,15 +1542,16 @@ function BatchResultRow({
     <div
       className="batch-result-row batch-result-error"
       role="group"
-      aria-label={`${media} batch result`}
+      aria-label={`${media} ${t("translate.batchResult")}`}
     >
       <div>
         <strong>{media}</strong>
-        <span>{result.message}</span>
+        <span>{t("translate.noJobCreated")}</span>
         <details>
-          <summary>Show error details</summary>
+          <summary>{t("translate.showErrorDetails")}</summary>
+          <p className="field-help">{result.message}</p>
           <dl className="job-summary">
-            <SummaryItem label="Error code" value={result.error_code} />
+            <SummaryItem label={t("translate.errorCode")} value={result.error_code} />
             {context.map(([key, value]) => (
               <SummaryItem key={key} label={key} value={String(value)} />
             ))}
@@ -1522,8 +1585,11 @@ function sameTermMapContent(
   );
 }
 
-function validateOutputSuffix(value: string): string | null {
-  if (!value) return "Subtitle suffix must be non-empty.";
+function validateOutputSuffix(
+  value: string,
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  if (!value) return t("translate.suffixRequired");
   const reserved = new Set([
     "con",
     "prn",
@@ -1533,12 +1599,12 @@ function validateOutputSuffix(value: string): string | null {
     ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
   ]);
   for (const segment of value.split(".")) {
-    if (!segment) return "Subtitle suffix segments cannot be empty.";
+    if (!segment) return t("translate.suffixSegmentRequired");
     if (/\s$/u.test(segment)) {
-      return "Subtitle suffix segments cannot end in a space.";
+      return t("translate.suffixTrailingSpace");
     }
     if (reserved.has(segment.toLocaleLowerCase())) {
-      return "Subtitle suffix contains a reserved filename segment.";
+      return t("translate.suffixReserved");
     }
     for (const character of segment) {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -1548,7 +1614,7 @@ function validateOutputSuffix(value: string): string | null {
         /\p{C}/u.test(character) ||
         !/[\p{L}\p{N}\s_-]/u.test(character)
       ) {
-        return "Subtitle suffix contains an unsafe character.";
+        return t("translate.suffixUnsafe");
       }
     }
   }
@@ -1576,6 +1642,7 @@ function SubtitleDiscovery({
   expanded?: boolean;
   onToggleExpanded?: () => void;
 }) {
+  const { t } = useI18n();
   const candidates = filteredCandidates(query.data?.candidates ?? [], candidateFilter);
   const visibleCandidates =
     batchMode && candidates.length > 1 && !expanded ? [] : candidates;
@@ -1583,18 +1650,15 @@ function SubtitleDiscovery({
   return (
     <section
       className="subtitle-discovery"
-      aria-label={`Subtitle selection for ${mediaName}`}
+      aria-label={t("translate.subtitleSelectionFor", { name: mediaName })}
     >
       <div className="subtitle-heading">
         <div>
-          <h3>Choose a subtitle</h3>
-          <p>
-            Choose the subtitle text you want to translate. External subtitles sit
-            beside the Media; Embedded subtitles are stored inside it.
-          </p>
+          <h3>{t("translate.chooseSubtitle")}</h3>
+          <p>{t("translate.sourceDiscovered", { name: mediaName })}</p>
         </div>
         <Button type="button" variant="outline" onClick={onClear}>
-          Choose another Media
+          {t("translate.chooseAnotherMedia")}
         </Button>
       </div>
       <div className="subtitle-results" aria-live="polite">
@@ -1602,7 +1666,7 @@ function SubtitleDiscovery({
           <div
             role="status"
             className="discovery-skeleton"
-            aria-label="Loading subtitles"
+            aria-label={t("translate.loadingSubtitles")}
           >
             <span />
             <span />
@@ -1610,23 +1674,17 @@ function SubtitleDiscovery({
           </div>
         )}
         {query.isError && (
-          <QueryErrorMessage
-            message={query.error.message}
-            onRetry={() => void query.refetch()}
-          />
+          <QueryErrorState error={query.error} onRetry={() => void query.refetch()} />
         )}
         {!query.isFetching && query.data && batchMode && candidates.length > 1 && (
           <>
             <EmptyMessage>
-              <span>Multiple subtitles found. Select one candidate to continue.</span>
-              <span className="field-help">
-                More than one subtitle is available. Choose the source you want to
-                translate.
-              </span>
+              <span>{t("translate.multipleSubtitles")}</span>
+              <span className="field-help">{t("translate.multipleSubtitlesHelp")}</span>
             </EmptyMessage>
             {onToggleExpanded && (
               <Button type="button" variant="outline" onClick={onToggleExpanded}>
-                Resolve candidates
+                {t("translate.resolveCandidates")}
               </Button>
             )}
           </>
@@ -1637,15 +1695,11 @@ function SubtitleDiscovery({
           (candidateFilter || query.data.unsupported_candidates.length === 0) && (
             <EmptyMessage>
               {candidateFilter ? (
-                "No subtitle candidates match this filter."
+                t("translate.noCandidateMatch")
               ) : (
                 <>
-                  <span>No subtitles were found for this Media.</span>
-                  <span className="field-help">
-                    No usable subtitles were found. Add an External subtitle such as
-                    Movie.en.srt beside the Media item, or choose Media with an Embedded
-                    text subtitle.
-                  </span>
+                  <span>{t("translate.noSubtitles")}</span>
+                  <span className="field-help">{t("translate.noSubtitlesHelp")}</span>
                 </>
               )}
             </EmptyMessage>
@@ -1717,24 +1771,37 @@ function isCompleteCandidate(
   );
 }
 
-const SUBTITLE_DISPOSITION_LABELS: Record<string, string> = {
-  default: "Default",
-  forced: "Forced",
-  hearing_impaired: "Hearing impaired",
-  visual_impaired: "Visually impaired",
-  comment: "Commentary",
-  lyrics: "Lyrics",
-  karaoke: "Karaoke",
-  original: "Original",
-  dub: "Dubbed",
-  clean_effects: "Clean effects",
+const SUBTITLE_DISPOSITION_LABELS: Record<string, TranslationKey> = {
+  default: "translate.disposition.default",
+  forced: "translate.disposition.forced",
+  hearing_impaired: "translate.disposition.hearingImpaired",
+  visual_impaired: "translate.disposition.visualImpaired",
+  comment: "translate.disposition.commentary",
+  lyrics: "translate.disposition.lyrics",
+  karaoke: "translate.disposition.karaoke",
+  original: "translate.disposition.original",
+  dub: "translate.disposition.dubbed",
+  clean_effects: "translate.disposition.cleanEffects",
 };
 
-function subtitleLabel(candidate: SubtitleCandidate) {
+function subtitleLabel(
+  candidate: SubtitleCandidate,
+  t: ReturnType<typeof useI18n>["t"],
+) {
   const tags = candidate.tags ?? {};
   return (
-    [tags.language, tags.title].filter(Boolean).join(" / ") || "Metadata unavailable"
+    [tags.language, tags.title].filter(Boolean).join(" / ") ||
+    t("translate.metadataUnavailable")
   );
+}
+
+function subtitleKindLabel(
+  kind: "external" | "embedded",
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  return kind === "external"
+    ? t("translate.externalSubtitle")
+    : t("translate.embeddedSubtitle");
 }
 
 function subtitlePath(candidate: SubtitleCandidate) {
@@ -1744,13 +1811,19 @@ function subtitlePath(candidate: SubtitleCandidate) {
   return candidate.path.split("/").pop() ?? candidate.path;
 }
 
-function subtitleDetails(candidate: SubtitleCandidate) {
-  const details = [candidate.format?.toUpperCase() ?? "Unknown format"];
+function subtitleDetails(
+  candidate: SubtitleCandidate,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  const details = [candidate.format?.toUpperCase() ?? t("translate.unknownFormat")];
   if (candidate.kind === "embedded" && candidate.stream_index !== undefined) {
-    details.push(`Stream ${candidate.stream_index}`);
+    details.push(t("translate.stream", { index: candidate.stream_index }));
     details.push(
       ...(candidate.dispositions ?? [])
-        .map((disposition) => SUBTITLE_DISPOSITION_LABELS[disposition])
+        .map((disposition) => {
+          const key = SUBTITLE_DISPOSITION_LABELS[disposition];
+          return key ? t(key) : undefined;
+        })
         .filter((label): label is string => label !== undefined),
     );
   } else if (subtitlePath(candidate)) {
@@ -1759,15 +1832,18 @@ function subtitleDetails(candidate: SubtitleCandidate) {
   return details.join(" · ");
 }
 
-function subtitleAccessibleLabel(candidate: SubtitleCandidate) {
+function subtitleAccessibleLabel(
+  candidate: SubtitleCandidate,
+  t: ReturnType<typeof useI18n>["t"],
+) {
   const path = subtitlePath(candidate);
   const stream =
     candidate.kind === "embedded" && candidate.stream_index !== undefined
-      ? `stream ${candidate.stream_index} `
+      ? `${t("translate.streamAccessible", { index: candidate.stream_index })} `
       : "";
   return path
-    ? `${stream}${subtitleLabel(candidate)} (${path})`
-    : `${stream}${subtitleLabel(candidate)}`;
+    ? `${stream}${subtitleLabel(candidate, t)} (${path})`
+    : `${stream}${subtitleLabel(candidate, t)}`;
 }
 
 function SubtitleEntry({
@@ -1781,6 +1857,7 @@ function SubtitleEntry({
   selected: boolean;
   onSelect: (value: string) => void;
 }) {
+  const { t } = useI18n();
   const selectable = isCompleteCandidate(candidate);
   return (
     <Button
@@ -1789,20 +1866,28 @@ function SubtitleEntry({
       className={cn("subtitle-entry", candidate.kind === "embedded" && "embedded")}
       aria-pressed={selectable && selected}
       disabled={!selectable}
-      aria-label={`Select ${candidate.kind} subtitle ${subtitleAccessibleLabel(candidate)}`}
+      aria-label={t("translate.selectSubtitle", {
+        kind:
+          candidate.kind === "external"
+            ? t("translate.externalKind")
+            : t("translate.embeddedKind"),
+        details: subtitleAccessibleLabel(candidate, t),
+      })}
       onClick={() => {
         if (selectable) onSelect(candidateId);
       }}
     >
-      <span className="subtitle-kind">
-        {candidate.kind === "external" ? "External" : "Embedded"}
-      </span>
+      <span className="subtitle-kind">{subtitleKindLabel(candidate.kind, t)}</span>
       <span className="subtitle-copy">
-        <strong>{subtitleLabel(candidate)}</strong>
-        <small>{subtitleDetails(candidate)}</small>
+        <strong>{subtitleLabel(candidate, t)}</strong>
+        <small>{subtitleDetails(candidate, t)}</small>
       </span>
-      {selectable && selected && <span className="media-entry-selected">Selected</span>}
-      {!selectable && <span className="disabled-note">Incomplete candidate</span>}
+      {selectable && selected && (
+        <span className="media-entry-selected">{t("translate.selected")}</span>
+      )}
+      {!selectable && (
+        <span className="disabled-note">{t("translate.incompleteCandidate")}</span>
+      )}
     </Button>
   );
 }
@@ -1812,24 +1897,27 @@ function UnsupportedSubtitleEntry({
 }: {
   candidate: UnsupportedSubtitleCandidate;
 }) {
+  const { t } = useI18n();
   return (
     <div
       className="subtitle-entry unsupported"
       role="group"
       aria-disabled="true"
-      aria-label={`Unsupported ${candidate.kind} subtitle`}
+      aria-label={t("translate.unsupportedLabel", {
+        kind:
+          candidate.kind === "external"
+            ? t("translate.externalKind")
+            : t("translate.embeddedKind"),
+      })}
     >
-      <span className="subtitle-kind">
-        {candidate.kind === "external" ? "External" : "Embedded"}
-      </span>
+      <span className="subtitle-kind">{subtitleKindLabel(candidate.kind, t)}</span>
       <span className="subtitle-copy">
-        <strong>Unavailable subtitle</strong>
+        <strong>{t("translate.unavailableSubtitle")}</strong>
         <small>
-          <span>{candidate.reason}</span>. This is not a supported text subtitle. Choose
-          another source.
+          <span>{candidate.reason}</span>. {t("translate.unsupportedSubtitleHelp")}
         </small>
       </span>
-      <span className="disabled-note">Not selectable</span>
+      <span className="disabled-note">{t("translate.notSelectable")}</span>
     </div>
   );
 }
@@ -1859,6 +1947,7 @@ function MediaBrowser({
   mediaButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   query: ReturnType<typeof useMediaDirectory>;
 }) {
+  const { t } = useI18n();
   const selectionActive = batchMode
     ? selectedMediaPaths.size > 0
     : selectedMedia !== null;
@@ -1871,15 +1960,23 @@ function MediaBrowser({
           : selectedMedia === entry.path)),
   );
   return (
-    <div className="media-browser" role="region" aria-label="Media browser">
-      <div className="breadcrumbs" role="group" aria-label="Media breadcrumbs">
+    <div
+      className="media-browser"
+      role="region"
+      aria-label={t("translate.mediaBrowser")}
+    >
+      <div
+        className="breadcrumbs"
+        role="group"
+        aria-label={t("translate.mediaBreadcrumbs")}
+      >
         <Button
           type="button"
           variant="outline"
           className="breadcrumb-button"
           onClick={() => onDirectoryChange("")}
         >
-          Media
+          {t("translate.mediaLabel")}
         </Button>
         {directory
           .split("/")
@@ -1902,47 +1999,41 @@ function MediaBrowser({
           })}
       </div>
       <label className="media-filter">
-        <span>Filter this directory</span>
+        <span>{t("translate.filterDirectory")}</span>
         <Input
           type="search"
           value={filter}
           onChange={(event) => onFilterChange(event.target.value)}
-          placeholder="Type a name"
+          placeholder={t("translate.typeName")}
         />
       </label>
       <div className="media-results" aria-live="polite">
         {query.isPending && (
           <div role="status" className="browser-message">
-            Loading Media...
+            {t("translate.loadingMedia")}
           </div>
         )}
         {query.isError && (
-          <QueryErrorMessage
-            message={query.error.message}
-            onRetry={() => void query.refetch()}
-          />
+          <QueryErrorState error={query.error} onRetry={() => void query.refetch()} />
         )}
         {query.data && entries?.length === 0 && (
           <div className="browser-message browser-message-stack">
             {filter ? (
               <>
-                <span>No matching Media or directories.</span>
-                <span className="field-help">No names match this filter.</span>
+                <span>{t("translate.noMatchingMedia")}</span>
+                <span className="field-help">{t("translate.noMatchingMediaHelp")}</span>
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => onFilterChange("")}
                 >
-                  Clear filter
+                  {t("translate.clearFilter")}
                 </Button>
               </>
             ) : (
               <>
-                <span>This directory is empty.</span>
-                <span className="field-help">
-                  This directory contains no supported Media items or subdirectories.
-                  CueWeaver reads Media from the configured Media root.
-                </span>
+                <span>{t("translate.emptyDirectory")}</span>
+                <span className="field-help">{t("translate.emptyDirectoryHelp")}</span>
               </>
             )}
           </div>
@@ -1987,18 +2078,38 @@ function EmptyMessage({ children }: { children: ReactNode }) {
 
 function QueryErrorMessage({
   message,
+  error,
   onRetry,
 }: {
   message: string;
+  error: unknown;
   onRetry: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div role="alert" className="browser-message error">
       {message}
+      {getErrorDetail(error) && (
+        <details>
+          <summary>{t("translate.showErrorDetails")}</summary>
+          <p className="field-help">{getErrorDetail(error)}</p>
+        </details>
+      )}
       <Button variant="outline" onClick={onRetry}>
-        Try again
+        {t("common.tryAgain")}
       </Button>
     </div>
+  );
+}
+
+function QueryErrorState({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <QueryErrorMessage
+      message={formatError(error, t)}
+      error={error}
+      onRetry={onRetry}
+    />
   );
 }
 
@@ -2017,6 +2128,7 @@ function MediaEntry({
   buttonRef?: (button: HTMLButtonElement | null) => void;
   collapsed: boolean;
 }) {
+  const { t } = useI18n();
   const isDirectory = entry.kind === "directory";
   const episodeLabel =
     entry.season !== undefined && entry.episode !== undefined
@@ -2039,15 +2151,21 @@ function MediaEntry({
         isDirectory ? onDirectoryChange(entry.path) : onMediaSelect(entry.path)
       }
       aria-pressed={!isDirectory ? selected : undefined}
-      aria-label={isDirectory ? `Open ${accessibleLabel}` : `Select ${accessibleLabel}`}
+      aria-label={
+        isDirectory
+          ? t("translate.openDirectory", { name: accessibleLabel })
+          : t("translate.selectMedia", { name: accessibleLabel })
+      }
     >
-      <span className="media-entry-kind">{isDirectory ? "Directory" : "Media"}</span>
+      <span className="media-entry-kind">
+        {isDirectory ? t("translate.directoryLabel") : t("translate.mediaLabel")}
+      </span>
       <span className="media-entry-copy">
         <strong title={entry.name}>{label}</strong>
         {entry.title && <small title={entry.name}>{entry.name}</small>}
       </span>
       {!isDirectory && selected && (
-        <span className="media-entry-selected">Selected</span>
+        <span className="media-entry-selected">{t("translate.selected")}</span>
       )}
       {isDirectory && <span aria-hidden="true">-&gt;</span>}
     </Button>
@@ -2055,18 +2173,19 @@ function MediaEntry({
 }
 
 function ProviderState() {
+  const { t } = useI18n();
   const status = useProductStatus();
   if (status.isPending) {
     return (
       <div role="status" className="provider-state">
-        <SpinnerGapIcon className="spin" size={18} /> Checking provider
+        <SpinnerGapIcon className="spin" size={18} /> {t("runtime.checking")}
       </div>
     );
   }
   if (status.isError) {
     return (
       <div role="alert" className="provider-state error">
-        <WarningCircleIcon size={18} /> {status.error.message}
+        <WarningCircleIcon size={18} /> <LocalizedErrorMessage error={status.error} />
       </div>
     );
   }
@@ -2074,18 +2193,25 @@ function ProviderState() {
     return (
       <div role="status" className="provider-state warning">
         <WarningCircleIcon size={18} />
-        {status.data.translation_provider.message}
+        <div>
+          {t("runtime.providerNotConfiguredTitle")}
+          <details>
+            <summary>{t("translate.showErrorDetails")}</summary>
+            <p className="field-help">{status.data.translation_provider.message}</p>
+          </details>
+        </div>
       </div>
     );
   }
   return (
     <div role="status" className="provider-state ready">
-      <CheckCircleIcon size={18} weight="fill" /> Translation provider ready
+      <CheckCircleIcon size={18} weight="fill" /> {t("translate.providerReady")}
     </div>
   );
 }
 
 function TermMapsPage() {
+  const { t } = useI18n();
   const maps = useTermMaps();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -2129,14 +2255,17 @@ function TermMapsPage() {
     detailHeadingRef.current?.focus({ preventScroll: true });
   }, [selected.data?.id, selectedId]);
 
-  const contentValidation = useMemo(() => validateTermMapContent(content), [content]);
+  const contentValidation = useMemo(
+    () => validateTermMapContent(content, t),
+    [content, t],
+  );
   const contentError = fileError ?? (contentTouched ? contentValidation.error : null);
   const replacementText =
     replacement ??
     (selected.data ? JSON.stringify(selected.data.content, null, 2) : "");
   const replacementValidation = useMemo(
-    () => validateTermMapContent(replacementText),
-    [replacementText],
+    () => validateTermMapContent(replacementText, t),
+    [replacementText, t],
   );
   const replacementDirty =
     replacement !== null &&
@@ -2147,7 +2276,7 @@ function TermMapsPage() {
   async function loadTermMapFile(file: File) {
     const generation = ++fileReadGeneration.current;
     if (!file.name.toLocaleLowerCase().endsWith(".json")) {
-      setFileError("Choose a .json file containing a Term map.");
+      setFileError(t("termMaps.invalidFile"));
       setFileName(null);
       setFileLoading(false);
       return;
@@ -2164,7 +2293,7 @@ function TermMapsPage() {
     } catch {
       if (generation !== fileReadGeneration.current) return;
       setFileName(null);
-      setFileError("The selected JSON file could not be read.");
+      setFileError(t("termMaps.readError"));
     } finally {
       if (generation === fileReadGeneration.current) setFileLoading(false);
     }
@@ -2197,7 +2326,7 @@ function TermMapsPage() {
       { name, content },
       {
         onSuccess: () => {
-          setSuccessMessage("Term map saved. It is now available on Translate.");
+          setSuccessMessage(t("termMaps.savedSuccess"));
           fileReadGeneration.current += 1;
           setFileLoading(false);
           setName("");
@@ -2225,7 +2354,7 @@ function TermMapsPage() {
       { id: selectedId, name: renameName },
       {
         onSuccess: (summary) => {
-          setSuccessMessage("Term map name saved.");
+          setSuccessMessage(t("termMaps.nameSaved"));
           if (selectedIdRef.current === selectedId) setRenameName(summary.name);
           if (selectedIdRef.current === selectedId) setLoadedName(summary.name);
         },
@@ -2239,9 +2368,7 @@ function TermMapsPage() {
       { id: selectedId, name: confirmation },
       {
         onSuccess: () => {
-          setSuccessMessage(
-            "Term map deleted. Directory defaults using it were cleared.",
-          );
+          setSuccessMessage(t("termMaps.deletedSuccess"));
           if (selectedIdRef.current === selectedId) {
             selectedIdRef.current = null;
             setSelectedId(null);
@@ -2254,33 +2381,23 @@ function TermMapsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Term maps"
-        detail="Create an optional Term map for names and phrases that should stay consistent."
-      />
-      <Guidance title="What is a Term map?">
-        A Term map pairs text from the source subtitle with the translation you prefer.
-        Use one for character names, places, brands, or phrases that must stay
-        consistent. You do not need one to translate subtitles.
-      </Guidance>
-      <section className="concept-help" aria-label="How to create a Term map">
-        <strong>How to create one</strong>
+      <PageHeader title={t("termMaps.title")} detail={t("termMaps.detail")} />
+      <Guidance title={t("termMaps.guidanceTitle")}>{t("termMaps.guidance")}</Guidance>
+      <section className="concept-help" aria-label={t("termMaps.createHelpLabel")}>
+        <strong>{t("termMaps.createHelpTitle")}</strong>
         <ol>
-          <li>List important terms from the source language.</li>
-          <li>Pair each term with the translation you prefer.</li>
-          <li>Paste the JSON or import a .json file below.</li>
+          <li>{t("termMaps.createStepOne")}</li>
+          <li>{t("termMaps.createStepTwo")}</li>
+          <li>{t("termMaps.createStepThree")}</li>
         </ol>
         <pre>{`{
   "New York": "Nueva York",
   "The Captain": "La capitana"
 }`}</pre>
-        <p>
-          The left side is source subtitle text. The right side is the preferred
-          translation.
-        </p>
+        <p>{t("termMaps.createHelpDetail")}</p>
       </section>
       {successMessage && (
-        <Guidance title="Saved" tone="success" role="status">
+        <Guidance title={t("common.saved")} tone="success" role="status">
           {successMessage}
         </Guidance>
       )}
@@ -2288,20 +2405,20 @@ function TermMapsPage() {
         <section className="term-map-upload" aria-labelledby="upload-title">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Optional Term map</p>
-              <h2 id="upload-title">Create or import a Term map</h2>
+              <p className="eyebrow">{t("termMaps.newResource")}</p>
+              <h2 id="upload-title">{t("termMaps.upload")}</h2>
             </div>
             <UploadSimpleIcon size={20} aria-hidden="true" />
           </div>
           <form onSubmit={submit}>
             <label>
-              <span>Name</span>
+              {t("termMaps.name")}
               <Input
                 ref={nameInputRef}
                 required
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Name it by media, season, language pair, and version."
+                placeholder={t("termMaps.namePlaceholder")}
               />
             </label>
             <span className="field-help">
@@ -2312,33 +2429,37 @@ function TermMapsPage() {
               onDragOver={(event) => event.preventDefault()}
               onDrop={handleFileDrop}
             >
-              <strong>Import JSON file</strong>
-              <span>Choose a .json file, or paste JSON below.</span>
+              <strong>{t("termMaps.importJson")}</strong>
+              <span>{t("termMaps.jsonHelp")}</span>
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => fileInputRef.current?.click()}
               >
-                Select JSON file
+                {t("termMaps.selectJson")}
               </Button>
               <input
                 ref={fileInputRef}
                 className="sr-only"
                 type="file"
                 accept=".json,application/json"
-                aria-label="JSON file"
+                aria-label={t("termMaps.jsonFile")}
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   if (file) void loadTermMapFile(file);
                 }}
               />
-              {fileName && <span className="field-help">Loaded {fileName}</span>}
+              {fileName && (
+                <span className="field-help">
+                  {t("termMaps.loaded", { name: fileName })}
+                </span>
+              )}
             </div>
             <label htmlFor="term-map-content">
-              <span>Or paste JSON</span>
+              {t("termMaps.pasteJson")}
               <Textarea
                 id="term-map-content"
-                aria-label="JSON content"
+                aria-label={t("termMaps.jsonContent")}
                 required
                 value={content}
                 onChange={(event) => {
@@ -2356,11 +2477,11 @@ function TermMapsPage() {
               />
             </label>
             <p id="upload-help" className="field-help">
-              Use a non-empty object of source-to-target strings, up to 1 MiB.
+              {t("termMaps.pasteHelp")}
             </p>
             {fileLoading ? (
               <p className="upload-status" role="status">
-                Reading JSON file...
+                {t("termMaps.readingJson")}
               </p>
             ) : contentError ? (
               <p className="form-error" role="alert">
@@ -2368,22 +2489,24 @@ function TermMapsPage() {
               </p>
             ) : !content.trim() ? (
               <p className="field-help" role="status">
-                Add JSON using the file import or paste path to preview its mappings.
+                {t("termMaps.previewHelp")}
               </p>
             ) : (
               <p className="term-map-validation valid" role="status">
-                Valid Term map: {contentValidation.entryCount}{" "}
-                {contentValidation.entryCount === 1 ? "mapping" : "mappings"}.
+                {t("termMaps.valid", {
+                  count: contentValidation.entryCount,
+                  unit: t("termMaps.mapping", { count: contentValidation.entryCount }),
+                })}
               </p>
             )}
             {create.isError && (
-              <p className="form-error" role="alert">
-                {create.error.message}
-              </p>
+              <div className="form-error" role="alert">
+                <LocalizedErrorMessage error={create.error} />
+              </div>
             )}
             {create.isPending && (
               <p className="upload-status" role="status">
-                Saving Term map
+                {t("termMaps.uploading")}
               </p>
             )}
             <Button
@@ -2391,7 +2514,7 @@ function TermMapsPage() {
               type="submit"
               disabled={create.isPending || fileLoading || contentError !== null}
             >
-              {create.isPending ? "Uploading..." : "Upload Term map"}
+              {create.isPending ? t("termMaps.uploadingButton") : t("termMaps.upload")}
             </Button>
           </form>
         </section>
@@ -2399,8 +2522,8 @@ function TermMapsPage() {
         <section className="term-map-list" aria-labelledby="maps-title">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Library</p>
-              <h2 id="maps-title">Saved Term maps</h2>
+              <p className="eyebrow">{t("termMaps.library")}</p>
+              <h2 id="maps-title">{t("termMaps.saved")}</h2>
             </div>
             <span className="count-badge">{maps.data?.term_maps?.length ?? 0}</span>
           </div>
@@ -2413,31 +2536,28 @@ function TermMapsPage() {
           >
             {maps.isPending && (
               <div className="inline-state" role="status">
-                <SpinnerGapIcon className="spin" /> Loading Term maps
+                <SpinnerGapIcon className="spin" /> {t("translate.loadingTermMaps")}
               </div>
             )}
             {maps.isError && (
               <div className="inline-state error" role="alert">
-                {maps.error.message}
+                <LocalizedErrorMessage error={maps.error} />
                 <Button variant="outline" onClick={() => void maps.refetch()}>
-                  Try again
+                  {t("termMaps.retry")}
                 </Button>
               </div>
             )}
             {maps.data?.term_maps?.length === 0 && (
               <div className="term-map-empty">
                 <ListChecksIcon size={24} aria-hidden="true" />
-                <h3>No Term maps yet</h3>
-                <p>
-                  Create one from names or phrases whose translations should remain
-                  consistent.
-                </p>
+                <h3>{t("termMaps.noMaps")}</h3>
+                <p>{t("termMaps.emptyDetail")}</p>
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => nameInputRef.current?.focus()}
                 >
-                  Create your first Term map
+                  {t("termMaps.createFirst")}
                 </Button>
               </div>
             )}
@@ -2446,7 +2566,7 @@ function TermMapsPage() {
             {maps.data?.term_maps?.map((map) => (
               <button
                 className={`term-map-item${selectedId === map.id ? " selected" : ""}`}
-                aria-label={`${map.name}, ${map.entry_count} ${map.entry_count === 1 ? "entry" : "entries"}`}
+                aria-label={`${map.name}, ${t("termMaps.entry", { count: map.entry_count })}`}
                 aria-pressed={selectedId === map.id}
                 key={map.id}
                 type="button"
@@ -2464,7 +2584,7 @@ function TermMapsPage() {
                   {map.name}
                 </span>
                 <span>
-                  {map.entry_count} {map.entry_count === 1 ? "entry" : "entries"}
+                  {map.entry_count} {t("termMaps.entry", { count: map.entry_count })}
                 </span>
                 <time
                   dateTime={map.updated_at}
@@ -2499,14 +2619,16 @@ function TermMapsPage() {
                   setConfirmation("");
                 }}
               >
-                <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Term maps
+                <ArrowLeftIcon size={16} aria-hidden="true" /> {t("termMaps.back")}
               </Button>
               <h2 ref={detailHeadingRef} id="detail-title" tabIndex={-1}>
-                {selected.data?.name ?? "Term map details"}
+                {selected.data?.name ?? t("termMaps.details")}
               </h2>
               {selected.data && (
                 <p>
-                  {selected.data.entry_count} entries · Updated{" "}
+                  {selected.data.entry_count}{" "}
+                  {t("termMaps.entry", { count: selected.data.entry_count })} ·{" "}
+                  {t("termMaps.updated")}{" "}
                   <time dateTime={selected.data.updated_at}>
                     {formatLocalTimestamp(selected.data.updated_at)}
                   </time>
@@ -2515,7 +2637,7 @@ function TermMapsPage() {
               {selected.data && (
                 <div className="term-map-actions">
                   <Input
-                    aria-label="New Term map name"
+                    aria-label={t("termMaps.newName")}
                     value={renameName}
                     placeholder={selected.data.name}
                     onChange={(event) => setRenameName(event.target.value)}
@@ -2531,12 +2653,12 @@ function TermMapsPage() {
                       renameName === loadedName
                     }
                   >
-                    Save name
+                    {t("termMaps.saveName")}
                   </Button>
                   {rename.isError && (
-                    <p className="form-error" role="alert">
-                      {rename.error.message}
-                    </p>
+                    <div className="form-error" role="alert">
+                      <LocalizedErrorMessage error={rename.error} />
+                    </div>
                   )}
                 </div>
               )}
@@ -2545,14 +2667,14 @@ function TermMapsPage() {
           <div className="term-map-detail-state">
             {selected.isPending && (
               <div className="inline-state" role="status">
-                <SpinnerGapIcon className="spin" /> Loading details
+                <SpinnerGapIcon className="spin" /> {t("termMaps.loadingDetails")}
               </div>
             )}
             {selected.isError && (
               <div className="inline-state error" role="alert">
-                {selected.error.message}
+                <LocalizedErrorMessage error={selected.error} />
                 <Button variant="outline" onClick={() => void selected.refetch()}>
-                  Try again
+                  {t("common.tryAgain")}
                 </Button>
               </div>
             )}
@@ -2560,20 +2682,20 @@ function TermMapsPage() {
               <>
                 <label className="search-field">
                   <MagnifyingGlassIcon size={17} aria-hidden="true" />
-                  <span>Search Source or Target</span>
+                  <span>{t("termMaps.search")}</span>
                   <Input
-                    aria-label="Search Source or Target"
+                    aria-label={t("termMaps.search")}
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Type to filter"
+                    placeholder={t("termMaps.filter")}
                   />
                 </label>
                 <div className="term-table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>Source subtitle text</th>
-                        <th>Preferred translation</th>
+                        <th>{t("termMaps.source")}</th>
+                        <th>{t("termMaps.target")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2586,18 +2708,14 @@ function TermMapsPage() {
                     </tbody>
                   </table>
                   {entries.length === 0 && (
-                    <p className="table-empty">No matching terms.</p>
+                    <p className="table-empty">{t("termMaps.noMatchingTerms")}</p>
                   )}
                 </div>
                 <div className="term-map-management">
-                  <h3>Replace all JSON content</h3>
-                  <p className="field-help">
-                    This removes every current mapping and saves the JSON below. It does
-                    not merge the two versions. Existing Jobs keep the Term map used
-                    when they were queued.
-                  </p>
+                  <h3>{t("termMaps.replaceJson")}</h3>
+                  <p className="field-help">{t("termMaps.replaceHelp")}</p>
                   <Textarea
-                    aria-label="Replacement JSON content"
+                    aria-label={t("termMaps.replacementJson")}
                     value={replacementText}
                     onChange={(event) => setReplacement(event.target.value)}
                     rows={7}
@@ -2610,9 +2728,9 @@ function TermMapsPage() {
                     </p>
                   )}
                   {replace.isError && (
-                    <p className="form-error" role="alert">
-                      {replace.error.message}
-                    </p>
+                    <div className="form-error" role="alert">
+                      <LocalizedErrorMessage error={replace.error} />
+                    </div>
                   )}
                   <Button
                     type="button"
@@ -2637,17 +2755,15 @@ function TermMapsPage() {
                     }
                     disabled={replace.isPending || !replacementDirty}
                   >
-                    {replace.isPending ? "Replacing..." : "Replace content"}
+                    {replace.isPending
+                      ? t("termMaps.replacing")
+                      : t("termMaps.replaceContent")}
                   </Button>
                   <div className="term-map-delete">
-                    <h3>Delete Term map</h3>
-                    <p>
-                      Permanent deletion removes this Term map and clears Directory
-                      defaults that use it. Media, Jobs, and published subtitles are not
-                      deleted. Enter &quot;{selected.data.name}&quot; to confirm.
-                    </p>
+                    <h3>{t("termMaps.deleteTitle")}</h3>
+                    <p>{t("termMaps.deleteHelp", { name: selected.data.name })}</p>
                     <Input
-                      aria-label="Confirm Term map name"
+                      aria-label={t("termMaps.confirmName")}
                       value={confirmation}
                       onChange={(event) => setConfirmation(event.target.value)}
                       placeholder={selected.data.name}
@@ -2658,12 +2774,14 @@ function TermMapsPage() {
                       onClick={deleteSelected}
                       disabled={remove.isPending || confirmation !== selected.data.name}
                     >
-                      {remove.isPending ? "Deleting..." : "Delete Term map"}
+                      {remove.isPending
+                        ? t("termMaps.deleting")
+                        : t("termMaps.deleteMap")}
                     </Button>
                     {remove.isError && (
-                      <p className="form-error" role="alert">
-                        {remove.error.message}
-                      </p>
+                      <div className="form-error" role="alert">
+                        <LocalizedErrorMessage error={remove.error} />
+                      </div>
                     )}
                   </div>
                 </div>
@@ -2679,16 +2797,18 @@ function TermMapsPage() {
 export function App() {
   return (
     <ThemeProvider>
-      <Routes>
-        <Route element={<Shell />}>
-          <Route index element={<Navigate to="/translate" replace />} />
-          <Route path="translate" element={<Translate />} />
-          <Route path="jobs" element={<JobsPage />} />
-          <Route path="jobs/:jobId" element={<JobsPage />} />
-          <Route path="term-maps" element={<TermMapsPage />} />
-          <Route path="*" element={<Navigate to="/translate" replace />} />
-        </Route>
-      </Routes>
+      <I18nProvider>
+        <Routes>
+          <Route element={<Shell />}>
+            <Route index element={<Navigate to="/translate" replace />} />
+            <Route path="translate" element={<Translate />} />
+            <Route path="jobs" element={<JobsPage />} />
+            <Route path="jobs/:jobId" element={<JobsPage />} />
+            <Route path="term-maps" element={<TermMapsPage />} />
+            <Route path="*" element={<Navigate to="/translate" replace />} />
+          </Route>
+        </Routes>
+      </I18nProvider>
     </ThemeProvider>
   );
 }

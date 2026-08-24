@@ -1,49 +1,85 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import { getActiveLocale, translate, type Locale } from "../i18n";
+
+const localTimestampFormatters = new Map<Locale, Intl.DateTimeFormat>();
+const utcTimestampFormatters = new Map<Locale, Intl.DateTimeFormat>();
+const relativeTimestampFormatters = new Map<Locale, Intl.RelativeTimeFormat>();
+
+function getLocalTimestampFormatter(locale: Locale): Intl.DateTimeFormat {
+  let formatter = localTimestampFormatters.get(locale);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    localTimestampFormatters.set(locale, formatter);
+  }
+  return formatter;
+}
+
+function getUtcTimestampFormatter(locale: Locale): Intl.DateTimeFormat {
+  let formatter = utcTimestampFormatters.get(locale);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, {
+      dateStyle: "medium",
+      timeStyle: "medium",
+      timeZone: "UTC",
+    });
+    utcTimestampFormatters.set(locale, formatter);
+  }
+  return formatter;
+}
+
+function getRelativeTimestampFormatter(locale: Locale): Intl.RelativeTimeFormat {
+  let formatter = relativeTimestampFormatters.get(locale);
+  if (!formatter) {
+    formatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    relativeTimestampFormatters.set(locale, formatter);
+  }
+  return formatter;
+}
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const localDateTime = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  timeZoneName: "short",
-});
-
-const utcDateTime = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "medium",
-  timeZone: "UTC",
-});
-
-const relativeTime = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-
-export function formatLocalTimestamp(value: string | null): string {
-  if (value === null) return "Not recorded";
+function formatTimestamp(value: string | null, format: (date: Date) => string): string {
+  if (value === null) return translate("time.notRecorded");
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
-    ? "Timestamp unavailable"
-    : localDateTime.format(date);
+    ? translate("time.timestampUnavailable")
+    : format(date);
+}
+
+export function formatLocalTimestamp(value: string | null): string {
+  const locale = getActiveLocale();
+  return formatTimestamp(value, (date) =>
+    getLocalTimestampFormatter(locale).format(date),
+  );
 }
 
 export function formatUtcTimestamp(value: string | null): string {
-  if (value === null) return "Not recorded";
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? "Timestamp unavailable"
-    : `${utcDateTime.format(date)} UTC`;
+  const locale = getActiveLocale();
+  return formatTimestamp(
+    value,
+    (date) =>
+      `${getUtcTimestampFormatter(locale).format(date)} ${translate("time.utc")}`,
+  );
 }
 
 export function formatRelativeTimestamp(value: string): string {
   const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return "Time unavailable";
+  if (Number.isNaN(date.valueOf())) return translate("time.unavailable");
 
   const seconds = (date.valueOf() - Date.now()) / 1000;
   const absoluteSeconds = Math.abs(seconds);
+  const relativeTime = getRelativeTimestampFormatter(getActiveLocale());
   if (absoluteSeconds < 60) return relativeTime.format(Math.round(seconds), "second");
   if (absoluteSeconds < 3600)
     return relativeTime.format(Math.round(seconds / 60), "minute");

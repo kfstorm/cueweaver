@@ -11,6 +11,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
 import { Guidance } from "./components/ui/guidance";
+import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
 import {
   APPROVED_ERROR_CONTEXT_KEYS,
   useClearCompletedJobs,
@@ -23,11 +24,11 @@ import {
   type JobNotification,
   type JobStatusFilter,
   type JobStatusHistoryEntry,
+  type OutputConflictPolicy,
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
+import { getErrorDetail, useI18n, type TranslationKey } from "./i18n";
 import { useProductStatus } from "./status";
-
-const RUNNING_JOB_MESSAGE = "Running Jobs cannot be cancelled.";
 
 type ClearFeedback = {
   title: string;
@@ -43,8 +44,9 @@ export function JobNotificationRegion({
   notifications: JobNotification[];
   dismiss: (id: string) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <aside className="toast-region" aria-label="Job notifications">
+    <aside className="toast-region" aria-label={t("jobs.notifications")}>
       {notifications.map((notification) => (
         <JobToast key={notification.id} notification={notification} dismiss={dismiss} />
       ))}
@@ -59,6 +61,7 @@ function JobToast({
   notification: JobNotification;
   dismiss: (id: string) => void;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     const timer = window.setTimeout(() => dismiss(notification.id), 7000);
     return () => window.clearTimeout(timer);
@@ -74,19 +77,27 @@ function JobToast({
       ) : (
         <WarningCircleIcon size={18} aria-hidden="true" />
       )}
-      <span>{notification.message}</span>
+      <span>
+        {notification.status === "Completed"
+          ? t("jobs.notificationCompleted", { media: notification.media })
+          : t("jobs.notificationFailed", {
+              media: notification.media,
+              error: t("jobs.notificationDetails"),
+            })}
+      </span>
       <button
         type="button"
         onClick={() => dismiss(notification.id)}
-        aria-label="Dismiss notification"
+        aria-label={t("jobs.dismissNotification")}
       >
-        Dismiss
+        {t("jobs.dismissNotification")}
       </button>
     </div>
   );
 }
 
 export function JobsPage() {
+  const { t } = useI18n();
   const { jobId } = useParams();
   const navigate = useNavigate();
   const listTitleRef = useRef<HTMLHeadingElement>(null);
@@ -107,42 +118,48 @@ export function JobsPage() {
   const completedCountKnown = jobs.data?.completed_count !== undefined;
   const canClearCompleted = completedCount > 0;
   const clearCompletedLabel = completedCountKnown
-    ? `Clear completed history (${completedCount})`
-    : "Clear completed history";
+    ? `${t("jobs.clearCompleted")} (${completedCount})`
+    : t("jobs.clearCompleted");
   const recordHealth = productStatus.data?.job_records;
   const recordAttention =
     (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
   const [clearFeedback, setClearFeedback] = useState<ClearFeedback | null>(null);
 
   const clearCompletedJobs = () => {
-    const prompt = `Clear all completed Job history? This removes ${completedCount} completed Job${completedCount === 1 ? "" : "s"} and residual Work data. Media and published output are preserved.`;
+    const prompt = t("jobs.clearConfirmation", { count: completedCount });
     if (!window.confirm(prompt)) {
       return;
     }
     setClearFeedback(null);
     clearCompleted.mutate(undefined, {
       onSuccess: (result) => {
-        const cleared = `Cleared ${result.deleted.length} completed ${result.deleted.length === 1 ? "Job" : "Jobs"}.`;
+        const unit = t("jobs.job", { count: result.deleted.length });
+        const failedUnit = t("jobs.job", { count: result.failed.length });
         if (result.failed.length === 0) {
           setClearFeedback({
-            title: "History cleared",
+            title: t("jobs.clearSuccessTitle"),
             tone: "success",
             role: "status",
-            message: `${cleared} Media and published subtitles were not deleted.`,
+            message: t("jobs.clearSuccess", { count: result.deleted.length, unit }),
           });
         } else if (result.deleted.length > 0) {
           setClearFeedback({
-            title: "History partially cleared",
+            title: t("jobs.clearPartialTitle"),
             tone: "warning",
             role: "status",
-            message: `${cleared} ${result.failed.length} completed ${result.failed.length === 1 ? "Job could not" : "Jobs could not"} be cleared. See the details below.`,
+            message: t("jobs.clearPartial", {
+              count: result.deleted.length,
+              unit,
+              failed: result.failed.length,
+              failedUnit,
+            }),
           });
         } else {
           setClearFeedback({
-            title: "History could not be cleared",
+            title: t("jobs.clearFailedTitle"),
             tone: "error",
             role: "alert",
-            message: "No completed Jobs were cleared. See the details below.",
+            message: t("jobs.clearFailed"),
           });
         }
         if (jobId && result.deleted.includes(jobId)) navigateToJobList();
@@ -169,35 +186,32 @@ export function JobsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Jobs"
-        detail="Review durable translation history, diagnostics, and retryable work."
-      />
+      <PageHeader title={t("jobs.title")} detail={t("jobs.detail")} />
       {recordAttention && recordHealth && <RecordHealthNotice health={recordHealth} />}
       <div className={cn("job-layout", jobId && "has-selection")}>
         <section className="job-list-panel" aria-labelledby="job-list-title">
           <div className="section-heading job-list-heading">
             <div>
               <h2 id="job-list-title" ref={listTitleRef} tabIndex={-1}>
-                Job history
+                {t("jobs.history")}
               </h2>
             </div>
             <div
               className="job-history-filters"
               role="search"
-              aria-label="Filter Job history"
+              aria-label={t("jobs.filterHistory")}
             >
               <label>
-                Search Jobs
+                {t("jobs.search")}
                 <input
                   type="search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Media, language, or Job ID"
+                  placeholder={t("jobs.searchPlaceholder")}
                 />
               </label>
               <label>
-                Status
+                {t("jobs.status")}
                 <select
                   value={status}
                   onChange={(event) => {
@@ -205,20 +219,28 @@ export function JobsPage() {
                     if (isJobStatusFilter(nextStatus)) setStatus(nextStatus);
                   }}
                 >
-                  <option value="all">All statuses</option>
-                  <option value="Queued">Queued status</option>
-                  <option value="Extracting">Extracting status</option>
-                  <option value="Translating">Translating status</option>
-                  <option value="Completed">Completed history</option>
-                  <option value="Failed">Failed history</option>
-                  <option value="Interrupted">Interrupted history</option>
-                  <option value="Cancelled">Cancelled history</option>
+                  <option value="all">{t("jobs.allStatuses")}</option>
+                  <option value="Queued">{t("jobs.statusOption.Queued")}</option>
+                  <option value="Extracting">
+                    {t("jobs.statusOption.Extracting")}
+                  </option>
+                  <option value="Translating">
+                    {t("jobs.statusOption.Translating")}
+                  </option>
+                  <option value="Completed">{t("jobs.statusOption.Completed")}</option>
+                  <option value="Failed">{t("jobs.statusOption.Failed")}</option>
+                  <option value="Interrupted">
+                    {t("jobs.statusOption.Interrupted")}
+                  </option>
+                  <option value="Cancelled">{t("jobs.statusOption.Cancelled")}</option>
                 </select>
               </label>
             </div>
             <div className="job-list-actions">
               {jobs.data && (
-                <span className="count-badge">{matchingCount} matching</span>
+                <span className="count-badge">
+                  {t("jobs.matching", { count: matchingCount })}
+                </span>
               )}
               <Button
                 variant="outline"
@@ -227,10 +249,10 @@ export function JobsPage() {
                 aria-describedby="clear-completed-scope"
                 onClick={clearCompletedJobs}
               >
-                {clearCompleted.isPending ? "Clearing..." : clearCompletedLabel}
+                {clearCompleted.isPending ? t("jobs.clearing") : clearCompletedLabel}
               </Button>
               <span id="clear-completed-scope" className="clear-completed-scope">
-                Applies to all completed Jobs, regardless of the current filters.
+                {t("jobs.clearScope")}
               </span>
             </div>
           </div>
@@ -244,9 +266,9 @@ export function JobsPage() {
             </Guidance>
           )}
           {clearCompleted.isError && (
-            <p className="form-error" role="alert">
-              {clearCompleted.error.message}
-            </p>
+            <div className="form-error" role="alert">
+              <LocalizedErrorMessage error={clearCompleted.error} />
+            </div>
           )}
           {clearCompleted.data && clearCompleted.data.failed.length > 0 && (
             <div
@@ -255,13 +277,17 @@ export function JobsPage() {
             >
               <p>
                 {clearCompleted.data.deleted.length === 0
-                  ? "No Completed Jobs could be cleared."
-                  : "Some Completed Jobs could not be cleared."}
+                  ? t("jobs.noCompletedCleared")
+                  : t("jobs.someCompletedFailed")}
               </p>
               <ul>
                 {clearCompleted.data.failed.map((failure) => (
                   <li key={failure.id}>
-                    Job {failure.id.slice(0, 8)}: {failure.message}
+                    {t("jobs.jobPrefix", { id: failure.id.slice(0, 8) })}:{" "}
+                    <details>
+                      <summary>{t("jobs.showDiagnostics")}</summary>
+                      <p>{failure.message}</p>
+                    </details>
                   </li>
                 ))}
               </ul>
@@ -275,14 +301,14 @@ export function JobsPage() {
           >
             {jobs.isPending && (
               <div className="inline-state" role="status">
-                Loading Jobs
+                {t("jobs.loading")}
               </div>
             )}
             {jobs.isError && (
               <div className="inline-state error" role="alert">
-                {jobs.error?.message ?? "Jobs could not be loaded."}
+                <LocalizedErrorMessage error={jobs.error} />
                 <Button variant="outline" onClick={() => void jobs.refetch()}>
-                  Try again
+                  {t("common.tryAgain")}
                 </Button>
               </div>
             )}
@@ -292,12 +318,14 @@ export function JobsPage() {
                   <BriefcaseIcon size={22} aria-hidden="true" />
                 </span>
                 <h2>
-                  {hasJobFilters(search, status) ? "No matching Jobs" : "No Jobs yet"}
+                  {hasJobFilters(search, status)
+                    ? t("jobs.noMatching")
+                    : t("jobs.noJobs")}
                 </h2>
                 <p>
                   {hasJobFilters(search, status)
-                    ? "Try a different search or clear the filters."
-                    : "Submitted translations will appear here with their current state."}
+                    ? t("jobs.noMatchingDetail")
+                    : t("jobs.noJobsDetail")}
                 </p>
                 {!hasJobFilters(search, status) && (
                   <Button
@@ -305,7 +333,7 @@ export function JobsPage() {
                     type="button"
                     onClick={() => navigate("/translate")}
                   >
-                    Start a translation
+                    {t("jobs.startTranslation")}
                   </Button>
                 )}
                 {hasJobFilters(search, status) && (
@@ -317,7 +345,7 @@ export function JobsPage() {
                       setStatus("all");
                     }}
                   >
-                    Clear filters
+                    {t("jobs.clearFilters")}
                   </Button>
                 )}
               </div>
@@ -325,13 +353,13 @@ export function JobsPage() {
           </div>
           {activeJobs.length > 0 && (
             <section aria-labelledby="active-jobs-title">
-              <h3 id="active-jobs-title">Active Jobs</h3>
+              <h3 id="active-jobs-title">{t("jobs.active")}</h3>
               <JobList jobs={activeJobs} selectedId={jobId} onSelect={navigate} />
             </section>
           )}
           {historyJobs.length > 0 && (
             <section aria-labelledby="history-jobs-title">
-              <h3 id="history-jobs-title">Completed and past Jobs</h3>
+              <h3 id="history-jobs-title">{t("jobs.completedAndPast")}</h3>
               <JobList jobs={historyJobs} selectedId={jobId} onSelect={navigate} />
             </section>
           )}
@@ -343,25 +371,27 @@ export function JobsPage() {
               onClick={() => void jobs.fetchNextPage()}
             >
               {jobs.isHistoryRefreshing
-                ? "Refreshing history..."
+                ? t("jobs.refreshingHistory")
                 : jobs.isFetchingNextPage
-                  ? "Loading history..."
-                  : "Load more history"}
+                  ? t("jobs.loadingHistory")
+                  : t("jobs.loadMoreHistory")}
             </Button>
           )}
         </section>
-        <section className="job-detail" aria-label="Job details">
+        <section className="job-detail" aria-label={t("jobs.detailsRegion")}>
           {!jobId && <SelectionPrompt />}
           {jobId && !selected && detail.isPending && (
-            <DetailState>Loading Job details</DetailState>
+            <DetailState>{t("jobs.loadingDetails")}</DetailState>
           )}
           {jobId && detail.isError && (
             <DetailState error>
-              {detail.error.message === "Job does not exist"
-                ? "This Job is no longer available."
-                : detail.error.message}
+              {getErrorDetail(detail.error) === "Job does not exist" ? (
+                t("jobs.noLongerAvailable")
+              ) : (
+                <LocalizedErrorMessage error={detail.error} />
+              )}
               <Button variant="outline" onClick={() => navigate("/jobs")}>
-                Back to Jobs
+                {t("jobs.back")}
               </Button>
             </DetailState>
           )}
@@ -387,24 +417,28 @@ function RecordHealthNotice({
 }: {
   health: NonNullable<ReturnType<typeof useProductStatus>["data"]>["job_records"];
 }) {
+  const { t } = useI18n();
   if (!health) return null;
   const entries = [
-    ["Corrupt", health.corrupt],
-    ["Unsupported", health.unsupported],
+    [t("jobs.corrupt"), health.corrupt],
+    [t("jobs.unsupported"), health.unsupported],
   ] as const;
   return (
     <section className="record-health-notice" aria-labelledby="record-health-title">
       <div>
-        <p className="eyebrow">Persistence warning</p>
-        <h2 id="record-health-title">Job records need attention</h2>
-        <p>These records were kept out of active history and need operator review.</p>
+        <p className="eyebrow">{t("jobs.persistenceWarning")}</p>
+        <h2 id="record-health-title">{t("runtime.recordsAttention")}</h2>
+        <p>{t("jobs.recordsExcluded")}</p>
       </div>
       <dl>
         {entries.map(([label, record]) => (
           <div key={label}>
             <dt>{label}</dt>
             <dd>
-              {record.count} {record.count === 1 ? "record" : "records"} in{" "}
+              {t("jobs.recordCount", {
+                count: record.count,
+                unit: t("jobs.record", { count: record.count }),
+              })}{" "}
               <code>{record.location}</code>
             </dd>
           </div>
@@ -423,8 +457,9 @@ function JobList({
   selectedId: string | undefined;
   onSelect: (path: string) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <div className="job-list" role="list" aria-label="Translation Jobs">
+    <div className="job-list" role="list" aria-label={t("jobs.translationJobs")}>
       {jobs.map((job) => (
         <JobListItem
           key={job.id}
@@ -446,6 +481,7 @@ function JobListItem({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const { t } = useI18n();
   const cancelJob = useCancelJob();
 
   return (
@@ -460,22 +496,29 @@ function JobListItem({
           {mediaBasename(job.request.media_path)}
         </strong>
         <span className="job-source">
-          {sourceSummary(job)} to {job.request.target_language_code}
+          {t("jobs.sourceTo", {
+            source: sourceSummary(job, t),
+            target: job.request.target_language_code,
+          })}
         </span>
         <time dateTime={job.created_at} title={formatLocalTimestamp(job.created_at)}>
-          Created {formatRelativeTimestamp(job.created_at)}
+          {t("jobs.created")} {formatRelativeTimestamp(job.created_at)}
         </time>
-        <span className="job-id">Job {job.id.slice(0, 8)}</span>
+        <span className="job-id">{t("jobs.jobId", { id: job.id.slice(0, 8) })}</span>
       </button>
       <JobStatus status={job.status} />
       {job.queue_position !== null && job.queue_position !== undefined && (
-        <span className="job-queue">Queue position {job.queue_position}</span>
+        <span className="job-queue">
+          {t("jobs.queuePosition")} {job.queue_position}
+        </span>
       )}
       {job.request.term_map && (
-        <span className="job-queue">Term map: {job.request.term_map.name}</span>
+        <span className="job-queue">
+          {t("jobs.termMapLabel", { name: job.request.term_map.name })}
+        </span>
       )}
       {isRunningJob(job.status) && (
-        <span className="job-action-note">{RUNNING_JOB_MESSAGE}</span>
+        <span className="job-action-note">{t("jobs.runningCannotCancel")}</span>
       )}
       {job.status === "Queued" && !selected && (
         <>
@@ -484,15 +527,15 @@ function JobListItem({
             variant="outline"
             disabled={cancelJob.isPending}
             onClick={() => {
-              if (confirmCancelJob(job.id)) cancelJob.mutate(job.id);
+              if (confirmCancelJob(job.id, t)) cancelJob.mutate(job.id);
             }}
           >
-            {cancelJob.isPending ? "Cancelling..." : "Cancel Job"}
+            {cancelJob.isPending ? t("jobs.cancelling") : t("jobs.cancelJob")}
           </Button>
           {cancelJob.isError && (
-            <p className="form-error" role="alert">
-              {cancelJob.error.message}
-            </p>
+            <div className="form-error" role="alert">
+              <LocalizedErrorMessage error={cancelJob.error} />
+            </div>
           )}
         </>
       )}
@@ -509,6 +552,7 @@ function JobDetail({
   onBack: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useI18n();
   const retryJob = useRetryJob();
   const cancelJob = useCancelJob();
   const deleteJob = useDeleteJob();
@@ -536,7 +580,7 @@ function JobDetail({
           type="button"
           onClick={onBack}
         >
-          <ArrowLeftIcon size={16} aria-hidden="true" /> Back to Jobs
+          <ArrowLeftIcon size={16} aria-hidden="true" /> {t("jobs.back")}
         </Button>
         <div className="job-detail-title">
           <h2 id="job-detail-title" ref={titleRef} tabIndex={-1}>
@@ -545,24 +589,28 @@ function JobDetail({
         </div>
         <div className="job-detail-context">
           <JobStatus status={job.status} />
-          <p className="job-status-explanation">{jobStatusExplanation(job.status)}</p>
+          <p className="job-status-explanation">
+            {jobStatusExplanation(job.status, t)}
+          </p>
           <div className="job-id-control">
             <code title={job.id}>{job.id}</code>
             <Button
               type="button"
               variant="outline"
-              aria-label="Copy Job ID"
+              aria-label={t("jobs.copyId")}
               onClick={() => {
                 void copyJobId(job.id).then((copied) =>
                   setCopyFeedback(copied ? "success" : "fallback"),
                 );
               }}
             >
-              <CopyIcon size={16} aria-hidden="true" /> Copy Job ID
+              <CopyIcon size={16} aria-hidden="true" /> {t("jobs.copyId")}
             </Button>
-            {copyFeedback === "success" && <span role="status">Copied</span>}
+            {copyFeedback === "success" && (
+              <span role="status">{t("jobs.copied")}</span>
+            )}
             {copyFeedback === "fallback" && (
-              <span role="status">Select the Job ID and copy it manually.</span>
+              <span role="status">{t("jobs.copyManually")}</span>
             )}
           </div>
         </div>
@@ -575,12 +623,12 @@ function JobDetail({
             variant="outline"
             disabled={cancelJob.isPending}
             onClick={() => {
-              if (confirmCancelJob(job.id)) {
+              if (confirmCancelJob(job.id, t)) {
                 cancelJob.mutate(job.id);
               }
             }}
           >
-            {cancelJob.isPending ? "Cancelling..." : "Cancel Job"}
+            {cancelJob.isPending ? t("jobs.cancelling") : t("jobs.cancelJob")}
           </Button>
         )}
         {retryable && (
@@ -590,7 +638,7 @@ function JobDetail({
             disabled={retryJob.isPending}
             onClick={() => retryJob.mutate(job.id)}
           >
-            {retryJob.isPending ? "Retrying..." : "Retry Job"}
+            {retryJob.isPending ? t("jobs.retrying") : t("jobs.retry")}
           </Button>
         )}
         {deletable && (
@@ -601,98 +649,102 @@ function JobDetail({
             onClick={() => {
               if (
                 window.confirm(
-                  `Delete Job ${job.id.slice(0, 8)}? This removes its Job history and residual Work data. Media and published output are preserved.`,
+                  t("jobs.deleteConfirmation", {
+                    action: t("jobs.delete"),
+                    id: job.id.slice(0, 8),
+                  }),
                 )
               ) {
                 deleteJob.mutate(job.id, { onSuccess: onDeleted });
               }
             }}
           >
-            {deleteJob.isPending ? "Deleting..." : "Delete Job"}
+            {deleteJob.isPending ? t("jobs.deleting") : t("jobs.delete")}
           </Button>
         )}
         {retryJob.isError && (
-          <p className="form-error" role="alert">
-            {retryJob.error.message}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={retryJob.error} />
+          </div>
         )}
         {deleteJob.isError && (
-          <p className="form-error" role="alert">
-            {deleteJob.error.message}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={deleteJob.error} />
+          </div>
         )}
         {cancelJob.isError && (
-          <p className="form-error" role="alert">
-            {cancelJob.error.message}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={cancelJob.error} />
+          </div>
         )}
       </div>
       {isRunningJob(job.status) && (
         <p className="job-action-note" role="status">
-          {RUNNING_JOB_MESSAGE}
+          {t("jobs.runningCannotCancel")}
         </p>
       )}
 
       {retryable && (
-        <Guidance title="Action available" tone="info">
-          Review the error below and fix the provider, Media, or subtitle source
-          problem, then choose Retry Job. Retry reuses this Job&apos;s saved request,
-          including its Term map. To change the Term map or other translation settings,
-          start a new translation.
+        <Guidance title={t("jobs.actionAvailable")} tone="info">
+          {t("jobs.retryGuidance")}
         </Guidance>
       )}
 
       {job.error && <JobError error={job.error} />}
 
       <section className="job-detail-section" aria-labelledby="job-summary-title">
-        <h3 id="job-summary-title">Request summary</h3>
-        <p className="section-intro">
-          These are the settings saved when this Job was created.
-        </p>
+        <h3 id="job-summary-title">{t("jobs.requestSummary")}</h3>
+        <p className="section-intro">{t("jobs.requestSummaryDetail")}</p>
         <dl className="job-summary">
-          <SummaryItem label="Media" value={job.request.media_path} />
-          <SummaryItem label="Source" value={sourceSummary(job)} />
+          <SummaryItem label={t("jobs.media")} value={job.request.media_path} />
+          <SummaryItem label={t("jobs.source")} value={sourceSummary(job, t)} />
           <SummaryItem
-            label="Target language"
+            label={t("translate.targetLanguage")}
             value={job.request.target_language_code}
           />
           <SummaryItem
-            label="Output format"
+            label={t("jobs.outputFormat")}
             value={job.request.source_format.toUpperCase()}
           />
           <SummaryItem
-            label="Term map policy"
-            value={termMapPolicy(job.request.term_map_mode)}
+            label={t("jobs.termMapPolicy")}
+            value={termMapPolicy(job.request.term_map_mode, t)}
           />
           <SummaryItem
-            label="Term map used when queued"
-            value={termMap?.name ?? "Not recorded"}
+            label={t("jobs.termMapSnapshot")}
+            value={termMap?.name ?? t("time.notRecorded")}
           />
-          <SummaryItem label="Attempt" value={String(job.attempt)} />
+          <SummaryItem label={t("jobs.attempt")} value={String(job.attempt)} />
           {job.request.dynamic_terminology_enabled !== undefined && (
             <SummaryItem
-              label="Dynamic terminology"
-              value={job.request.dynamic_terminology_enabled ? "Enabled" : "Disabled"}
+              label={t("translate.dynamicTerminology")}
+              value={
+                job.request.dynamic_terminology_enabled
+                  ? t("jobs.enabled")
+                  : t("jobs.disabled")
+              }
             />
           )}
           {job.request.subtitle_terminology_filter_enabled !== undefined && (
             <SummaryItem
-              label="Subtitle terminology filter"
+              label={t("translate.subtitleTerminology")}
               value={
-                job.request.subtitle_terminology_filter_enabled ? "Enabled" : "Disabled"
+                job.request.subtitle_terminology_filter_enabled
+                  ? t("jobs.enabled")
+                  : t("jobs.disabled")
               }
             />
           )}
           {job.request.output_suffix !== undefined && (
             <SummaryItem
-              label="Output suffix"
-              value={job.request.output_suffix || "None"}
+              label={t("translate.outputSuffix")}
+              value={job.request.output_suffix || t("jobs.none")}
             />
           )}
           {job.request.output_conflict_policy !== undefined && (
             <SummaryItem
-              label="Conflict policy"
-              value={job.request.output_conflict_policy}
+              label={t("translate.outputConflict")}
+              value={conflictPolicyLabel(job.request.output_conflict_policy, t)}
             />
           )}
         </dl>
@@ -700,27 +752,34 @@ function JobDetail({
 
       <section className="job-detail-section" aria-labelledby="job-output-title">
         <h3 id="job-output-title">
-          {job.status === "Completed" ? "Saved output" : "Planned output"}
+          {job.status === "Completed" ? t("jobs.savedOutput") : t("jobs.plannedOutput")}
         </h3>
         <p className="job-final-output">{job.request.output_path}</p>
       </section>
 
       <section className="job-detail-section" aria-labelledby="job-time-title">
-        <h3 id="job-time-title">Timestamps (local time)</h3>
+        <h3 id="job-time-title">{t("jobs.timestampsLocal")}</h3>
         <dl className="job-summary">
-          <SummaryItem label="Created" value={formatLocalTimestamp(job.created_at)} />
-          <SummaryItem label="Started" value={formatLocalTimestamp(job.started_at)} />
-          <SummaryItem label="Finished" value={formatLocalTimestamp(job.finished_at)} />
+          <SummaryItem
+            label={t("jobs.created")}
+            value={formatLocalTimestamp(job.created_at)}
+          />
+          <SummaryItem
+            label={t("jobs.started")}
+            value={formatLocalTimestamp(job.started_at)}
+          />
+          <SummaryItem
+            label={t("jobs.finished")}
+            value={formatLocalTimestamp(job.finished_at)}
+          />
         </dl>
       </section>
       <section className="job-detail-section" aria-labelledby="job-history-title">
-        <h3 id="job-history-title">Status history</h3>
+        <h3 id="job-history-title">{t("jobs.stateHistory")}</h3>
         {job.status_history && job.status_history.length > 0 ? (
           <StatusHistory entries={job.status_history} />
         ) : (
-          <p className="job-history-unavailable">
-            Status history unavailable for this Job.
-          </p>
+          <p className="job-history-unavailable">{t("jobs.statusUnavailable")}</p>
         )}
       </section>
     </div>
@@ -728,6 +787,7 @@ function JobDetail({
 }
 
 function JobError({ error }: { error: NonNullable<Job["error"]> }) {
+  const { t } = useI18n();
   const context = Object.entries(error).filter(([key]) =>
     (APPROVED_ERROR_CONTEXT_KEYS as readonly string[]).includes(key),
   );
@@ -736,19 +796,18 @@ function JobError({ error }: { error: NonNullable<Job["error"]> }) {
       <div className="job-error-heading">
         <WarningCircleIcon size={19} aria-hidden="true" />
         <div>
-          <h3 id="job-error-title">Action needed</h3>
-          <p>{error.message}</p>
+          <h3 id="job-error-title">{t("jobs.actionNeeded")}</h3>
+          <p>{t("jobs.diagnosticsDetail")}</p>
         </div>
       </div>
       <details>
-        <summary>Show approved diagnostic context</summary>
-        <p className="field-help">
-          Technical details are provided for troubleshooting.
-        </p>
+        <summary>{t("jobs.showDiagnostics")}</summary>
+        <p className="field-help">{t("jobs.diagnosticsDetail")}</p>
         <dl className="job-summary">
-          <SummaryItem label="Error code" value={error.code} />
-          {context.map(([key, value], index) => (
-            <SummaryItem key={`${key}-${index}`} label={key} value={String(value)} />
+          <SummaryItem label={t("jobs.errorCode")} value={error.code} />
+          <SummaryItem label={t("jobs.error")} value={error.message} />
+          {context.map(([key, value]) => (
+            <SummaryItem key={key} label={key} value={String(value)} />
           ))}
         </dl>
       </details>
@@ -766,21 +825,22 @@ export function SummaryItem({ label, value }: { label: string; value: string }) 
 }
 
 function StatusHistory({ entries }: { entries: JobStatusHistoryEntry[] }) {
+  const { t } = useI18n();
   return (
-    <ol className="job-status-history" aria-label="Job status history">
+    <ol className="job-status-history" aria-label={t("jobs.statusHistoryLabel")}>
       {entries.map((entry, index) => (
         <li key={`${entry.attempt}-${entry.status}-${entry.started_at}-${index}`}>
           <div>
             <JobStatus status={entry.status} />
-            <span>Attempt {entry.attempt}</span>
+            <span>{t("jobs.attemptLabel", { attempt: entry.attempt })}</span>
           </div>
           <dl>
             <div>
-              <dt>Started</dt>
+              <dt>{t("jobs.started")}</dt>
               <dd>{formatLocalTimestamp(entry.started_at)}</dd>
             </div>
             <div>
-              <dt>Finished</dt>
+              <dt>{t("jobs.finished")}</dt>
               <dd>{formatLocalTimestamp(entry.finished_at)}</dd>
             </div>
           </dl>
@@ -791,28 +851,27 @@ function StatusHistory({ entries }: { entries: JobStatusHistoryEntry[] }) {
 }
 
 function JobStatus({ status }: { status: Job["status"] }) {
-  return <span className={`job-status status-${status.toLowerCase()}`}>{status}</span>;
-}
-
-const JOB_STATUS_EXPLANATIONS: ReadonlyArray<[Job["status"], string]> = [
-  ["Queued", "Waiting for the worker. Only one Job runs at a time."],
-  ["Extracting", "Preparing an Embedded subtitle for translation."],
-  ["Translating", "The translation provider is translating the subtitle."],
-  ["Completed", "The translated subtitle was saved successfully."],
-  ["Failed", "Translation stopped because of an error. Fix the cause, then retry."],
-  ["Interrupted", "CueWeaver stopped before the Job finished. It can be retried."],
-  ["Cancelled", "The Job was cancelled before translation."],
-];
-
-function jobStatusExplanation(status: Job["status"]): string {
+  const { t } = useI18n();
   return (
-    JOB_STATUS_EXPLANATIONS.find(([candidate]) => candidate === status)?.[1] ?? status
+    <span className={`job-status status-${status.toLowerCase()}`}>
+      {t(`jobs.status.${status}`)}
+    </span>
   );
 }
 
-function confirmCancelJob(jobId: string): boolean {
+function jobStatusExplanation(
+  status: Job["status"],
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  return t(`jobs.statusExplanation.${status}` as TranslationKey);
+}
+
+function confirmCancelJob(jobId: string, t: ReturnType<typeof useI18n>["t"]): boolean {
   return window.confirm(
-    `Cancel Job ${jobId.slice(0, 8)}? It will remain in Job history and will not be translated.`,
+    t("jobs.cancelConfirmation", {
+      action: t("common.cancel"),
+      id: jobId.slice(0, 8),
+    }),
   );
 }
 
@@ -834,19 +893,20 @@ function DetailState({
 }
 
 function SelectionPrompt() {
+  const { t } = useI18n();
   return (
     <div className="detail-state">
       <BriefcaseIcon size={24} aria-hidden="true" />
-      <h2>Select a Job</h2>
-      <p>Choose a Job from history to inspect its request, output, and diagnostics.</p>
+      <h2>{t("jobs.select")}</h2>
+      <p>{t("jobs.selectDetail")}</p>
     </div>
   );
 }
 
-function sourceSummary(job: Job): string {
+function sourceSummary(job: Job, t: ReturnType<typeof useI18n>["t"]): string {
   return (
     job.request.subtitle_path ??
-    `Embedded subtitle · Stream ${job.request.stream_index}`
+    `${t("translate.embeddedSubtitle")} · ${t("translate.stream", { index: job.request.stream_index ?? "?" })}`
   );
 }
 
@@ -854,14 +914,33 @@ function mediaBasename(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
-function termMapPolicy(mode: Job["request"]["term_map_mode"]): string {
+function termMapPolicy(
+  mode: Job["request"]["term_map_mode"],
+  t: ReturnType<typeof useI18n>["t"],
+): string {
   switch (mode) {
     case "selected":
-      return "Explicit Term map";
+      return t("jobs.termMap.selected");
     case "none":
-      return "Explicitly disabled";
+      return t("jobs.termMap.none");
     case "follow":
-      return "Follow directory default";
+      return t("jobs.termMap.follow");
+  }
+}
+
+function conflictPolicyLabel(
+  policy: OutputConflictPolicy | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  switch (policy) {
+    case "skip":
+      return t("translate.skipExisting");
+    case "append-number":
+      return t("translate.appendNumber");
+    case "overwrite":
+      return t("translate.overwrite");
+    default:
+      return "";
   }
 }
 

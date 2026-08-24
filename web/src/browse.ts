@@ -1,5 +1,8 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
+import type { TranslationKey } from "./i18n";
+import { localizedError } from "./i18n/errors";
+
 export interface MediaDirectoryEntry {
   name: string;
   path: string;
@@ -22,7 +25,7 @@ async function fetchDirectory(path: string): Promise<MediaDirectory> {
     body: JSON.stringify({ path }),
   });
   if (!response.ok) {
-    await throwResponseError(response, "This Media directory could not be loaded.");
+    await throwResponseError(response, "errors.mediaDirectory");
   }
   return response.json() as Promise<MediaDirectory>;
 }
@@ -67,19 +70,22 @@ async function fetchDiscovery(
     signal,
   });
   if (!response.ok) {
-    await throwResponseError(response, "Subtitles could not be discovered.");
+    await throwResponseError(response, "errors.subtitleDiscovery");
   }
   return response.json() as Promise<MediaDiscovery>;
 }
 
 async function throwResponseError(
   response: Response,
-  fallback: string,
+  fallback: TranslationKey,
 ): Promise<never> {
   const body = (await response.json().catch(() => null)) as {
     message?: unknown;
   } | null;
-  throw new Error(typeof body?.message === "string" ? body.message : fallback);
+  throw localizedError(
+    fallback,
+    typeof body?.message === "string" ? body.message : undefined,
+  );
 }
 
 export function useMediaDiscovery(path: string | null) {

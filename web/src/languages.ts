@@ -29,3 +29,17 @@ export const COMMON_TARGET_LANGUAGES = [
   { code: "uk", label: "Ukrainian" },
   { code: "vi", label: "Vietnamese" },
 ] as const;
+
+export function localizedLanguageLabel(
+  code: string,
+  fallback: string,
+  locale: Locale,
+): string {
+  if (locale === "en") return fallback;
+  try {
+    return new Intl.DisplayNames([locale], { type: "language" }).of(code) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+import type { Locale } from "./i18n";
