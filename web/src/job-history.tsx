@@ -11,6 +11,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
 import { Guidance } from "./components/ui/guidance";
+import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
 import {
   APPROVED_ERROR_CONTEXT_KEYS,
   useClearCompletedJobs,
@@ -26,7 +27,7 @@ import {
   type OutputConflictPolicy,
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
-import { formatError, useI18n, type TranslationKey } from "./i18n";
+import { getErrorDetail, useI18n, type TranslationKey } from "./i18n";
 import { useProductStatus } from "./status";
 
 type ClearFeedback = {
@@ -81,7 +82,7 @@ function JobToast({
           ? t("jobs.notificationCompleted", { media: notification.media })
           : t("jobs.notificationFailed", {
               media: notification.media,
-              error: notification.errorMessage ?? t("jobs.notificationDetails"),
+              error: t("jobs.notificationDetails"),
             })}
       </span>
       <button
@@ -125,20 +126,15 @@ export function JobsPage() {
   const [clearFeedback, setClearFeedback] = useState<ClearFeedback | null>(null);
 
   const clearCompletedJobs = () => {
-    const prompt = t(
-      completedCount === 1
-        ? "jobs.clearConfirmationSingular"
-        : "jobs.clearConfirmationPlural",
-      { count: completedCount },
-    );
+    const prompt = t("jobs.clearConfirmation", { count: completedCount });
     if (!window.confirm(prompt)) {
       return;
     }
     setClearFeedback(null);
     clearCompleted.mutate(undefined, {
       onSuccess: (result) => {
-        const unit = result.deleted.length === 1 ? t("jobs.job") : t("jobs.jobs");
-        const failedUnit = result.failed.length === 1 ? t("jobs.job") : t("jobs.jobs");
+        const unit = t("jobs.job", { count: result.deleted.length });
+        const failedUnit = t("jobs.job", { count: result.failed.length });
         if (result.failed.length === 0) {
           setClearFeedback({
             title: t("jobs.clearSuccessTitle"),
@@ -270,9 +266,9 @@ export function JobsPage() {
             </Guidance>
           )}
           {clearCompleted.isError && (
-            <p className="form-error" role="alert">
-              {formatError(clearCompleted.error, t)}
-            </p>
+            <div className="form-error" role="alert">
+              <LocalizedErrorMessage error={clearCompleted.error} />
+            </div>
           )}
           {clearCompleted.data && clearCompleted.data.failed.length > 0 && (
             <div
@@ -288,7 +284,10 @@ export function JobsPage() {
                 {clearCompleted.data.failed.map((failure) => (
                   <li key={failure.id}>
                     {t("jobs.jobPrefix", { id: failure.id.slice(0, 8) })}:{" "}
-                    {failure.message}
+                    <details>
+                      <summary>{t("jobs.showDiagnostics")}</summary>
+                      <p>{failure.message}</p>
+                    </details>
                   </li>
                 ))}
               </ul>
@@ -307,7 +306,7 @@ export function JobsPage() {
             )}
             {jobs.isError && (
               <div className="inline-state error" role="alert">
-                {formatError(jobs.error, t)}
+                <LocalizedErrorMessage error={jobs.error} />
                 <Button variant="outline" onClick={() => void jobs.refetch()}>
                   {t("common.tryAgain")}
                 </Button>
@@ -386,9 +385,11 @@ export function JobsPage() {
           )}
           {jobId && detail.isError && (
             <DetailState error>
-              {detail.error.message === "Job does not exist"
-                ? t("jobs.noLongerAvailable")
-                : formatError(detail.error, t)}
+              {getErrorDetail(detail.error) === "Job does not exist" ? (
+                t("jobs.noLongerAvailable")
+              ) : (
+                <LocalizedErrorMessage error={detail.error} />
+              )}
               <Button variant="outline" onClick={() => navigate("/jobs")}>
                 {t("jobs.back")}
               </Button>
@@ -436,7 +437,7 @@ function RecordHealthNotice({
             <dd>
               {t("jobs.recordCount", {
                 count: record.count,
-                unit: record.count === 1 ? t("jobs.record") : t("jobs.records"),
+                unit: t("jobs.record", { count: record.count }),
               })}{" "}
               <code>{record.location}</code>
             </dd>
@@ -532,9 +533,9 @@ function JobListItem({
             {cancelJob.isPending ? t("jobs.cancelling") : t("jobs.cancelJob")}
           </Button>
           {cancelJob.isError && (
-            <p className="form-error" role="alert">
-              {formatError(cancelJob.error, t)}
-            </p>
+            <div className="form-error" role="alert">
+              <LocalizedErrorMessage error={cancelJob.error} />
+            </div>
           )}
         </>
       )}
@@ -662,19 +663,19 @@ function JobDetail({
           </Button>
         )}
         {retryJob.isError && (
-          <p className="form-error" role="alert">
-            {formatError(retryJob.error, t)}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={retryJob.error} />
+          </div>
         )}
         {deleteJob.isError && (
-          <p className="form-error" role="alert">
-            {formatError(deleteJob.error, t)}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={deleteJob.error} />
+          </div>
         )}
         {cancelJob.isError && (
-          <p className="form-error" role="alert">
-            {formatError(cancelJob.error, t)}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={cancelJob.error} />
+          </div>
         )}
       </div>
       {isRunningJob(job.status) && (
@@ -796,7 +797,7 @@ function JobError({ error }: { error: NonNullable<Job["error"]> }) {
         <WarningCircleIcon size={19} aria-hidden="true" />
         <div>
           <h3 id="job-error-title">{t("jobs.actionNeeded")}</h3>
-          <p>{error.message}</p>
+          <p>{t("jobs.diagnosticsDetail")}</p>
         </div>
       </div>
       <details>
@@ -804,6 +805,7 @@ function JobError({ error }: { error: NonNullable<Job["error"]> }) {
         <p className="field-help">{t("jobs.diagnosticsDetail")}</p>
         <dl className="job-summary">
           <SummaryItem label={t("jobs.errorCode")} value={error.code} />
+          <SummaryItem label={t("jobs.error")} value={error.message} />
           {context.map(([key, value]) => (
             <SummaryItem key={key} label={key} value={String(value)} />
           ))}

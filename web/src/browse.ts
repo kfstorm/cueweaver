@@ -1,6 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 
-import { localizedError, type TranslationKey } from "./i18n";
+import type { TranslationKey } from "./i18n";
+import { localizedError } from "./i18n/errors";
 
 export interface MediaDirectoryEntry {
   name: string;

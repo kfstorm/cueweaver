@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { localizedError, type Locale } from "./i18n";
+import { localizedError } from "./i18n/errors";
 
 const HISTORY_QUERY_KEY = ["jobs", "history"] as const;
 const HISTORY_REFRESH_QUERY_KEY = ["jobs", "history-refresh"] as const;
@@ -160,7 +160,6 @@ export interface JobNotification {
   jobId: string;
   status: "Completed" | "Failed";
   media: string;
-  errorMessage: string | null;
 }
 
 export interface JobCleanupFailure {
@@ -350,10 +349,7 @@ export function useJob(jobId: string | null, enabled = jobId !== null) {
   });
 }
 
-export function useJobNotifications(
-  data: JobListData | undefined,
-  locale: Locale,
-): {
+export function useJobNotifications(data: JobListData | undefined): {
   notifications: JobNotification[];
   dismiss: (id: string) => void;
 } {
@@ -377,7 +373,6 @@ export function useJobNotifications(
           jobId: job.id,
           status: job.status,
           media,
-          errorMessage: job.error?.message ?? null,
         });
       }
       lastKnownStatuses.current.set(job.id, job.status);
@@ -387,7 +382,7 @@ export function useJobNotifications(
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setNotifications((current) => [...current, ...observed].slice(-4));
     }
-  }, [data, locale]);
+  }, [data]);
 
   const dismiss = useCallback(
     (id: string) =>

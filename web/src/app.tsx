@@ -37,6 +37,7 @@ import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
 import { Guidance, QuickStart } from "./components/ui/guidance";
 import { Input, Select, Textarea } from "./components/ui/input";
+import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
 import {
   useMediaDirectory,
   useMediaDiscovery,
@@ -65,7 +66,13 @@ import {
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
 import { ThemeProvider } from "./theme-provider";
 import { ThemeToggle } from "./theme-toggle";
-import { formatError, I18nProvider, useI18n, type TranslationKey } from "./i18n";
+import {
+  formatError,
+  getErrorDetail,
+  I18nProvider,
+  useI18n,
+  type TranslationKey,
+} from "./i18n";
 import { COMMON_TARGET_LANGUAGES, localizedLanguageLabel } from "./languages";
 import {
   useCreateTermMap,
@@ -151,10 +158,10 @@ function LanguageSelector() {
 }
 
 function Shell() {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const status = useProductStatus();
   const jobs = useJobs();
-  const jobNotifications = useJobNotifications(jobs.data, locale);
+  const jobNotifications = useJobNotifications(jobs.data);
   const ready =
     status.data?.api.ready &&
     status.data?.roots.ready &&
@@ -283,7 +290,7 @@ function getNextTranslationStep({
   const count = batchMode ? batchMediaCount : 1;
   return t("translate.nextReady", {
     count,
-    unit: count === 1 ? t("jobs.job") : t("jobs.jobs"),
+    unit: t("jobs.job", { count }),
   });
 }
 const isBatchError = (result: BatchJobResult): result is BatchJobError =>
@@ -804,11 +811,11 @@ function Translate() {
             isBinding={bindDirectoryTermMap.isPending}
             isRemoving={removeDirectoryTermMap.isPending}
             error={
-              bindDirectoryTermMap.error
-                ? formatError(bindDirectoryTermMap.error, t)
-                : removeDirectoryTermMap.error
-                  ? formatError(removeDirectoryTermMap.error, t)
-                  : null
+              bindDirectoryTermMap.error ? (
+                <LocalizedErrorMessage error={bindDirectoryTermMap.error} />
+              ) : removeDirectoryTermMap.error ? (
+                <LocalizedErrorMessage error={removeDirectoryTermMap.error} />
+              ) : null
             }
           />
         </div>
@@ -931,9 +938,9 @@ function Translate() {
             )}
             {termMaps.isError && (
               <div className="field-recovery">
-                <span className="form-error" role="alert">
-                  {formatError(termMaps.error, t)}
-                </span>
+                <div className="form-error" role="alert">
+                  <LocalizedErrorMessage error={termMaps.error} />
+                </div>
                 <Button
                   type="button"
                   variant="outline"
@@ -1137,14 +1144,14 @@ function Translate() {
         )}
       </div>
       {createJob.isError && (
-        <p className="form-error" role="alert">
-          {formatError(createJob.error, t)}
-        </p>
+        <div className="form-error" role="alert">
+          <LocalizedErrorMessage error={createJob.error} />
+        </div>
       )}
       {createBatchJobs.isError && (
-        <p className="form-error" role="alert">
-          {formatError(createBatchJobs.error, t)}
-        </p>
+        <div className="form-error" role="alert">
+          <LocalizedErrorMessage error={createBatchJobs.error} />
+        </div>
       )}
     </>
   );
@@ -1175,7 +1182,7 @@ function DirectoryTermMapPanel({
   onRetry: () => void;
   isBinding: boolean;
   isRemoving: boolean;
-  error: string | null;
+  error: ReactNode;
 }) {
   const { t } = useI18n();
   const local = query.data?.local;
@@ -1206,9 +1213,9 @@ function DirectoryTermMapPanel({
       </div>
       {query.isError ? (
         <div className="field-recovery">
-          <p className="form-error" role="alert">
-            {formatError(query.error, t)}
-          </p>
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={query.error} />
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -1286,9 +1293,9 @@ function DirectoryTermMapPanel({
           </div>
           {error && (
             <div className="field-recovery">
-              <p className="form-error" role="alert">
+              <div className="form-error" role="alert">
                 {error}
-              </p>
+              </div>
               <Button type="button" variant="outline" onClick={onRetry}>
                 {t("common.tryAgain")}
               </Button>
@@ -1363,9 +1370,11 @@ function SkipSuccess({
         <div>
           <p className="eyebrow">{t("translate.skipped")}</p>
           <h2 id="skip-success-title">{t("translate.outputExists")}</h2>
-          <p>
-            {result.reason}. {t("translate.noJobCreated")}
-          </p>
+          <p>{t("translate.noJobCreated")}</p>
+          <details>
+            <summary>{t("translate.showErrorDetails")}</summary>
+            <p className="field-help">{result.reason}</p>
+          </details>
         </div>
       </div>
       <dl className="queue-success-summary">
@@ -1419,26 +1428,20 @@ function BatchQueueResults({
             {t("translate.batchSummary", {
               queued: t("translate.queuedCount", {
                 count: queuedCount,
-                unit: queuedCount === 1 ? t("translate.job") : t("translate.jobs"),
+                unit: t("translate.job", { count: queuedCount }),
               }),
               skipped:
                 skippedCount > 0
                   ? ` · ${t("translate.skippedCount", {
                       count: skippedCount,
-                      unit:
-                        skippedCount === 1
-                          ? t("translate.batchItem")
-                          : t("translate.batchItems"),
+                      unit: t("translate.batchItem", { count: skippedCount }),
                     })}`
                   : "",
               errors:
                 failedCount > 0
                   ? ` · ${t("translate.errorCount", {
                       count: failedCount,
-                      unit:
-                        failedCount === 1
-                          ? t("translate.batchError")
-                          : t("translate.batchErrors"),
+                      unit: t("translate.batchError", { count: failedCount }),
                     })}`
                   : "",
             })}
@@ -1502,8 +1505,16 @@ function BatchResultRow({
         >
           <div>
             <strong>{media}</strong>
-            <span>{t("translate.skippedReason", { reason: result.reason })}</span>
-            <small>{t("translate.existingOutput", { path: result.output_path })}</small>
+            <span>{t("translate.skipped")}</span>
+            <details>
+              <summary>{t("translate.showErrorDetails")}</summary>
+              <p className="field-help">
+                {t("translate.skippedReason", { reason: result.reason })}
+              </p>
+              <small>
+                {t("translate.existingOutput", { path: result.output_path })}
+              </small>
+            </details>
           </div>
         </div>
       );
@@ -1535,9 +1546,10 @@ function BatchResultRow({
     >
       <div>
         <strong>{media}</strong>
-        <span>{result.message}</span>
+        <span>{t("translate.noJobCreated")}</span>
         <details>
           <summary>{t("translate.showErrorDetails")}</summary>
+          <p className="field-help">{result.message}</p>
           <dl className="job-summary">
             <SummaryItem label={t("translate.errorCode")} value={result.error_code} />
             {context.map(([key, value]) => (
@@ -1662,10 +1674,7 @@ function SubtitleDiscovery({
           </div>
         )}
         {query.isError && (
-          <QueryErrorMessage
-            message={formatError(query.error, t)}
-            onRetry={() => void query.refetch()}
-          />
+          <QueryErrorState error={query.error} onRetry={() => void query.refetch()} />
         )}
         {!query.isFetching && query.data && batchMode && candidates.length > 1 && (
           <>
@@ -2005,10 +2014,7 @@ function MediaBrowser({
           </div>
         )}
         {query.isError && (
-          <QueryErrorMessage
-            message={formatError(query.error, t)}
-            onRetry={() => void query.refetch()}
-          />
+          <QueryErrorState error={query.error} onRetry={() => void query.refetch()} />
         )}
         {query.data && entries?.length === 0 && (
           <div className="browser-message browser-message-stack">
@@ -2072,19 +2078,38 @@ function EmptyMessage({ children }: { children: ReactNode }) {
 
 function QueryErrorMessage({
   message,
+  error,
   onRetry,
 }: {
   message: string;
+  error: unknown;
   onRetry: () => void;
 }) {
   const { t } = useI18n();
   return (
     <div role="alert" className="browser-message error">
       {message}
+      {getErrorDetail(error) && (
+        <details>
+          <summary>{t("translate.showErrorDetails")}</summary>
+          <p className="field-help">{getErrorDetail(error)}</p>
+        </details>
+      )}
       <Button variant="outline" onClick={onRetry}>
         {t("common.tryAgain")}
       </Button>
     </div>
+  );
+}
+
+function QueryErrorState({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <QueryErrorMessage
+      message={formatError(error, t)}
+      error={error}
+      onRetry={onRetry}
+    />
   );
 }
 
@@ -2160,7 +2185,7 @@ function ProviderState() {
   if (status.isError) {
     return (
       <div role="alert" className="provider-state error">
-        <WarningCircleIcon size={18} /> {formatError(status.error, t)}
+        <WarningCircleIcon size={18} /> <LocalizedErrorMessage error={status.error} />
       </div>
     );
   }
@@ -2168,7 +2193,13 @@ function ProviderState() {
     return (
       <div role="status" className="provider-state warning">
         <WarningCircleIcon size={18} />
-        {status.data.translation_provider.message}
+        <div>
+          {t("runtime.providerNotConfiguredTitle")}
+          <details>
+            <summary>{t("translate.showErrorDetails")}</summary>
+            <p className="field-help">{status.data.translation_provider.message}</p>
+          </details>
+        </div>
       </div>
     );
   }
@@ -2464,17 +2495,14 @@ function TermMapsPage() {
               <p className="term-map-validation valid" role="status">
                 {t("termMaps.valid", {
                   count: contentValidation.entryCount,
-                  unit:
-                    contentValidation.entryCount === 1
-                      ? t("termMaps.mapping")
-                      : t("termMaps.mappings"),
+                  unit: t("termMaps.mapping", { count: contentValidation.entryCount }),
                 })}
               </p>
             )}
             {create.isError && (
-              <p className="form-error" role="alert">
-                {formatError(create.error, t)}
-              </p>
+              <div className="form-error" role="alert">
+                <LocalizedErrorMessage error={create.error} />
+              </div>
             )}
             {create.isPending && (
               <p className="upload-status" role="status">
@@ -2513,7 +2541,7 @@ function TermMapsPage() {
             )}
             {maps.isError && (
               <div className="inline-state error" role="alert">
-                {formatError(maps.error, t)}
+                <LocalizedErrorMessage error={maps.error} />
                 <Button variant="outline" onClick={() => void maps.refetch()}>
                   {t("termMaps.retry")}
                 </Button>
@@ -2538,9 +2566,7 @@ function TermMapsPage() {
             {maps.data?.term_maps?.map((map) => (
               <button
                 className={`term-map-item${selectedId === map.id ? " selected" : ""}`}
-                aria-label={`${map.name}, ${map.entry_count} ${t(
-                  map.entry_count === 1 ? "termMaps.entry" : "termMaps.entries",
-                )}`}
+                aria-label={`${map.name}, ${t("termMaps.entry", { count: map.entry_count })}`}
                 aria-pressed={selectedId === map.id}
                 key={map.id}
                 type="button"
@@ -2558,8 +2584,7 @@ function TermMapsPage() {
                   {map.name}
                 </span>
                 <span>
-                  {map.entry_count}{" "}
-                  {map.entry_count === 1 ? t("termMaps.entry") : t("termMaps.entries")}
+                  {map.entry_count} {t("termMaps.entry", { count: map.entry_count })}
                 </span>
                 <time
                   dateTime={map.updated_at}
@@ -2601,7 +2626,8 @@ function TermMapsPage() {
               </h2>
               {selected.data && (
                 <p>
-                  {selected.data.entry_count} {t("termMaps.entries")} ·{" "}
+                  {selected.data.entry_count}{" "}
+                  {t("termMaps.entry", { count: selected.data.entry_count })} ·{" "}
                   {t("termMaps.updated")}{" "}
                   <time dateTime={selected.data.updated_at}>
                     {formatLocalTimestamp(selected.data.updated_at)}
@@ -2630,9 +2656,9 @@ function TermMapsPage() {
                     {t("termMaps.saveName")}
                   </Button>
                   {rename.isError && (
-                    <p className="form-error" role="alert">
-                      {formatError(rename.error, t)}
-                    </p>
+                    <div className="form-error" role="alert">
+                      <LocalizedErrorMessage error={rename.error} />
+                    </div>
                   )}
                 </div>
               )}
@@ -2646,7 +2672,7 @@ function TermMapsPage() {
             )}
             {selected.isError && (
               <div className="inline-state error" role="alert">
-                {formatError(selected.error, t)}
+                <LocalizedErrorMessage error={selected.error} />
                 <Button variant="outline" onClick={() => void selected.refetch()}>
                   {t("common.tryAgain")}
                 </Button>
@@ -2702,9 +2728,9 @@ function TermMapsPage() {
                     </p>
                   )}
                   {replace.isError && (
-                    <p className="form-error" role="alert">
-                      {formatError(replace.error, t)}
-                    </p>
+                    <div className="form-error" role="alert">
+                      <LocalizedErrorMessage error={replace.error} />
+                    </div>
                   )}
                   <Button
                     type="button"
@@ -2753,9 +2779,9 @@ function TermMapsPage() {
                         : t("termMaps.deleteMap")}
                     </Button>
                     {remove.isError && (
-                      <p className="form-error" role="alert">
-                        {formatError(remove.error, t)}
-                      </p>
+                      <div className="form-error" role="alert">
+                        <LocalizedErrorMessage error={remove.error} />
+                      </div>
                     )}
                   </div>
                 </div>

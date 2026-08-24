@@ -409,6 +409,14 @@ function embeddedJob(id: string, status: "Failed" | "Interrupted", target = "zh-
   };
 }
 
+function notificationJob(id: string) {
+  return {
+    ...embeddedJob(id, "Interrupted"),
+    status: "Translating" as string,
+    error: null as { code: string; message: string } | null,
+  };
+}
+
 function translatingEmbeddedJob(id: string) {
   return {
     ...embeddedJob(id, "Interrupted"),
@@ -1433,11 +1441,7 @@ describe("product shell", () => {
   });
 
   it("announces a newly observed completion without browser notification permission", async () => {
-    let currentJob = {
-      ...embeddedJob("job-notice-1", "Interrupted"),
-      status: "Translating",
-      error: null,
-    };
+    let currentJob = notificationJob("job-notice-1");
     const fetchMock = jobsPageFetch(() => currentJob);
     const { queryClient } = renderWithFetch("/jobs", fetchMock);
 
@@ -1456,11 +1460,7 @@ describe("product shell", () => {
   });
 
   it("announces and dismisses a newly observed failed Job", async () => {
-    let currentJob = {
-      ...embeddedJob("job-notice-failed", "Interrupted"),
-      status: "Translating",
-      error: null as { code: string; message: string } | null,
-    };
+    let currentJob = notificationJob("job-notice-failed");
     const fetchMock = jobsPageFetch(() => currentJob);
     const { queryClient } = renderWithFetch("/jobs", fetchMock);
 
@@ -2165,9 +2165,10 @@ describe("product shell", () => {
     expect(
       screen.queryByText("History cleared", { exact: true }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Job clear-jo: Job Work data could not be cleaned up",
-    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Job clear-jo:");
+    expect(
+      screen.getByText("Job Work data could not be cleaned up"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Clear completed history (1)")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Jobs" }), {
       target: { value: "" },
@@ -2490,7 +2491,9 @@ describe("product shell", () => {
     });
     expect(screen.getByRole("button", { name: "Replace content" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
-    await waitFor(() => expect(screen.getByText(/1 entries/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getAllByText(/1 entry/).length).toBeGreaterThan(0),
+    );
     expect(directoryCachesAreStale()).toBe(true);
     fireEvent.change(screen.getByLabelText("Confirm Term map name"), {
       target: { value: "People" },

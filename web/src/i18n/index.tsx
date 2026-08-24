@@ -1,5 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- This module intentionally exposes the i18n API beside its provider. */
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import i18next from "i18next";
+import { initReactI18next, I18nextProvider, useTranslation } from "react-i18next";
+import { useEffect } from "react";
 import zhCN from "./locales/zh-CN.json";
 import zhTW from "./locales/zh-TW.json";
 import ja from "./locales/ja.json";
@@ -8,6 +10,9 @@ import es from "./locales/es.json";
 import fr from "./locales/fr.json";
 import de from "./locales/de.json";
 import ptBR from "./locales/pt-BR.json";
+import { LocalizedError } from "./errors";
+
+export { LocalizedError, localizedError } from "./errors";
 
 export const UI_LOCALE_STORAGE_KEY = "cueweaver.ui-locale";
 
@@ -120,13 +125,16 @@ const ENGLISH = {
   "translate.nextConfigureRoots": "Check the Media and Work directory configuration.",
   "translate.nextChooseMedia": "Next: choose a Media item.",
   "translate.nextChooseMediaBatch": "Next: choose one or more Media items.",
-  "translate.nextChooseSubtitleForMedia":
+  "translate.nextChooseSubtitleForMedia_one":
+    "Next: choose a subtitle for {count} selected Media.",
+  "translate.nextChooseSubtitleForMedia_other":
     "Next: choose a subtitle for {count} selected Media.",
   "translate.nextChooseSubtitle": "Next: choose one subtitle source.",
   "translate.nextChooseLanguage": "Next: choose a target language.",
   "translate.nextProviderUnavailable":
     "Translation is unavailable until the provider is configured and CueWeaver is restarted.",
-  "translate.nextReady": "Ready. Starting will create {count} background {unit}.",
+  "translate.nextReady_one": "Ready. Starting will create {count} background {unit}.",
+  "translate.nextReady_other": "Ready. Starting will create {count} background {unit}.",
   "translate.chooseMedia": "Choose media",
   "translate.chooseMediaDetail": "Select a Media and discover its subtitles.",
   "translate.batchMode": "Batch mode",
@@ -212,20 +220,23 @@ const ENGLISH = {
   "translate.disposition.original": "Original",
   "translate.disposition.dubbed": "Dubbed",
   "translate.disposition.cleanEffects": "Clean effects",
-  "translate.job": "Job",
-  "translate.jobs": "Jobs",
+  "translate.job_one": "Job",
+  "translate.job_other": "Jobs",
   "translate.viewJob": "View Job",
   "translate.outputExists": "Output already exists",
   "translate.noJobCreated": "No Job was created.",
   "translate.batchQueuedSummary": "{queued} queued as Job(s){skipped} skipped{errors}.",
-  "translate.queuedCount": "{count} {unit} queued",
-  "translate.skippedCount": "{count} {unit} skipped",
-  "translate.errorCount": "{count} {unit}",
+  "translate.queuedCount_one": "{count} {unit} queued",
+  "translate.queuedCount_other": "{count} {unit} queued",
+  "translate.skippedCount_one": "{count} {unit} skipped",
+  "translate.skippedCount_other": "{count} {unit} skipped",
+  "translate.errorCount_one": "{count} {unit}",
+  "translate.errorCount_other": "{count} {unit}",
   "translate.batchSummary": "{queued}{skipped}{errors}.",
-  "translate.batchItem": "item",
-  "translate.batchItems": "items",
-  "translate.batchError": "error",
-  "translate.batchErrors": "errors",
+  "translate.batchItem_one": "item",
+  "translate.batchItem_other": "items",
+  "translate.batchError_one": "error",
+  "translate.batchError_other": "errors",
   "translate.queuedAsJob": "Queued as Job {id}",
   "translate.skippedReason": "Skipped: {reason}",
   "translate.existingOutput": "Existing output: {path}",
@@ -292,11 +303,9 @@ const ENGLISH = {
   "jobs.allStatuses": "All statuses",
   "jobs.matching": "{count} matching",
   "jobs.clearCompleted": "Clear completed history",
-  "jobs.clearConfirmation":
-    "Clear all completed Job history? This removes {count} completed Job{plural} and residual Work data. Media and published output are preserved.",
-  "jobs.clearConfirmationSingular":
+  "jobs.clearConfirmation_one":
     "Clear all completed Job history? This removes {count} completed Job and residual Work data. Media and published output are preserved.",
-  "jobs.clearConfirmationPlural":
+  "jobs.clearConfirmation_other":
     "Clear all completed Job history? This removes {count} completed Jobs and residual Work data. Media and published output are preserved.",
   "jobs.clearing": "Clearing...",
   "jobs.clearScope":
@@ -324,9 +333,13 @@ const ENGLISH = {
   "jobs.clearSuccessTitle": "History cleared",
   "jobs.clearPartialTitle": "History partially cleared",
   "jobs.clearFailedTitle": "History could not be cleared",
-  "jobs.clearSuccess":
+  "jobs.clearSuccess_one":
     "Cleared {count} completed {unit}. Media and published subtitles were not deleted.",
-  "jobs.clearPartial":
+  "jobs.clearSuccess_other":
+    "Cleared {count} completed {unit}. Media and published subtitles were not deleted.",
+  "jobs.clearPartial_one":
+    "Cleared {count} completed {unit}. {failed} completed {failedUnit} could not be cleared. See the details below.",
+  "jobs.clearPartial_other":
     "Cleared {count} completed {unit}. {failed} completed {failedUnit} could not be cleared. See the details below.",
   "jobs.clearFailed": "No completed Jobs were cleared. See the details below.",
   "jobs.actionAvailable": "Action available",
@@ -337,15 +350,16 @@ const ENGLISH = {
   "jobs.savedOutput": "Saved output",
   "jobs.plannedOutput": "Planned output",
   "jobs.diagnosticsDetail": "Technical details are provided for troubleshooting.",
-  "jobs.job": "Job",
-  "jobs.jobs": "Jobs",
+  "jobs.job_one": "Job",
+  "jobs.job_other": "Jobs",
   "jobs.jobPrefix": "Job {id}",
   "jobs.persistenceWarning": "Persistence warning",
   "jobs.recordsExcluded":
     "These records were kept out of active history and need operator review.",
-  "jobs.recordCount": "{count} {unit} in",
-  "jobs.record": "record",
-  "jobs.records": "records",
+  "jobs.recordCount_one": "{count} {unit} in",
+  "jobs.recordCount_other": "{count} {unit} in",
+  "jobs.record_one": "record",
+  "jobs.record_other": "records",
   "jobs.corrupt": "Corrupt",
   "jobs.unsupported": "Unsupported",
   "jobs.noLongerAvailable": "This Job is no longer available.",
@@ -442,17 +456,18 @@ const ENGLISH = {
   "termMaps.readingJson": "Reading JSON file...",
   "termMaps.previewHelp":
     "Add JSON using the file import or paste path to preview its mappings.",
-  "termMaps.valid": "Valid Term map: {count} {unit}.",
-  "termMaps.mapping": "mapping",
-  "termMaps.mappings": "mappings",
+  "termMaps.valid_one": "Valid Term map: {count} {unit}.",
+  "termMaps.valid_other": "Valid Term map: {count} {unit}.",
+  "termMaps.mapping_one": "mapping",
+  "termMaps.mapping_other": "mappings",
   "termMaps.uploading": "Uploading Term map",
   "termMaps.uploadingButton": "Uploading...",
   "termMaps.library": "Library",
   "termMaps.retry": "Try again",
   "termMaps.emptyDetail":
     "Upload a JSON Term map to make consistent terminology reusable.",
-  "termMaps.entry": "entry",
-  "termMaps.entries": "entries",
+  "termMaps.entry_one": "entry",
+  "termMaps.entry_other": "entries",
   "termMaps.back": "Back to Term maps",
   "termMaps.details": "Term map details",
   "termMaps.updated": "Updated",
@@ -519,30 +534,26 @@ const ENGLISH = {
   "time.utc": "UTC",
 } as const;
 
-export type TranslationKey = keyof typeof ENGLISH;
-type TranslationTable = Record<TranslationKey, string>;
-
-export class LocalizedError extends Error {
-  constructor(
-    readonly translationKey: TranslationKey,
-    readonly detail?: string,
-  ) {
-    super(detail ?? translationKey);
-    this.name = "LocalizedError";
-  }
-}
-
-export function localizedError(key: TranslationKey, detail?: string): LocalizedError {
-  return new LocalizedError(key, detail);
-}
+type TranslationResourceKey = keyof typeof ENGLISH;
+type WithoutPluralSuffix<Key extends string> = Key extends `${infer Base}_${
+  "one" | "other"}`
+  ? Base
+  : Key;
+export type TranslationKey = WithoutPluralSuffix<TranslationResourceKey>;
+type TranslationTable = Record<TranslationResourceKey, string>;
 
 export function formatError(
   error: unknown,
   t: (key: TranslationKey) => string = translate,
 ): string {
-  if (error instanceof LocalizedError) return error.detail ?? t(error.translationKey);
-  if (error instanceof Error) return error.message;
+  if (error instanceof LocalizedError) return t(error.translationKey);
   return t("errors.unknown");
+}
+
+export function getErrorDetail(error: unknown): string | null {
+  if (error instanceof LocalizedError) return error.detail ?? null;
+  if (error instanceof Error) return error.message;
+  return null;
 }
 
 const TRANSLATIONS: Record<Locale, TranslationTable> = {
@@ -557,7 +568,31 @@ const TRANSLATIONS: Record<Locale, TranslationTable> = {
   "pt-BR": ptBR,
 };
 
-let activeLocale: Locale = "en";
+const initialLocale = detectLocale();
+const i18nInstance = i18next.createInstance();
+void i18nInstance.use(initReactI18next).init({
+  resources: {
+    en: { translation: ENGLISH },
+    "zh-CN": { translation: zhCN },
+    "zh-TW": { translation: zhTW },
+    ja: { translation: ja },
+    ko: { translation: ko },
+    es: { translation: es },
+    fr: { translation: fr },
+    de: { translation: de },
+    "pt-BR": { translation: ptBR },
+  },
+  lng: initialLocale,
+  fallbackLng: "en",
+  keySeparator: false,
+  interpolation: {
+    escapeValue: false,
+    prefix: "{",
+    suffix: "}",
+  },
+});
+
+let activeLocale: Locale = initialLocale;
 
 function readStoredLocale(): string | null {
   try {
@@ -618,6 +653,7 @@ export function detectLocale(
 
 export function setActiveLocale(locale: Locale): void {
   activeLocale = locale;
+  void i18nInstance.changeLanguage(locale);
   if (typeof document !== "undefined") document.documentElement.lang = locale;
 }
 
@@ -630,10 +666,7 @@ export function translate(
   values: Record<string, string | number> = {},
   locale: Locale = activeLocale,
 ): string {
-  const template = TRANSLATIONS[locale][key] ?? ENGLISH[key] ?? key;
-  return template.replace(/\{(\w+)\}/g, (_, name: string) =>
-    String(values[name] ?? `{${name}}`),
-  );
+  return String(i18nInstance.t(key, { ...values, lng: locale }));
 }
 
 interface I18nContextValue {
@@ -643,53 +676,42 @@ interface I18nContextValue {
   localeOptions: ReadonlyArray<{ code: Locale; label: string }>;
 }
 
-const I18nContext = createContext<I18nContextValue | null>(null);
-
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    const detected = detectLocale();
-    setActiveLocale(detected);
-    return detected;
-  });
-
-  const setLocale = (nextLocale: Locale) => {
-    setLocaleState(nextLocale);
-    setActiveLocale(nextLocale);
-    storeLocale(nextLocale);
-  };
-
   useEffect(() => {
+    const locale = detectLocale();
     setActiveLocale(locale);
-  }, [locale]);
+    storeLocale(locale);
+  }, []);
 
-  const value = useMemo(
-    () => ({
-      locale,
-      setLocale,
-      t: (key: TranslationKey, values?: Record<string, string | number>) =>
-        translate(key, values, locale),
-      localeOptions: LOCALE_OPTIONS,
-    }),
-    [locale],
-  );
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+  return <I18nextProvider i18n={i18nInstance}>{children}</I18nextProvider>;
 }
 
 export function useI18n(): I18nContextValue {
-  const value = useContext(I18nContext);
-  if (!value) throw new Error("useI18n must be used inside I18nProvider");
-  return value;
+  const { t, i18n } = useTranslation();
+  const locale = resolveLocale(i18n.resolvedLanguage ?? i18n.language);
+  const setLocale = (nextLocale: Locale) => {
+    setActiveLocale(nextLocale);
+    storeLocale(nextLocale);
+  };
+  return {
+    locale,
+    setLocale,
+    t: (key, values) => String(t(key, values)),
+    localeOptions: LOCALE_OPTIONS,
+  };
 }
 
-export function getTranslationKeys(): readonly TranslationKey[] {
-  return Object.keys(ENGLISH) as TranslationKey[];
+export function getTranslationKeys(): readonly TranslationResourceKey[] {
+  return Object.keys(ENGLISH) as TranslationResourceKey[];
 }
 
 export function getLocaleTable(locale: Locale): TranslationTable {
   return TRANSLATIONS[locale];
 }
 
-export function getUntranslatedKeys(locale: Locale): readonly TranslationKey[] {
+export function getMissingTranslationKeys(
+  locale: Locale,
+): readonly TranslationResourceKey[] {
   const table = getLocaleTable(locale);
-  return getTranslationKeys().filter((key) => table[key] === ENGLISH[key]);
+  return getTranslationKeys().filter((key) => table[key].trim().length === 0);
 }

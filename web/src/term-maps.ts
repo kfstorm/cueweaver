@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { validateTermMapContent } from "./term-map-validation";
-import { localizedError } from "./i18n";
+import { localizedError } from "./i18n/errors";
 
 export {
   MAX_TERM_MAP_BYTES,

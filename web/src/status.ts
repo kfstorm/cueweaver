@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { localizedError } from "./i18n";
+import { localizedError } from "./i18n/errors";
 
 export interface ProductStatus {
   api: { ready: boolean };

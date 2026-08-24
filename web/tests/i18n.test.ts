@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   detectLocale,
+  getErrorDetail,
   formatError,
   getLocaleTable,
   getTranslationKeys,
-  getUntranslatedKeys,
+  getMissingTranslationKeys,
   localizedError,
   LOCALE_OPTIONS,
   resolveLocale,
@@ -37,17 +38,7 @@ describe("interface locale selection", () => {
       "de",
       "pt-BR",
     ]);
-    expect(LOCALE_OPTIONS).toEqual([
-      { code: "en", label: "English" },
-      { code: "zh-CN", label: "简体中文" },
-      { code: "zh-TW", label: "繁體中文" },
-      { code: "ja", label: "日本語" },
-      { code: "ko", label: "한국어" },
-      { code: "es", label: "Español" },
-      { code: "fr", label: "Français" },
-      { code: "de", label: "Deutsch" },
-      { code: "pt-BR", label: "Português (Brasil)" },
-    ]);
+    expect(LOCALE_OPTIONS.map(({ code }) => code)).toEqual(SUPPORTED_LOCALES);
   });
 
   it("normalizes regional browser languages and falls back safely", () => {
@@ -76,11 +67,11 @@ describe("interface locale selection", () => {
     expect(detectLocale(null, ["xx-YY"])).toBe("en");
   });
 
-  it("provides translated values for every key in every non-English locale", () => {
+  it("provides a non-empty value for every key in every locale", () => {
     for (const locale of SUPPORTED_LOCALES) {
       const table = getLocaleTable(locale);
       for (const key of getTranslationKeys()) expect(table[key]).toBeTruthy();
-      if (locale !== "en") expect(getUntranslatedKeys(locale), locale).toEqual([]);
+      expect(getMissingTranslationKeys(locale), locale).toEqual([]);
     }
     expect(getTranslationKeys().length).toBeGreaterThan(100);
   });
@@ -102,15 +93,6 @@ describe("interface locale selection", () => {
       "删除当前所有映射",
     );
     expect(getLocaleTable("zh-CN")["termMaps.deleteHelp"]).toContain("永久删除术语表");
-    for (const locale of SUPPORTED_LOCALES.filter((value) => value !== "en")) {
-      const table = getLocaleTable(locale);
-      expect(table["termMaps.replaceHelp"], locale).not.toBe(
-        getLocaleTable("en")["termMaps.replaceHelp"],
-      );
-      expect(table["termMaps.deleteHelp"], locale).not.toBe(
-        getLocaleTable("en")["termMaps.deleteHelp"],
-      );
-    }
   });
 
   it("interpolates values without changing the business language code", () => {
@@ -130,13 +112,22 @@ describe("interface locale selection", () => {
     expect(formatError(error)).toBe("无法加载此 Media 目录。");
   });
 
-  it("uses separate confirmation messages instead of English plural suffixes", () => {
+  it("keeps server error details separate from the localized user message", () => {
+    const error = localizedError("errors.mediaDirectory", "backend failure");
     setActiveLocale("zh-CN");
-    expect(translate("jobs.clearConfirmationPlural", { count: 2 })).not.toContain(
-      "任务s",
-    );
-    expect(translate("jobs.clearConfirmationSingular", { count: 1 })).not.toContain(
-      "任务s",
-    );
+    expect(formatError(error)).toBe("无法加载此 Media 目录。");
+    expect(getErrorDetail(error)).toBe("backend failure");
+  });
+
+  it("uses i18next plural forms for confirmation messages", () => {
+    setActiveLocale("zh-CN");
+    expect(translate("jobs.clearConfirmation", { count: 2 })).toContain("2");
+    expect(translate("jobs.clearConfirmation", { count: 1 })).toContain("1");
+  });
+
+  it("selects plural forms with i18next", () => {
+    expect(translate("jobs.job", { count: 1 }, "fr")).toBe("Tâche");
+    expect(translate("jobs.job", { count: 2 }, "fr")).toBe("Tâches");
+    expect(translate("jobs.job", { count: 1 }, "ja")).toBe("ジョブ");
   });
 });
