@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
+import { setActiveLocale, type Locale } from "../src/i18n";
 import { validateTermMapContent, type TermMapSummary } from "../src/term-maps";
 
 const CHARACTERS_TERM_MAP: TermMapSummary = {
@@ -728,13 +729,74 @@ function renderTermMapsWithFetch(fetchImplementation: typeof fetch) {
   return renderWithFetch("/term-maps", fetchImplementation);
 }
 
+const termMapGuidanceByLocale: Record<
+  Locale,
+  { nameHelp: string; exampleJson: string }
+> = {
+  en: {
+    nameHelp: "A name that helps you recognize where to use it.",
+    exampleJson: '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
+  },
+  "zh-CN": {
+    nameHelp: "用于帮助你识别其适用场景的名称。",
+    exampleJson: '{\n  "New York": "纽约",\n  "The Captain": "队长"\n}',
+  },
+  "zh-TW": {
+    nameHelp: "幫助你辨識使用情境的名稱。",
+    exampleJson: '{\n  "New York": "紐約",\n  "The Captain": "隊長"\n}',
+  },
+  ja: {
+    nameHelp: "使用する場所を識別しやすい名前。",
+    exampleJson: '{\n  "New York": "ニューヨーク",\n  "The Captain": "隊長"\n}',
+  },
+  ko: {
+    nameHelp: "어디에 사용할지 알아보기 쉬운 이름입니다.",
+    exampleJson: '{\n  "New York": "뉴욕",\n  "The Captain": "선장"\n}',
+  },
+  es: {
+    nameHelp: "Un nombre que te ayude a reconocer dónde usarlo.",
+    exampleJson: '{\n  "New York": "Nueva York",\n  "The Captain": "La capitana"\n}',
+  },
+  fr: {
+    nameHelp: "Un nom qui vous aide à reconnaître où l’utiliser.",
+    exampleJson: '{\n  "New York": "New York",\n  "The Captain": "Le capitaine"\n}',
+  },
+  de: {
+    nameHelp: "Ein Name, an dem Sie erkennen, wo Sie es verwenden.",
+    exampleJson: '{\n  "New York": "New York",\n  "The Captain": "Der Kapitän"\n}',
+  },
+  "pt-BR": {
+    nameHelp: "Um nome que ajuda você a identificar onde usá-lo.",
+    exampleJson: '{\n  "New York": "Nova York",\n  "The Captain": "A capitã"\n}',
+  },
+};
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  setActiveLocale("en");
   vi.unstubAllGlobals();
 });
 
 describe("product shell", () => {
+  it.each(Object.entries(termMapGuidanceByLocale))(
+    "localizes Term map guidance for %s",
+    async (locale, expected) => {
+      setActiveLocale(locale as Locale);
+      window.localStorage.setItem("cueweaver.ui-locale", locale);
+
+      renderTermMaps();
+
+      expect(await screen.findByText(expected.nameHelp)).toBeInTheDocument();
+      expect(document.querySelector(".concept-help pre")?.textContent).toBe(
+        expected.exampleJson,
+      );
+      expect(
+        document.querySelector<HTMLTextAreaElement>("#term-map-content"),
+      ).toHaveAttribute("placeholder", expected.exampleJson);
+    },
+  );
+
   it("follows the system theme and lets the user persist a choice", () => {
     vi.stubGlobal(
       "matchMedia",
@@ -852,7 +914,7 @@ describe("product shell", () => {
     renderWithFetch("/translate", fetchMock);
 
     expect(
-      await screen.findByText("无法连接 CueWeaver", { exact: true }),
+      await screen.findByText("无法连接CueWeaver", { exact: true }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
     expect(
@@ -889,7 +951,7 @@ describe("product shell", () => {
 
     expect(await screen.findByText("历史记录已清除")).toBeInTheDocument();
     expect(
-      screen.getByText("已清除 1 个已完成任务。Media 和已发布字幕未被删除。"),
+      screen.getByText("已清除1个已完成任务。媒体和已发布字幕未被删除。"),
     ).toBeInTheDocument();
   });
 
@@ -2560,7 +2622,7 @@ describe("product shell", () => {
     );
     expect(screen.getByLabelText("JSON content")).toHaveAttribute(
       "placeholder",
-      '{\n  "Source": "Target"\n}',
+      '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
     );
     expect(screen.getByRole("status")).toHaveTextContent("file import or paste path");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "New terms" } });

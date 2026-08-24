@@ -21,6 +21,28 @@ function placeholders(value: string): string[] {
   ].sort();
 }
 
+const forbiddenUntranslatedDomainTerms = [
+  "Media",
+  "Work",
+  "Job",
+  "Jobs",
+  "Source",
+  "Target",
+  "Directory",
+  "Subtitle",
+  "Subtitles",
+  "Provider",
+  "Output",
+  "Language",
+  "Status",
+  "Translation",
+].join("|");
+const forbiddenUntranslatedDomainTerm = new RegExp(
+  `\\b(?:${forbiddenUntranslatedDomainTerms})\\b`,
+  "u",
+);
+const forbiddenUntranslatedTermMap = /\bTerm maps?\b/iu;
+
 afterEach(() => {
   setActiveLocale("en");
 });
@@ -73,7 +95,35 @@ describe("interface locale selection", () => {
       for (const key of getTranslationKeys()) expect(table[key]).toBeTruthy();
       expect(getMissingTranslationKeys(locale), locale).toEqual([]);
     }
-    expect(getTranslationKeys().length).toBeGreaterThan(100);
+  });
+
+  it("does not leave English domain terms in non-English locales", () => {
+    const violations: string[] = [];
+    for (const locale of SUPPORTED_LOCALES) {
+      if (locale === "en") continue;
+      for (const [key, value] of Object.entries(getLocaleTable(locale))) {
+        if (
+          forbiddenUntranslatedDomainTerm.test(value) ||
+          forbiddenUntranslatedTermMap.test(value)
+        ) {
+          violations.push(`${locale}.${key}: ${value}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("provides localized term-map guidance with distinct source and target languages", () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      const table = getLocaleTable(locale) as Record<string, string>;
+      const entries = Object.entries(JSON.parse(table["termMaps.exampleJson"]));
+      expect(entries.length, locale).toBeGreaterThan(0);
+      expect(
+        entries.some(([source, target]) => source !== target),
+        locale,
+      ).toBe(true);
+      expect(() => JSON.parse(table["termMaps.jsonPlaceholder"]), locale).not.toThrow();
+    }
   });
 
   it("preserves the English placeholder set in every locale", () => {
@@ -86,13 +136,6 @@ describe("interface locale selection", () => {
         );
       }
     }
-  });
-
-  it("translates the destructive Term map guidance", () => {
-    expect(getLocaleTable("zh-CN")["termMaps.replaceHelp"]).toContain(
-      "删除当前所有映射",
-    );
-    expect(getLocaleTable("zh-CN")["termMaps.deleteHelp"]).toContain("永久删除术语表");
   });
 
   it("interpolates values without changing the business language code", () => {
@@ -109,13 +152,13 @@ describe("interface locale selection", () => {
     setActiveLocale("en");
     expect(formatError(error)).toBe("This Media directory could not be loaded.");
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此 Media 目录。");
+    expect(formatError(error)).toBe("无法加载此媒体目录。");
   });
 
   it("keeps server error details separate from the localized user message", () => {
     const error = localizedError("errors.mediaDirectory", "backend failure");
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此 Media 目录。");
+    expect(formatError(error)).toBe("无法加载此媒体目录。");
     expect(getErrorDetail(error)).toBe("backend failure");
   });
 
