@@ -85,6 +85,18 @@ def test_write_transaction_rolls_back_when_the_scope_fails(tmp_path: Path):
         )
 
 
+def test_sqlite_database_can_close_and_reinitialize_between_scopes(tmp_path: Path):
+    database = SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+
+    with database.write_transaction() as session:
+        _add_job_rows(session)
+    database.close()
+
+    with database.read_session() as session:
+        assert session.get(JobRow, "job-1") is not None
+    database.close()
+
+
 def _job_row() -> JobRow:
     return JobRow(
         id="job-1",

@@ -217,6 +217,45 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     assert store.load() == []
 
 
+def test_sqlite_job_write_rolls_back_related_rows_on_database_failure(tmp_path: Path):
+    database_path = tmp_path / "cueweaver.sqlite3"
+    database = SqliteDatabase(database_path)
+    database.initialize()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_job_snapshot_insert
+            BEFORE INSERT ON job_term_map_snapshots
+            BEGIN
+                SELECT RAISE(ABORT, 'forced snapshot failure');
+            END
+            """
+        )
+
+    record = persisted_job_record("atomic-job")
+    request = record["request"]
+    assert isinstance(request, dict)
+    request["term_map_mode"] = "selected"
+    request["term_map"] = {
+        "id": "map-1",
+        "name": "Characters",
+        "content": {"Captain": "队长"},
+    }
+    store = SqliteJobRecordStore(database)
+
+    with pytest.raises(ServiceError, match="could not be persisted"):
+        store.write(record)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone() == (0,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM job_status_history"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM job_term_map_snapshots"
+        ).fetchone() == (0,)
+
+
 def test_sqlite_record_store_rejects_a_future_schema_version(tmp_path: Path):
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
     store.write(persisted_job_record("future-schema"))

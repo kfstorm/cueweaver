@@ -8,6 +8,7 @@ from test_term_map_helpers import make_client
 
 from cueweaver.adapters.sqlite_term_maps import SqliteTermMapStore
 from cueweaver.application.database import SqliteDatabase
+from cueweaver.application.errors import ServiceError
 
 
 def create_term_map(client: TestClient, name: str = "Characters") -> dict[str, object]:
@@ -233,6 +234,29 @@ def test_concurrent_term_map_creation_allocates_each_sequence_once(tmp_path: Pat
                 "SELECT sequence FROM term_maps ORDER BY sequence"
             )
         ] == list(range(8))
+
+
+def test_term_map_replacement_rolls_back_entries_and_metadata_on_failure(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "cueweaver.sqlite3"
+    store = SqliteTermMapStore(SqliteDatabase(database_path))
+    created = store.create("Characters", {"Captain": "队长"})
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_term_map_entry_insert
+            BEFORE INSERT ON term_map_entries
+            BEGIN
+                SELECT RAISE(ABORT, 'forced entry failure');
+            END
+            """
+        )
+
+    with pytest.raises(ServiceError, match="cannot be saved"):
+        store.replace(created.id, {"Captain": "舰长"})
+
+    assert store.get(created.id).content == {"Captain": "队长"}
 
 
 def test_unknown_term_map_api_path_remains_a_structured_not_found(tmp_path: Path):
