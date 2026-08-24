@@ -28,7 +28,6 @@ import {
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
 import { getErrorDetail, useI18n, type TranslationKey } from "./i18n";
-import { useProductStatus } from "./status";
 
 type ClearFeedback = {
   title: string;
@@ -105,7 +104,6 @@ export function JobsPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<JobStatusFilter>("all");
   const jobs = useJobs({ poll: false, search, status });
-  const productStatus = useProductStatus();
   const clearCompleted = useClearCompletedJobs();
   const activeJobs = jobs.data?.active_jobs ?? [];
   const historyJobs = jobs.data?.history_jobs ?? [];
@@ -120,9 +118,6 @@ export function JobsPage() {
   const clearCompletedLabel = completedCountKnown
     ? `${t("jobs.clearCompleted")} (${completedCount})`
     : t("jobs.clearCompleted");
-  const recordHealth = productStatus.data?.job_records;
-  const recordAttention =
-    (recordHealth?.corrupt.count ?? 0) + (recordHealth?.unsupported.count ?? 0) > 0;
   const [clearFeedback, setClearFeedback] = useState<ClearFeedback | null>(null);
 
   const clearCompletedJobs = () => {
@@ -187,7 +182,6 @@ export function JobsPage() {
   return (
     <>
       <PageHeader title={t("jobs.title")} detail={t("jobs.detail")} />
-      {recordAttention && recordHealth && <RecordHealthNotice health={recordHealth} />}
       <div className={cn("job-layout", jobId && "has-selection")}>
         <section className="job-list-panel" aria-labelledby="job-list-title">
           <div className="section-heading job-list-heading">
@@ -409,42 +403,6 @@ export function JobsPage() {
         </section>
       </div>
     </>
-  );
-}
-
-function RecordHealthNotice({
-  health,
-}: {
-  health: NonNullable<ReturnType<typeof useProductStatus>["data"]>["job_records"];
-}) {
-  const { t } = useI18n();
-  if (!health) return null;
-  const entries = [
-    [t("jobs.corrupt"), health.corrupt],
-    [t("jobs.unsupported"), health.unsupported],
-  ] as const;
-  return (
-    <section className="record-health-notice" aria-labelledby="record-health-title">
-      <div>
-        <p className="eyebrow">{t("jobs.persistenceWarning")}</p>
-        <h2 id="record-health-title">{t("runtime.recordsAttention")}</h2>
-        <p>{t("jobs.recordsExcluded")}</p>
-      </div>
-      <dl>
-        {entries.map(([label, record]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>
-              {t("jobs.recordCount", {
-                count: record.count,
-                unit: t("jobs.record", { count: record.count }),
-              })}{" "}
-              <code>{record.location}</code>
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </section>
   );
 }
 

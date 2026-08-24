@@ -5,17 +5,13 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Protocol
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..application.database import (
-    AppMetadataRow,
     DatabaseOpenError,
     DatabasePathError,
     DirectoryTermMapBindingRow,
@@ -32,18 +28,8 @@ from ..application.term_maps import (
 )
 
 
-class LegacyTermMapSource(Protocol):
-    def list(self) -> list[TermMapSummary]: ...
-
-    def get(self, term_map_id: str) -> TermMapDetail: ...
-
-
-class LegacyDirectoryBindingSource(Protocol):
-    def snapshot_bindings(self) -> dict[str, str]: ...
-
-
 class SqliteTermMapStore(TermMapStore):
-    """Persist Term maps as ORM rows and import the legacy JSON layout once."""
+    """Persist Term maps as ORM rows."""
 
     def __init__(self, database: SqliteDatabase) -> None:
         self._database = database
@@ -186,98 +172,6 @@ class SqliteTermMapStore(TermMapStore):
                 "term_map_write_failed", "Term map cannot be deleted"
             ) from error
 
-    def import_legacy(
-        self,
-        work_root: Path,
-        term_maps: LegacyTermMapSource,
-        bindings: LegacyDirectoryBindingSource | None,
-    ) -> None:
-        directory = work_root / "term-maps"
-        if directory.is_symlink():
-            raise ServiceError(
-                "term_maps_unavailable", "Term map storage cannot be opened"
-            )
-        if not directory.exists():
-            self._mark_import_complete()
-            return
-        try:
-            with self._database.session() as session:
-                marker = session.get(AppMetadataRow, _IMPORT_MARKER)
-                if marker is not None and marker.value == "1":
-                    self._retire_legacy_files(directory)
-                    return
-                legacy_records = term_maps.list()
-                legacy_bindings = (
-                    bindings.snapshot_bindings() if bindings is not None else {}
-                )
-                for sequence, summary in enumerate(legacy_records):
-                    detail = term_maps.get(summary.id)
-                    if detail.id != summary.id:
-                        raise ServiceError(
-                            "term_maps_unavailable", "Term map metadata is invalid"
-                        )
-                    session.add(
-                        TermMapRow(
-                            id=detail.id,
-                            name=detail.name,
-                            name_folded=detail.name.casefold(),
-                            entry_count=len(detail.content),
-                            updated_at=detail.updated_at,
-                            sequence=sequence,
-                            content_json=_encode_content(detail.content),
-                        )
-                    )
-                session.flush()
-                for directory_name, term_map_id in legacy_bindings.items():
-                    if not any(item.id == term_map_id for item in legacy_records):
-                        raise ServiceError(
-                            "directory_term_maps_unavailable",
-                            "Directory Term map metadata is invalid",
-                        )
-                    session.add(
-                        DirectoryTermMapBindingRow(
-                            directory=directory_name,
-                            term_map_id=term_map_id,
-                        )
-                    )
-                session.merge(AppMetadataRow(key=_IMPORT_MARKER, value="1"))
-                session.commit()
-        except ServiceError:
-            raise
-        except (DatabaseOpenError, DatabasePathError) as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map metadata cannot be imported"
-            ) from error
-        except IntegrityError as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map metadata is invalid"
-            ) from error
-        except SQLAlchemyError as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map metadata cannot be imported"
-            ) from error
-        self._retire_legacy_files(directory)
-
-    def _mark_import_complete(self) -> None:
-        try:
-            with self._database.session() as session:
-                session.merge(AppMetadataRow(key=_IMPORT_MARKER, value="1"))
-                session.commit()
-        except (DatabaseOpenError, DatabasePathError) as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map migration state cannot be saved"
-            ) from error
-        except SQLAlchemyError as error:
-            raise ServiceError(
-                "term_maps_unavailable", "Term map migration state cannot be saved"
-            ) from error
-
-    @staticmethod
-    def _retire_legacy_files(directory: Path) -> None:
-        for path in directory.glob("*.json"):
-            with suppress(OSError):
-                path.unlink()
-
 
 class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
     """Persist canonical Media-relative directory bindings in SQLite."""
@@ -415,9 +309,6 @@ def _new_id() -> str:
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-_IMPORT_MARKER = "term_maps.legacy_json_import_complete"
 
 
 __all__ = ["SqliteDirectoryTermMapStore", "SqliteTermMapStore"]

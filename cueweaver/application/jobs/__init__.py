@@ -55,8 +55,6 @@ from .model import (
     valid_record,
 )
 from .store import (
-    FileJobRecordStore,
-    JobRecordHealth,
     JobRecordStore,
     SqliteJobRecordStore,
 )
@@ -118,7 +116,6 @@ class Jobs:
             record_store
             if record_store is not None
             else SqliteJobRecordStore(
-                self._jobs_root,
                 database or SqliteDatabase(self._work.path / "cueweaver.sqlite3"),
             )
         )
@@ -557,24 +554,6 @@ class Jobs:
         if record is None:
             raise ServiceError("job_not_found", "Job does not exist")
         return self._record_with_queue_position(record)
-
-    def record_health(self) -> dict[str, object]:
-        health = getattr(self._record_store, "health", None)
-        if not callable(health):
-            return _empty_record_health()
-        result = health()
-        if not isinstance(result, JobRecordHealth):
-            return _empty_record_health()
-        return {
-            "corrupt": {
-                "count": result.corrupt_count,
-                "location": result.corrupt_location,
-            },
-            "unsupported": {
-                "count": result.unsupported_count,
-                "location": result.unsupported_location,
-            },
-        }
 
     def _delete_terminal_job(self, job_id: str) -> None:
         try:
@@ -1201,16 +1180,6 @@ class Jobs:
         self._record_store.write(job_id, persisted)
         self._records[job_id] = persisted
 
-    def _ensure_jobs_root(self) -> None:
-        self._check_jobs_root()
-        try:
-            self._jobs_root.mkdir(parents=True, exist_ok=True)
-        except OSError as error:
-            raise ServiceError(
-                "invalid_work_directory",
-                "Job Work root cannot be created",
-            ) from error
-
     def _check_jobs_root(self) -> None:
         if self._jobs_root.is_symlink():
             raise ServiceError(
@@ -1343,13 +1312,6 @@ def _queue_positions(records: list[dict[str, object]]) -> dict[str, int]:
     }
 
 
-def _empty_record_health() -> dict[str, object]:
-    return {
-        "corrupt": {"count": 0, "location": "jobs/corrupt"},
-        "unsupported": {"count": 0, "location": "jobs/unsupported"},
-    }
-
-
 def _safe_input_path(value: str) -> str:
     normalized = value.replace("\\", "/").rstrip("/")
     return normalized.rsplit("/", maxsplit=1)[-1] or "<invalid path>"
@@ -1415,10 +1377,8 @@ __all__ = [
     "JOB_STATUSES",
     "TERMINAL_JOB_STATUSES",
     "CreateJobRequest",
-    "FileJobRecordStore",
     "JobDetail",
     "JobRecord",
-    "JobRecordHealth",
     "JobRecordStore",
     "JobStatus",
     "JobSummary",

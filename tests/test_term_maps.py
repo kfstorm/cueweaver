@@ -202,41 +202,6 @@ def test_term_map_listing_preserves_creation_order(tmp_path: Path):
     ] == ["First", "Second", "Third"]
 
 
-def test_legacy_term_map_json_is_imported_and_retired(tmp_path: Path):
-    work_root = tmp_path / "work"
-    term_maps_root = work_root / "term-maps"
-    term_maps_root.mkdir(parents=True)
-    (tmp_path / "media" / "Series").mkdir(parents=True)
-    term_map_id = "legacy-map"
-    (term_maps_root / f"{term_map_id}.json").write_text(
-        '{"Captain":"队长"}', encoding="utf-8"
-    )
-    (term_maps_root / "index.json").write_text(
-        (
-            '[{"id":"legacy-map","name":"Legacy",'
-            '"entry_count":1,"updated_at":"2026-08-24T00:00:00Z",'
-            '"content_file":"legacy-map.json"}]'
-        ),
-        encoding="utf-8",
-    )
-    (term_maps_root / "directory-bindings.json").write_text(
-        '{"Series":"legacy-map"}', encoding="utf-8"
-    )
-
-    client = make_client(tmp_path)
-
-    assert client.get("/api/term-maps/legacy-map").json()["content"] == {
-        "Captain": "队长"
-    }
-    assert (
-        client.get("/api/term-maps/directory", params={"path": "Series"}).json()[
-            "effective"
-        ]["id"]
-        == term_map_id
-    )
-    assert not any(term_maps_root.glob("*.json"))
-
-
 def test_unknown_term_map_api_path_remains_a_structured_not_found(tmp_path: Path):
     response = make_client(tmp_path).post("/api/term-maps/map-1/unknown")
 

@@ -500,61 +500,6 @@ a {
   line-height: 1.45;
 }
 
-.record-health-notice {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-5);
-  margin-bottom: var(--space-5);
-  border: 1px solid var(--warning-border);
-  border-left: 3px solid var(--warning);
-  background: var(--surface-warning);
-  padding: 16px 18px;
-}
-
-.record-health-notice h2 {
-  margin: 3px 0 5px;
-  color: var(--text-heading);
-  font-size: var(--font-heading);
-}
-
-.record-health-notice p:not(.eyebrow) {
-  margin: 0;
-  color: var(--warning);
-  font-size: var(--font-small);
-  line-height: 1.5;
-}
-
-.record-health-notice dl {
-  display: grid;
-  gap: 8px;
-  min-width: 250px;
-  margin: 0;
-}
-
-.record-health-notice dl > div {
-  display: grid;
-  grid-template-columns: 82px 1fr;
-  gap: var(--space-2);
-  align-items: baseline;
-}
-
-.record-health-notice dt {
-  color: var(--warning);
-  font-size: var(--font-meta);
-  font-weight: 650;
-}
-
-.record-health-notice dd {
-  margin: 0;
-  color: var(--text-heading);
-  font-size: var(--font-small);
-}
-
-.record-health-notice code {
-  font-family: ui-monospace, "SFMono-Regular", monospace;
-  font-size: var(--font-meta);
-}
-
 .workflow-panel {
   display: grid;
   grid-template-columns: 44px 1fr;
@@ -2295,16 +2240,6 @@ summary:focus-visible {
   .quick-start,
   .concept-help {
     padding: 12px;
-  }
-
-  .record-health-notice {
-    grid-template-columns: 1fr;
-    gap: 14px;
-    padding: 14px;
-  }
-
-  .record-health-notice dl {
-    min-width: 0;
   }
 
   .workflow-panel {

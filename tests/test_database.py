@@ -76,7 +76,7 @@ def test_migration_adopts_the_database_created_by_issue_193(tmp_path: Path):
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'term_maps'"
         ).fetchone() == ("term_maps",)
 
-    loaded = SqliteJobRecordStore(tmp_path / "jobs", database).load()
+    loaded = SqliteJobRecordStore(database).load()
     assert loaded[0]["id"] == "job-1"
     assert loaded[0]["schema_version"] == 1
 

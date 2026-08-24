@@ -2,15 +2,12 @@
 
 from pathlib import Path
 
-from ..adapters.directory_term_maps import FileDirectoryTermMapStore
-from ..adapters.locking import DurableFileLock
 from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.sqlite_term_maps import (
     SqliteDirectoryTermMapStore,
     SqliteTermMapStore,
 )
-from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
 from ..work import WorkRoot, WorkRootLease
 from .browsing import MediaBrowser
@@ -57,35 +54,9 @@ class CueWeaverApplication:
             ) from error
         self._lease = lease
         self._database = database
-        storage_lock = DurableFileLock(
-            configured_work_root.term_maps_directory / ".lock"
-        )
-        legacy_directory_term_map_store = FileDirectoryTermMapStore(
-            configured_work_root, lock=storage_lock
-        )
-        legacy_term_map_store = FileTermMapStore(
-            configured_work_root,
-            directory_bindings=legacy_directory_term_map_store,
-            lock=storage_lock,
-        )
-        legacy_directory_term_map_store.set_recovery(
-            legacy_term_map_store.recover_pending_deletions
-        )
         try:
             database.initialize()
-            legacy_bindings = None
-            if (
-                configured_work_root.term_maps_directory.exists()
-                or configured_work_root.term_maps_directory.is_symlink()
-            ):
-                legacy_term_map_store.recover_pending_deletions()
-                legacy_bindings = legacy_directory_term_map_store
             term_map_store = SqliteTermMapStore(database)
-            term_map_store.import_legacy(
-                configured_work_root.path,
-                legacy_term_map_store,
-                legacy_bindings,
-            )
             directory_term_map_store = SqliteDirectoryTermMapStore(database)
             self.term_maps = TermMaps(term_map_store)
             if media_root is not None:

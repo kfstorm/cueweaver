@@ -60,9 +60,8 @@ The selected media directory must be writable so CueWeaver can save translated s
 Application data is stored in the SQLite database at `cueweaver.sqlite3` in the
 Work root. The database contains Job records, Term maps, directory bindings,
 and application metadata. Schema upgrades run automatically through the
-versioned migrations shipped with CueWeaver. Existing JSON Job and Term map
-records are imported once when the application starts, then their snapshots
-are retired. The Work root also contains `.cueweaver.lease`, which prevents
+versioned migrations shipped with CueWeaver. The Work root also contains
+`.cueweaver.lease`, which prevents
 multiple CueWeaver processes from using the same Work root. Do not remove the
 Work volume while Jobs are active.
 

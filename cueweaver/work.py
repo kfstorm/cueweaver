@@ -21,7 +21,6 @@ class WorkRoot:
             raise ValueError("Work root must be an absolute path")
         self.path = path.resolve()
         self.jobs_directory = self.path / "jobs"
-        self.term_maps_directory = self.path / "term-maps"
 
     def prepare(self) -> None:
         """Create the root and verify the capabilities required by the product."""
@@ -66,9 +65,6 @@ class WorkRoot:
         return self._ensure_directory(
             self.translation_directory(job_id), "Job translation directory"
         )
-
-    def ensure_term_maps_directory(self) -> Path:
-        return self._ensure_directory(self.term_maps_directory, "Term map directory")
 
     def _ensure_directory(
         self,
