@@ -7,7 +7,13 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import URL, create_engine
 
-from cueweaver.application.database import SqliteDatabase, _migration_config
+from cueweaver.application.database import (
+    JobRow,
+    JobStatusHistoryRow,
+    JobTermMapSnapshotRow,
+    SqliteDatabase,
+    _migration_config,
+)
 from cueweaver.application.jobs.store import SqliteJobRecordStore
 
 
@@ -42,8 +48,96 @@ def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
             row[1] for row in connection.execute("PRAGMA table_info(jobs)")
         }.isdisjoint({"record_json", "content_json"})
 
-    with database.session() as session:
+    with database.read_session() as session:
         assert session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+
+
+def test_write_transaction_commits_a_multi_table_change(tmp_path: Path):
+    database = SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+
+    with database.write_transaction() as session:
+        _add_job_rows(session)
+
+    with database.read_session() as session:
+        assert session.get(JobRow, "job-1") is not None
+        assert session.get(JobStatusHistoryRow, {"job_id": "job-1", "sequence": 0})
+        assert session.get(JobTermMapSnapshotRow, {"job_id": "job-1", "position": 0})
+
+
+def test_write_transaction_rolls_back_when_the_scope_fails(tmp_path: Path):
+    database = SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+
+    with (
+        pytest.raises(RuntimeError, match="abort"),
+        database.write_transaction() as session,
+    ):
+        _add_job_rows(session)
+        raise RuntimeError("abort")
+
+    with database.read_session() as session:
+        assert session.get(JobRow, "job-1") is None
+        assert (
+            session.get(JobStatusHistoryRow, {"job_id": "job-1", "sequence": 0}) is None
+        )
+        assert (
+            session.get(JobTermMapSnapshotRow, {"job_id": "job-1", "position": 0})
+            is None
+        )
+
+
+def test_sqlite_database_can_close_and_reinitialize_between_scopes(tmp_path: Path):
+    database = SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+
+    with database.write_transaction() as session:
+        _add_job_rows(session)
+    database.close()
+
+    with database.read_session() as session:
+        assert session.get(JobRow, "job-1") is not None
+    database.close()
+
+
+def _job_row() -> JobRow:
+    return JobRow(
+        id="job-1",
+        schema_version=1,
+        status="Queued",
+        attempt=1,
+        created_at="2026-08-24T00:00:00Z",
+        queue_sequence=0,
+        media_path="Movie.mkv",
+        subtitle_path="Movie.en.srt",
+        target_language_code="zh-Hans",
+        term_map_mode="none",
+        output_path="Movie.zh-Hans.srt",
+        source_format="srt",
+        dynamic_terminology_enabled=True,
+        subtitle_terminology_filter_enabled=True,
+        output_suffix="zh-Hans",
+        output_conflict_policy="skip",
+    )
+
+
+def _add_job_rows(session) -> None:
+    session.add(_job_row())
+    session.add(
+        JobStatusHistoryRow(
+            job_id="job-1",
+            sequence=0,
+            status="Queued",
+            attempt=1,
+            started_at="2026-08-24T00:00:00Z",
+        )
+    )
+    session.add(
+        JobTermMapSnapshotRow(
+            job_id="job-1",
+            position=0,
+            source="Captain",
+            source_folded="captain",
+            target="队长",
+        )
+    )
 
 
 def test_migration_discards_issue_193_application_data(tmp_path: Path):

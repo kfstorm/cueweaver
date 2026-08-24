@@ -125,7 +125,7 @@ class DatabaseOpenError(sqlite3.Error):
 
 
 class SqliteDatabase:
-    """Run migrations once and provide short-lived ORM sessions."""
+    """Run migrations once and provide explicit ORM read/write scopes."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -139,12 +139,25 @@ class SqliteDatabase:
         self._initialize()
 
     @contextmanager
-    def session(self) -> Iterator[Session]:
+    def read_session(self) -> Iterator[Session]:
         self.initialize()
         assert self._session_factory is not None
         session = self._session_factory()
         try:
             yield session
+        finally:
+            session.close()
+
+    @contextmanager
+    def write_transaction(self, *, immediate: bool = False) -> Iterator[Session]:
+        self.initialize()
+        assert self._session_factory is not None
+        session = self._session_factory()
+        try:
+            if immediate:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            yield session
+            session.commit()
         except Exception:
             session.rollback()
             raise
