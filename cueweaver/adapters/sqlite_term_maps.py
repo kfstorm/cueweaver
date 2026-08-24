@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
@@ -153,11 +153,6 @@ class SqliteTermMapStore(TermMapStore):
                         field="name",
                     )
                 summary = _summary(row)
-                session.execute(
-                    delete(DirectoryTermMapBindingRow).where(
-                        DirectoryTermMapBindingRow.term_map_id == term_map_id
-                    )
-                )
                 session.delete(row)
                 session.commit()
                 return summary
@@ -203,10 +198,7 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
         self,
         directory: str,
         term_map_id: str,
-        validate: Callable[[str], object] | None = None,
     ) -> None:
-        if callable(validate):
-            validate(term_map_id)
         try:
             with self._database.session() as session:
                 row = session.get(DirectoryTermMapBindingRow, directory)
