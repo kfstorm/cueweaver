@@ -42,7 +42,7 @@ class SqliteJobRecordStore:
 
     def load(self) -> list[JobRecord]:
         try:
-            with self._database.session() as session:
+            with self._database.read_session() as session:
                 rows = session.scalars(
                     select(JobRow).order_by(
                         JobRow.queue_sequence, JobRow.created_at, JobRow.id
@@ -60,11 +60,10 @@ class SqliteJobRecordStore:
     def remove(self, job_id: str) -> None:
         _require_valid_job_id(job_id)
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 row = session.get(JobRow, job_id)
                 if row is not None:
                     session.delete(row)
-                session.commit()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
                 "database_unavailable", "Job record could not be deleted"
@@ -73,9 +72,8 @@ class SqliteJobRecordStore:
     def _upsert(self, record: JobRecord) -> None:
         prepared = self._prepare_record(record)
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 _upsert_row(session, prepared)
-                session.commit()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
                 "database_unavailable", "Job record could not be persisted"

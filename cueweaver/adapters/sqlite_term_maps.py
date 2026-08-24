@@ -35,7 +35,7 @@ class SqliteTermMapStore(TermMapStore):
 
     def list(self) -> list[TermMapSummary]:
         try:
-            with self._database.session() as session:
+            with self._database.read_session() as session:
                 rows = session.execute(
                     select(TermMapRow, func.count(TermMapEntryRow.position))
                     .outerjoin(
@@ -53,7 +53,7 @@ class SqliteTermMapStore(TermMapStore):
 
     def get(self, term_map_id: str) -> TermMapDetail:
         try:
-            with self._database.session() as session:
+            with self._database.read_session() as session:
                 row = _require_row(session, term_map_id)
                 entries = session.scalars(
                     select(TermMapEntryRow)
@@ -78,8 +78,7 @@ class SqliteTermMapStore(TermMapStore):
     def create(self, name: str, content: Mapping[str, str]) -> TermMapSummary:
         timestamp = _utc_timestamp()
         try:
-            with self._database.session() as session:
-                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            with self._database.write_transaction(immediate=True) as session:
                 sequence = session.scalar(select(func.max(TermMapRow.sequence)))
                 row = TermMapRow(
                     id=_new_id(),
@@ -91,7 +90,6 @@ class SqliteTermMapStore(TermMapStore):
                 session.add(row)
                 _replace_entries(session, row.id, content)
                 count = _entry_count(session, row.id)
-                session.commit()
                 return _summary(row, count)
         except (
             DatabaseOpenError,
@@ -103,13 +101,12 @@ class SqliteTermMapStore(TermMapStore):
 
     def rename(self, term_map_id: str, name: str) -> TermMapSummary:
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 row = _require_row(session, term_map_id)
                 row.name = name
                 row.name_folded = name.casefold()
                 row.updated_at = _utc_timestamp()
                 count = _entry_count(session, term_map_id)
-                session.commit()
                 return _summary(row, int(count or 0))
         except ServiceError:
             raise
@@ -123,12 +120,11 @@ class SqliteTermMapStore(TermMapStore):
 
     def replace(self, term_map_id: str, content: Mapping[str, str]) -> TermMapSummary:
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 row = _require_row(session, term_map_id)
                 _replace_entries(session, term_map_id, content)
                 row.updated_at = _utc_timestamp()
                 count = _entry_count(session, term_map_id)
-                session.commit()
                 return _summary(row, count)
         except ServiceError:
             raise
@@ -143,7 +139,7 @@ class SqliteTermMapStore(TermMapStore):
 
     def delete(self, term_map_id: str, name: str) -> TermMapSummary:
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 row = _require_row(session, term_map_id)
                 if name != row.name:
                     raise ServiceError(
@@ -154,7 +150,6 @@ class SqliteTermMapStore(TermMapStore):
                 count = _entry_count(session, term_map_id)
                 summary = _summary(row, int(count or 0))
                 session.delete(row)
-                session.commit()
                 return summary
         except ServiceError:
             raise
@@ -176,7 +171,7 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
 
     def snapshot_bindings(self) -> dict[str, str]:
         try:
-            with self._database.session() as session:
+            with self._database.read_session() as session:
                 rows = session.scalars(
                     select(DirectoryTermMapBindingRow).order_by(
                         DirectoryTermMapBindingRow.directory
@@ -195,7 +190,7 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
         term_map_id: str,
     ) -> None:
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 row = session.get(DirectoryTermMapBindingRow, directory)
                 if row is None:
                     session.add(
@@ -205,7 +200,6 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
                     )
                 else:
                     row.term_map_id = term_map_id
-                session.commit()
         except ServiceError:
             raise
         except (DatabaseOpenError, DatabasePathError) as error:
@@ -225,13 +219,12 @@ class SqliteDirectoryTermMapStore(DirectoryTermMapStore):
 
     def remove(self, directory: str) -> None:
         try:
-            with self._database.session() as session:
+            with self._database.write_transaction() as session:
                 session.execute(
                     delete(DirectoryTermMapBindingRow).where(
                         DirectoryTermMapBindingRow.directory == directory
                     )
                 )
-                session.commit()
         except (DatabaseOpenError, DatabasePathError) as error:
             raise ServiceError(
                 "directory_term_maps_unavailable",
