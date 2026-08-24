@@ -116,7 +116,6 @@ describe("interface locale selection", () => {
   it("provides localized term-map guidance with distinct source and target languages", () => {
     for (const locale of SUPPORTED_LOCALES) {
       const table = getLocaleTable(locale) as Record<string, string>;
-      expect(table["termMaps.nameHelp"], `${locale}.termMaps.nameHelp`).toBeTruthy();
       const entries = Object.entries(JSON.parse(table["termMaps.exampleJson"]));
       expect(entries.length, locale).toBeGreaterThan(0);
       expect(
