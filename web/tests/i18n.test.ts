@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +15,7 @@ import {
   setActiveLocale,
   SUPPORTED_LOCALES,
   translate,
+  type Locale,
 } from "../src/i18n";
 
 function placeholders(value: string): string[] {
@@ -20,6 +23,127 @@ function placeholders(value: string): string[] {
     ...new Set([...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1])),
   ].sort();
 }
+
+const localizedTermContract: Record<Locale, Record<string, string>> = {
+  en: {
+    "navigation.jobs": "Jobs",
+    "navigation.termMaps": "Term maps",
+    "translate.media": "Media",
+    "jobs.title": "Jobs",
+    "termMaps.title": "Term maps",
+    "termMaps.source": "Source",
+    "termMaps.target": "Target",
+  },
+  "zh-CN": {
+    "navigation.jobs": "任务",
+    "navigation.termMaps": "术语表",
+    "translate.media": "媒体",
+    "jobs.title": "任务",
+    "termMaps.title": "术语表",
+    "termMaps.source": "源词",
+    "termMaps.target": "目标词",
+  },
+  "zh-TW": {
+    "navigation.jobs": "任務",
+    "navigation.termMaps": "術語表",
+    "translate.media": "媒體",
+    "jobs.title": "任務",
+    "termMaps.title": "術語表",
+    "termMaps.source": "來源詞",
+    "termMaps.target": "目標詞",
+  },
+  ja: {
+    "navigation.jobs": "ジョブ",
+    "navigation.termMaps": "用語マップ",
+    "translate.media": "メディア",
+    "jobs.title": "ジョブ",
+    "termMaps.title": "用語マップ",
+    "termMaps.source": "原語",
+    "termMaps.target": "訳語",
+  },
+  ko: {
+    "navigation.jobs": "작업",
+    "navigation.termMaps": "용어 맵",
+    "translate.media": "미디어",
+    "jobs.title": "작업",
+    "termMaps.title": "용어 맵",
+    "termMaps.source": "원문",
+    "termMaps.target": "번역어",
+  },
+  es: {
+    "navigation.jobs": "Tareas",
+    "navigation.termMaps": "Mapas de términos",
+    "translate.media": "Medios",
+    "jobs.title": "Tareas",
+    "termMaps.title": "Mapas de términos",
+    "termMaps.source": "Origen",
+    "termMaps.target": "Destino",
+  },
+  fr: {
+    "navigation.jobs": "Tâches",
+    "navigation.termMaps": "Cartes terminologiques",
+    "translate.media": "Médias",
+    "jobs.title": "Tâches",
+    "termMaps.title": "Cartes terminologiques",
+    "termMaps.source": "Terme source",
+    "termMaps.target": "Terme cible",
+  },
+  de: {
+    "navigation.jobs": "Aufträge",
+    "navigation.termMaps": "Begriffskarten",
+    "translate.media": "Medien",
+    "jobs.title": "Aufträge",
+    "termMaps.title": "Begriffskarten",
+    "termMaps.source": "Quellbegriff",
+    "termMaps.target": "Zielbegriff",
+  },
+  "pt-BR": {
+    "navigation.jobs": "Tarefas",
+    "navigation.termMaps": "Mapas de termos",
+    "translate.media": "Mídias",
+    "jobs.title": "Tarefas",
+    "termMaps.title": "Mapas de termos",
+    "termMaps.source": "Termo de origem",
+    "termMaps.target": "Termo de destino",
+  },
+};
+
+const forbiddenUntranslatedDomainTerms = [
+  "Media",
+  "Work",
+  "Job",
+  "Jobs",
+  "Term map",
+  "Term maps",
+  "Source",
+  "Target",
+  "Directory",
+  "Subtitle",
+  "Subtitles",
+  "Provider",
+  "Output",
+  "Language",
+  "Status",
+  "Translation",
+].join("|");
+const forbiddenUntranslatedDomainTerm = new RegExp(
+  `\\b(?:${forbiddenUntranslatedDomainTerms})\\b`,
+  "u",
+);
+
+const localeSpecificTermMapExamples: Record<Locale, string> = {
+  en: '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
+  "zh-CN": '{\n  "New York": "纽约",\n  "The Captain": "队长"\n}',
+  "zh-TW": '{\n  "New York": "紐約",\n  "The Captain": "隊長"\n}',
+  ja: '{\n  "New York": "ニューヨーク",\n  "The Captain": "隊長"\n}',
+  ko: '{\n  "New York": "뉴욕",\n  "The Captain": "선장"\n}',
+  es: '{\n  "New York": "Nueva York",\n  "The Captain": "La capitana"\n}',
+  fr: '{\n  "New York": "New York",\n  "The Captain": "Le capitaine"\n}',
+  de: '{\n  "New York": "New York",\n  "The Captain": "Der Kapitän"\n}',
+  "pt-BR": '{\n  "New York": "Nova York",\n  "The Captain": "A capitã"\n}',
+};
+
+const appSource = readFileSync("src/app.tsx", "utf8");
 
 afterEach(() => {
   setActiveLocale("en");
@@ -76,6 +200,72 @@ describe("interface locale selection", () => {
     expect(getTranslationKeys().length).toBeGreaterThan(100);
   });
 
+  it("keeps domain terminology consistent in every interface locale", () => {
+    const violations: string[] = [];
+    for (const locale of SUPPORTED_LOCALES) {
+      const table = getLocaleTable(locale);
+      for (const [key, expected] of Object.entries(localizedTermContract[locale])) {
+        expect(table[key as keyof typeof table], `${locale}.${key}`).toBe(expected);
+      }
+      if (locale !== "en") {
+        for (const [key, value] of Object.entries(table)) {
+          if (forbiddenUntranslatedDomainTerm.test(value)) {
+            violations.push(`${locale}.${key}: ${value}`);
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("does not add ASCII spaces adjacent to CJK-script text", () => {
+    const unspacedLocales: Locale[] = ["zh-CN", "zh-TW", "ja"];
+    const cjkScript = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+    const violations: string[] = [];
+    for (const locale of unspacedLocales) {
+      for (const [key, value] of Object.entries(getLocaleTable(locale))) {
+        for (let index = 0; index < value.length; index += 1) {
+          if (
+            value[index] === " " &&
+            (cjkScript.test(value[index - 1] ?? "") ||
+              cjkScript.test(value[index + 1] ?? ""))
+          ) {
+            violations.push(`${locale}.${key}: ${value}`);
+            break;
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("provides localized term-map guidance with distinct source and target languages", () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      const table = getLocaleTable(locale) as Record<string, string>;
+      expect(table["termMaps.nameHelp"], `${locale}.termMaps.nameHelp`).toBeTruthy();
+      expect(table["termMaps.exampleJson"], `${locale}.termMaps.exampleJson`).toBe(
+        localeSpecificTermMapExamples[locale],
+      );
+      expect(
+        table["termMaps.jsonPlaceholder"],
+        `${locale}.termMaps.jsonPlaceholder`,
+      ).toBe(localeSpecificTermMapExamples[locale]);
+      const entries = Object.entries(JSON.parse(table["termMaps.exampleJson"]));
+      expect(entries.length, locale).toBeGreaterThan(0);
+      expect(
+        entries.some(([source, target]) => source !== target),
+        locale,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps user-visible app copy behind the translation boundary", () => {
+    expect(appSource).not.toContain("<subtitle suffix>");
+    expect(appSource).not.toContain("A name that helps you recognize where to use it.");
+    expect(appSource).not.toContain("Term map replaced with");
+    expect(appSource).not.toContain('"Source": "Target"');
+  });
+
   it("preserves the English placeholder set in every locale", () => {
     const english = getLocaleTable("en");
     for (const locale of SUPPORTED_LOCALES) {
@@ -109,13 +299,13 @@ describe("interface locale selection", () => {
     setActiveLocale("en");
     expect(formatError(error)).toBe("This Media directory could not be loaded.");
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此 Media 目录。");
+    expect(formatError(error)).toBe("无法加载此媒体目录。");
   });
 
   it("keeps server error details separate from the localized user message", () => {
     const error = localizedError("errors.mediaDirectory", "backend failure");
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此 Media 目录。");
+    expect(formatError(error)).toBe("无法加载此媒体目录。");
     expect(getErrorDetail(error)).toBe("backend failure");
   });
 

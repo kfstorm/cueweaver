@@ -103,6 +103,7 @@ const ENGLISH = {
     "Focus terminology handling on text found in the chosen subtitle.",
   "translate.appliedEveryDetail": "The suffix becomes part of each output filename.",
   "translate.suffixTargetHelp": "The suffix does not change the target language.",
+  "translate.subtitleSuffixPlaceholder": "<subtitle suffix>",
   "translate.termMapHelp":
     "A Term map is a reusable set of source and target terms that should stay consistent. You can follow the Directory default, choose one, or continue without one.",
   "translate.directoryDefaultScopeHelp":
@@ -287,6 +288,11 @@ const ENGLISH = {
   "termMaps.createStepThree": "Paste the JSON or import a .json file below.",
   "termMaps.createHelpDetail":
     "The left side is source subtitle text. The right side is the preferred translation.",
+  "termMaps.nameHelp": "A name that helps you recognize where to use it.",
+  "termMaps.exampleJson":
+    '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
+  "termMaps.jsonPlaceholder":
+    '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
   "termMaps.createFirst": "Create your first Term map",
   "termMaps.savedSuccess": "Term map saved. It is now available on Translate.",
   "termMaps.nameSaved": "Term map name saved.",
@@ -475,6 +481,7 @@ const ENGLISH = {
   "termMaps.replacementJson": "Replacement JSON content",
   "termMaps.replacing": "Replacing...",
   "termMaps.replaceContent": "Replace content",
+  "termMaps.replacedSuccess": "Term map replaced with {count} mappings.",
   "termMaps.deleteTitle": "Delete Term map",
   "termMaps.deleteHelp":
     'This permanently deletes the Term map and clears Directory defaults that use it. Media, Jobs, and published subtitles are not deleted. Enter "{name}" to confirm.',

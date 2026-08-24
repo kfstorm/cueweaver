@@ -491,7 +491,11 @@ function Translate() {
   };
   const outputFormat = selectedCandidate?.format ?? "srt";
   const outputParts = selectedMedia
-    ? outputNameParts(selectedMedia, outputFormat)
+    ? outputNameParts(
+        selectedMedia,
+        outputFormat,
+        t("translate.subtitleSuffixPlaceholder"),
+      )
     : null;
   const outputSuffixError = validateOutputSuffix(outputSuffix, t);
   const providerReady =
@@ -1556,14 +1560,14 @@ function BatchResultRow({
   );
 }
 
-function outputNameParts(mediaPath: string, format: string) {
+function outputNameParts(mediaPath: string, format: string, suffixPlaceholder: string) {
   const mediaName = mediaPath.split("/").pop() ?? mediaPath;
   const extensionIndex = mediaName.lastIndexOf(".");
   const stem = extensionIndex > 0 ? mediaName.slice(0, extensionIndex) : mediaName;
   return {
     stem,
     format,
-    name: (suffix: string) => `${stem}.${suffix || "<subtitle suffix>"}.${format}`,
+    name: (suffix: string) => `${stem}.${suffix || suffixPlaceholder}.${format}`,
   };
 }
 
@@ -2384,10 +2388,7 @@ function TermMapsPage() {
           <li>{t("termMaps.createStepTwo")}</li>
           <li>{t("termMaps.createStepThree")}</li>
         </ol>
-        <pre>{`{
-  "New York": "Nueva York",
-  "The Captain": "La capitana"
-}`}</pre>
+        <pre>{t("termMaps.exampleJson")}</pre>
         <p>{t("termMaps.createHelpDetail")}</p>
       </section>
       {successMessage && (
@@ -2415,9 +2416,7 @@ function TermMapsPage() {
                 placeholder={t("termMaps.namePlaceholder")}
               />
             </label>
-            <span className="field-help">
-              A name that helps you recognize where to use it.
-            </span>
+            <span className="field-help">{t("termMaps.nameHelp")}</span>
             <div
               className="term-map-dropzone"
               onDragOver={(event) => event.preventDefault()}
@@ -2466,7 +2465,7 @@ function TermMapsPage() {
                 }}
                 rows={6}
                 spellCheck={false}
-                placeholder={'{\n  "Source": "Target"\n}'}
+                placeholder={t("termMaps.jsonPlaceholder")}
                 aria-describedby="upload-help"
               />
             </label>
@@ -2738,7 +2737,9 @@ function TermMapsPage() {
                         {
                           onSuccess: () => {
                             setSuccessMessage(
-                              `Term map replaced with ${replacementValidation.entryCount} mappings.`,
+                              t("termMaps.replacedSuccess", {
+                                count: replacementValidation.entryCount,
+                              }),
                             );
                             if (selectedIdRef.current === selected.data.id) {
                               setReplacement(null);
