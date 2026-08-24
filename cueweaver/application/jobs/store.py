@@ -325,6 +325,7 @@ def _ensure_history(record: JobRecord) -> None:
     finished_at = record.get("finished_at")
     if status in {"Completed", "Failed", "Interrupted", "Cancelled"}:
         finished_at = finished_at if isinstance(finished_at, str) else created_at
+        record["finished_at"] = finished_at
     record["status_history"] = [
         {
             "status": status,

@@ -12,7 +12,7 @@ down_revision = "0001_application_schema"
 branch_labels = None
 depends_on = None
 
-_SNAPSHOT_ENTRY_COLUMNS = """
+_TERM_MAP_ENTRY_COLUMNS = """
             source VARCHAR NOT NULL CHECK (length(source) > 0),
             source_folded VARCHAR NOT NULL CHECK (length(source_folded) > 0),
             target VARCHAR NOT NULL CHECK (length(target) > 0),
@@ -76,7 +76,61 @@ def upgrade() -> None:
                 (subtitle_path IS NOT NULL AND stream_index IS NULL)
                 OR (subtitle_path IS NULL AND stream_index IS NOT NULL)
             ),
-            CHECK ((error_code IS NULL) = (error_message IS NULL))
+            CHECK ((error_code IS NULL) = (error_message IS NULL)),
+            CHECK (
+                error_code IS NOT NULL
+                OR (
+                    error_field IS NULL
+                    AND error_media_path IS NULL
+                    AND error_output_path IS NULL
+                    AND error_path IS NULL
+                    AND error_stream_index IS NULL
+                )
+            ),
+            CHECK (
+                (term_map_mode = 'none' AND term_map_id IS NULL AND term_map_name IS NULL)
+                OR (
+                    term_map_mode = 'selected'
+                    AND term_map_id IS NOT NULL
+                    AND length(term_map_id) > 0
+                    AND term_map_name IS NOT NULL
+                    AND length(term_map_name) > 0
+                )
+                OR (
+                    term_map_mode = 'follow'
+                    AND (
+                        (term_map_id IS NULL AND term_map_name IS NULL)
+                        OR (
+                            term_map_id IS NOT NULL
+                            AND length(term_map_id) > 0
+                            AND term_map_name IS NOT NULL
+                            AND length(term_map_name) > 0
+                        )
+                    )
+                )
+            ),
+            CHECK (
+                (status IN ('Completed', 'Failed', 'Interrupted', 'Cancelled'))
+                = (finished_at IS NOT NULL)
+            ),
+            CHECK (
+                source_format IN ('srt', 'ass', 'vtt')
+            ),
+            CHECK (
+                (
+                    extraction_status IS NULL
+                    AND extraction_path IS NULL
+                    AND extraction_format IS NULL
+                    AND extraction_content_digest IS NULL
+                )
+                OR (
+                    stream_index IS NOT NULL
+                    AND length(extraction_status) > 0
+                    AND length(extraction_path) > 0
+                    AND extraction_format IN ('srt', 'ass', 'vtt')
+                    AND length(extraction_content_digest) > 0
+                )
+            )
         )
         """
     )
@@ -93,6 +147,10 @@ def upgrade() -> None:
             started_at VARCHAR NOT NULL,
             finished_at VARCHAR,
             PRIMARY KEY (job_id, sequence),
+            CHECK (
+                status NOT IN ('Completed', 'Failed', 'Interrupted', 'Cancelled')
+                OR finished_at IS NOT NULL
+            ),
             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
         )
         """
@@ -102,7 +160,7 @@ def upgrade() -> None:
         CREATE TABLE job_term_map_snapshots (
             job_id VARCHAR NOT NULL,
             position INTEGER NOT NULL CHECK (position >= 0),
-            {_SNAPSHOT_ENTRY_COLUMNS}
+            {_TERM_MAP_ENTRY_COLUMNS}
             PRIMARY KEY (job_id, position),
             UNIQUE (job_id, source_folded),
             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
@@ -125,7 +183,7 @@ def upgrade() -> None:
         CREATE TABLE term_map_entries (
             term_map_id VARCHAR NOT NULL,
             position INTEGER NOT NULL CHECK (position >= 0),
-            {_SNAPSHOT_ENTRY_COLUMNS}
+            {_TERM_MAP_ENTRY_COLUMNS}
             PRIMARY KEY (term_map_id, position),
             UNIQUE (term_map_id, source_folded),
             FOREIGN KEY(term_map_id) REFERENCES term_maps(id) ON DELETE CASCADE
@@ -145,16 +203,6 @@ def upgrade() -> None:
         "CREATE INDEX ix_jobs_queue ON jobs (status, queue_sequence, created_at, id)"
     )
     op.execute("CREATE INDEX ix_jobs_history ON jobs (status, created_at, id)")
-    op.execute(
-        "CREATE INDEX ix_job_status_history_job ON job_status_history (job_id, sequence)"
-    )
-    op.execute(
-        "CREATE INDEX ix_job_term_map_snapshots_job "
-        "ON job_term_map_snapshots (job_id, position)"
-    )
-    op.execute(
-        "CREATE INDEX ix_term_map_entries_map ON term_map_entries (term_map_id, position)"
-    )
     op.execute(
         "CREATE INDEX ix_directory_term_map_bindings_term_map_id "
         "ON directory_term_map_bindings (term_map_id)"
