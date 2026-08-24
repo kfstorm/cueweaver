@@ -6,6 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
 
+from cueweaver.adapters.sqlite_term_maps import SqliteTermMapStore
+from cueweaver.application.database import SqliteDatabase
+
 
 def create_term_map(client: TestClient, name: str = "Characters") -> dict[str, object]:
     return client.post(
@@ -208,6 +211,28 @@ def test_term_map_listing_preserves_creation_order(tmp_path: Path):
     assert [
         item["name"] for item in client.get("/api/term-maps").json()["term_maps"]
     ] == ["First", "Second", "Third"]
+
+
+def test_concurrent_term_map_creation_allocates_each_sequence_once(tmp_path: Path):
+    database = SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    store = SqliteTermMapStore(database)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        created = list(
+            executor.map(
+                lambda index: store.create(f"Map {index}", {"a": "b"}),
+                range(8),
+            )
+        )
+
+    assert len({summary.id for summary in created}) == 8
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
+        assert [
+            row[0]
+            for row in connection.execute(
+                "SELECT sequence FROM term_maps ORDER BY sequence"
+            )
+        ] == list(range(8))
 
 
 def test_unknown_term_map_api_path_remains_a_structured_not_found(tmp_path: Path):
