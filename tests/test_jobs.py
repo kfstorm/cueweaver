@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from cueweaver.adapters.output import AtomicOutputPublisher
 from cueweaver.application.database import SqliteDatabase
@@ -236,6 +238,116 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     store.remove("sqlite-job")
 
     assert store.load() == []
+
+
+def test_sqlite_record_store_load_uses_three_selects_for_many_jobs(tmp_path: Path):
+    database = SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    store = SqliteJobRecordStore(database)
+    records = []
+    for index in range(4):
+        record = persisted_job_record(f"sqlite-job-{index}")
+        record["queue_sequence"] = 4 - index
+        timestamp = record["created_at"]
+        assert isinstance(timestamp, str)
+        record["status_history"] = [
+            {
+                "status": "Queued",
+                "attempt": 1,
+                "started_at": timestamp,
+                "finished_at": timestamp,
+            },
+            {
+                "status": "Failed",
+                "attempt": 1,
+                "started_at": timestamp,
+                "finished_at": timestamp,
+            },
+        ]
+        request = record["request"]
+        assert isinstance(request, dict)
+        request["term_map_mode"] = "selected"
+        request["term_map"] = {
+            "id": f"map-{index}",
+            "name": f"Map {index}",
+            "content": {"Captain": "队长", "Doctor": "医生"},
+        }
+        records.append(record)
+        store.write(record)
+
+    select_count = 0
+
+    def count_selects(
+        execute_state,
+    ) -> None:
+        nonlocal select_count
+        if execute_state.is_select:
+            select_count += 1
+
+    event.listen(Session, "do_orm_execute", count_selects)
+    try:
+        loaded = store.load()
+    finally:
+        event.remove(Session, "do_orm_execute", count_selects)
+
+    assert select_count == 3
+    assert [record["id"] for record in loaded] == [
+        "sqlite-job-3",
+        "sqlite-job-2",
+        "sqlite-job-1",
+        "sqlite-job-0",
+    ]
+    assert loaded == sorted(records, key=lambda record: record["queue_sequence"])
+
+
+def test_sqlite_job_term_map_snapshot_is_immutable_after_creation(tmp_path: Path):
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
+    original = persisted_job_record("snapshot-job")
+    original_request = original["request"]
+    assert isinstance(original_request, dict)
+    original_request["term_map_mode"] = "selected"
+    original_request["term_map"] = {
+        "id": "map-original",
+        "name": "Original",
+        "content": {"Captain": "队长"},
+    }
+    store.write(original)
+
+    updated = copy_job_record(original)
+    updated_request = updated["request"]
+    assert isinstance(updated_request, dict)
+    updated_request["term_map"] = {
+        "id": "map-replaced",
+        "name": "Replaced",
+        "content": {"Captain": "舰长", "Doctor": "医生"},
+    }
+    updated["error"] = {"code": "translation_failed", "message": "Failed"}
+    store.write(updated)
+
+    loaded = store.load()[0]
+    assert loaded["request"]["term_map"] == {
+        "id": "map-original",
+        "name": "Original",
+        "content": {"Captain": "队长"},
+    }
+
+
+def test_existing_job_without_snapshot_cannot_acquire_one(tmp_path: Path):
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
+    original = persisted_job_record("no-snapshot-job")
+    store.write(original)
+
+    updated = copy_job_record(original)
+    request = updated["request"]
+    assert isinstance(request, dict)
+    request["term_map_mode"] = "follow"
+    request["term_map"] = {
+        "id": "map-later",
+        "name": "Later",
+        "content": {"Captain": "队长"},
+    }
+    store.write(updated)
+
+    assert store.load()[0]["request"]["term_map"] is None
 
 
 def test_sqlite_job_write_rolls_back_related_rows_on_database_failure(tmp_path: Path):
@@ -678,6 +790,7 @@ def create_term_map_job(client: TestClient):
             "target_language_code": "zh-Hans",
             "term_map_mode": "selected",
             "term_map_id": term_map["id"],
+            "output_conflict_policy": "append-number",
         },
     ).json()
     return term_map, queued
@@ -801,6 +914,24 @@ def test_job_snapshot_is_independent_and_job_children_cascade(tmp_path: Path):
                 "SELECT COUNT(*) FROM job_term_map_snapshots WHERE job_id = ?",
                 (queued["id"],),
             ).fetchone() == (0,)
+
+
+def test_job_term_map_snapshot_survives_failure_and_retry(tmp_path: Path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    translator = FakeTranslator(error=RuntimeError("boom"))
+
+    with make_client(media_root, work_root, translator) as client:
+        _term_map, queued = create_term_map_job(client)
+        wait_for_status(client, queued["id"], "Failed")
+        before = sqlite_job_record(work_root, queued["id"])
+
+        translator.error = None
+        response = client.post(f"/api/jobs/{queued['id']}/retry")
+        assert response.status_code == 200
+        wait_for_status(client, queued["id"], "Completed")
+        after = sqlite_job_record(work_root, queued["id"])
+
+    assert after["request"]["term_map"] == before["request"]["term_map"]
 
 
 def test_none_job_mode_is_accepted_without_a_term_map(tmp_path: Path):
@@ -936,11 +1067,14 @@ def assert_failed_record_persisted(jobs: Jobs, work_root: Path, job_id: str) -> 
 
 
 def persisted_external_job(
-    tmp_path: Path,
+    tmp_path: Path, *, with_term_map: bool = False
 ) -> tuple[Path, Path, dict[str, object], Path, dict[str, object]]:
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     with make_client(media_root, work_root, FakeTranslator()) as client:
-        queued = create_job(client).json()
+        if with_term_map:
+            _term_map, queued = create_term_map_job(client)
+        else:
+            queued = create_job(client).json()
         wait_for_status(client, queued["id"], "Completed")
     record_path = work_root / "cueweaver.sqlite3"
     record = sqlite_job_record(work_root, str(queued["id"]))
@@ -1803,12 +1937,10 @@ def test_cancel_persistence_failure_keeps_job_queued_and_persisted(
     job_id = str(queued["id"])
     original_write = Jobs._write_record
 
-    def fail_cancel_write(
-        instance: Jobs, record_id: str, record: dict[str, object]
-    ) -> None:
-        if record_id == job_id and record["status"] == "Cancelled":
+    def fail_cancel_write(instance: Jobs, record: dict[str, object]) -> None:
+        if record["id"] == job_id and record["status"] == "Cancelled":
             raise OSError("record unavailable")
-        original_write(instance, record_id, record)
+        original_write(instance, record)
 
     monkeypatch.setattr(Jobs, "_write_record", fail_cancel_write)
 
@@ -1829,10 +1961,10 @@ def test_retry_persistence_failure_keeps_job_terminal_and_unqueued(
     )
     original_write = Jobs._write_record
 
-    def fail_retry_write(jobs: Jobs, job_id: str, record: dict[str, object]) -> None:
+    def fail_retry_write(jobs: Jobs, record: dict[str, object]) -> None:
         if record["status"] == "Queued":
             raise OSError("record unavailable")
-        original_write(jobs, job_id, record)
+        original_write(jobs, record)
 
     monkeypatch.setattr(Jobs, "_write_record", fail_retry_write)
 
@@ -1968,14 +2100,12 @@ def test_embedded_phase_persistence_failure_marks_worker_failed(
     original_write = Jobs._write_record
     failed_once = False
 
-    def fail_translating_write(
-        current_jobs: Jobs, job_id: str, record: dict[str, object]
-    ) -> None:
+    def fail_translating_write(current_jobs: Jobs, record: dict[str, object]) -> None:
         nonlocal failed_once
         if not failed_once and record["status"] == "Translating":
             failed_once = True
             raise OSError("record unavailable")
-        original_write(current_jobs, job_id, record)
+        original_write(current_jobs, record)
 
     monkeypatch.setattr(Jobs, "_write_record", fail_translating_write)
     queued = jobs.create(
@@ -2598,12 +2728,12 @@ def test_worker_survives_a_persistence_failure_and_processes_next_job(
     original_write = Jobs._write_record
     failed_once = False
 
-    def fail_translating_write(jobs, job_id, record):
+    def fail_translating_write(jobs, record):
         nonlocal failed_once
         if not failed_once and record["status"] == "Translating":
             failed_once = True
             raise OSError("record unavailable")
-        original_write(jobs, job_id, record)
+        original_write(jobs, record)
 
     monkeypatch.setattr(Jobs, "_write_record", fail_translating_write)
     first = create_job(client, "zh").json()
@@ -3254,15 +3384,9 @@ def test_restart_recovers_queued_jobs_and_interrupts_running_jobs(
     tmp_path: Path, active_status: str
 ):
     media_root, work_root, queued, _record_path, record = persisted_external_job(
-        tmp_path
+        tmp_path, with_term_map=True
     )
     set_record_status(record, active_status, finished_at=None)
-    record["request"]["term_map"] = {
-        "id": "map-1",
-        "name": "Characters",
-        "content": {"Captain": "队长"},
-    }
-    record["request"]["term_map_mode"] = "selected"
     record["finished_at"] = None
     persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / queued["id"]

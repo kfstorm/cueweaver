@@ -42,6 +42,7 @@ class JobRow(Base):
     stream_index: Mapped[int | None] = mapped_column(Integer)
     target_language_code: Mapped[str] = mapped_column(String, nullable=False)
     term_map_mode: Mapped[str] = mapped_column(String, nullable=False)
+    # These columns are immutable Job-owned snapshot metadata, not live-map fields.
     term_map_id: Mapped[str | None] = mapped_column(String)
     term_map_name: Mapped[str | None] = mapped_column(String)
     output_path: Mapped[str] = mapped_column(String, nullable=False)

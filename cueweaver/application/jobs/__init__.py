@@ -206,9 +206,7 @@ class Jobs:
             }
             if subtitle is None:
                 record["extraction"] = None
-            self._write_record(job_id, record)
-            with self._lock:
-                self._records[job_id] = record
+            self._write_record(record)
             self._pending.put(job_id)
             return self._record_with_queue_position(record)
 
@@ -305,8 +303,7 @@ class Jobs:
                         "message": error.message,
                         **context,
                     }
-                    self._write_record(job_id, failed_record)
-                    self._records[job_id] = failed_record
+                    self._write_record(failed_record)
                 raise safe_error from error
             with self._lock:
                 retry_record = copy_job_record(record)
@@ -331,8 +328,7 @@ class Jobs:
                     self._base_output_path(retry_request).relative_to(self._media_root)
                 )
                 retry_record["queue_sequence"] = next_queue_sequence
-                self._write_record(job_id, retry_record)
-                self._records[job_id] = retry_record
+                self._write_record(retry_record)
                 self._next_queue_sequence = next_queue_sequence
                 self._pending.put(job_id)
                 return self._record_with_queue_position(retry_record)
@@ -357,8 +353,7 @@ class Jobs:
             )
             cancelled_record["finished_at"] = cancelled_at
             cancelled_record["error"] = None
-            self._write_record(job_id, cancelled_record)
-            self._records[job_id] = cancelled_record
+            self._write_record(cancelled_record)
             return self._record_with_queue_position(cancelled_record)
 
     def delete(self, job_id: str) -> dict[str, object]:
@@ -861,13 +856,14 @@ class Jobs:
             record = copy_job_record(loaded_record)
             if status in {"Extracting", "Translating"}:
                 record = _interrupted_record(record)
-                self._write_record(job_id, record)
+                self._write_record(record)
             elif status == "Queued":
                 self._recovered_queue_ids.append(job_id)
+            if status not in {"Extracting", "Translating"}:
+                self._records[job_id] = copy_job_record(record)
             self._next_queue_sequence = max(
                 self._next_queue_sequence, queue_sequence(record)
             )
-            self._records[job_id] = copy_job_record(record)
 
     def _run(self) -> None:
         while True:
@@ -1045,10 +1041,9 @@ class Jobs:
                 }
                 transition_status(record, progress.phase, at=_timestamp())
                 try:
-                    self._write_record(job_id, record)
+                    self._write_record(record)
                 except Exception as error:
                     raise JobExecutionProgressPersistenceError from error
-                self._records[job_id] = record
         return True
 
     def _prepare_execution(
@@ -1071,7 +1066,7 @@ class Jobs:
                 record["started_at"] = started_at
                 output_path = self._execution_output_path(request)
                 request["output_path"] = str(output_path.relative_to(self._media_root))
-                self._write_record(job_id, record)
+                self._write_record(record)
                 return request, embedded, self._jobs_root / job_id, record
 
     def _execution_output_path(self, request: dict[str, object]) -> Path:
@@ -1126,13 +1121,13 @@ class Jobs:
             transition_status(record, status, at=finished_at, terminal=True)
             record["finished_at"] = finished_at
             record["error"] = error
-            self._write_record(job_id, record)
+            self._write_record(record)
 
     def _finish_interrupted(self, job_id: str) -> None:
         with self._lock:
             interrupted = _interrupted_record(self._records[job_id])
             try:
-                self._write_record(job_id, interrupted)
+                self._write_record(interrupted)
             except (OSError, ServiceError) as error:
                 logger.warning(
                     "Could not persist interrupted Job %s during shutdown: %s",
@@ -1157,7 +1152,7 @@ class Jobs:
                     "message": "Job execution could not be persisted",
                 }
                 try:
-                    self._write_record(job_id, record)
+                    self._write_record(record)
                 except Exception as persistence_error:
                     logger.error(
                         "Could not persist worker failure for Job %s: %s",
@@ -1165,9 +1160,11 @@ class Jobs:
                         persistence_error,
                     )
 
-    def _write_record(self, job_id: str, record: dict[str, object]) -> None:
+    def _write_record(self, record: dict[str, object]) -> None:
         persisted = copy_job_record(record)
         self._record_store.write(persisted)
+        job_id = persisted["id"]
+        assert isinstance(job_id, str)
         self._records[job_id] = persisted
 
     def _check_jobs_root(self) -> None:
