@@ -16,7 +16,6 @@ function getLocalTimestampFormatter(locale: Locale): Intl.DateTimeFormat {
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
-      timeZoneName: "short",
     });
     localTimestampFormatters.set(locale, formatter);
   }

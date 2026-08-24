@@ -328,7 +328,7 @@
   "jobs.enabled": "已启用",
   "jobs.disabled": "已禁用",
   "jobs.none": "无",
-  "jobs.timestampsLocal": "时间戳（本地时间）",
+  "jobs.timeInformation": "时间信息",
   "jobs.statusUnavailable": "此任务的状态历史不可用。",
   "jobs.showDiagnostics": "显示批准的诊断上下文",
   "jobs.errorCode": "错误代码",

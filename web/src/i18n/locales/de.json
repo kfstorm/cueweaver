@@ -328,7 +328,7 @@
   "jobs.enabled": "Aktiviert",
   "jobs.disabled": "Deaktiviert",
   "jobs.none": "Keine",
-  "jobs.timestampsLocal": "Zeitstempel (Ortszeit)",
+  "jobs.timeInformation": "Zeitangaben",
   "jobs.statusUnavailable": "Der Statusverlauf ist für diesen Auftrag nicht verfügbar.",
   "jobs.showDiagnostics": "Freigegebenen Diagnosekontext anzeigen",
   "jobs.errorCode": "Fehlercode",

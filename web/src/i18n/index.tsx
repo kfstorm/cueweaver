@@ -421,7 +421,7 @@ const ENGLISH = {
   "jobs.enabled": "Enabled",
   "jobs.disabled": "Disabled",
   "jobs.none": "None",
-  "jobs.timestampsLocal": "Timestamps (local time)",
+  "jobs.timeInformation": "Time information",
   "jobs.statusUnavailable": "Status history unavailable for this Job.",
   "jobs.showDiagnostics": "Show approved diagnostic context",
   "jobs.errorCode": "Error code",

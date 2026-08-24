@@ -328,7 +328,7 @@
   "jobs.enabled": "Ativado",
   "jobs.disabled": "Desativado",
   "jobs.none": "Nenhum",
-  "jobs.timestampsLocal": "Horários (hora local)",
+  "jobs.timeInformation": "Informações de data e hora",
   "jobs.statusUnavailable": "O histórico de status não está disponível para esta tarefa.",
   "jobs.showDiagnostics": "Mostrar contexto de diagnóstico aprovado",
   "jobs.errorCode": "Código do erro",

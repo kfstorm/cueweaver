@@ -1183,7 +1183,7 @@ describe("product shell", () => {
     expect(screen.getByText("subtitle")).toBeInTheDocument();
   });
 
-  it("opens a durable Job detail with local timestamps and status history", async () => {
+  it("opens a durable Job detail with time information and status history", async () => {
     const job = {
       id: "job-detail-1",
       attempt: 2,
@@ -1250,6 +1250,7 @@ describe("product shell", () => {
     expect(screen.getByText("Characters")).toBeInTheDocument();
     expect(screen.getByText("Explicit Term map")).toBeInTheDocument();
     expect(screen.getByText("Shows/Movie.zh-Hans.2.srt")).toBeInTheDocument();
+    expect(document.getElementById("job-time-title")).toBeInTheDocument();
     expect(screen.getByText("Status history")).toBeInTheDocument();
     expect(screen.getAllByText("Attempt 2")).toHaveLength(2);
     expect(screen.queryByText(/work\/jobs/)).not.toBeInTheDocument();

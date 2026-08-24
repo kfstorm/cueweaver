@@ -328,7 +328,7 @@
   "jobs.enabled": "有効",
   "jobs.disabled": "無効",
   "jobs.none": "なし",
-  "jobs.timestampsLocal": "タイムスタンプ（現地時間）",
+  "jobs.timeInformation": "時間情報",
   "jobs.statusUnavailable": "このジョブの状態履歴は利用できません。",
   "jobs.showDiagnostics": "承認済みの診断コンテキストを表示",
   "jobs.errorCode": "エラーコード",
