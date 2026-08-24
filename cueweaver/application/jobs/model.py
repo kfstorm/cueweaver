@@ -277,9 +277,7 @@ def _valid_term_map_snapshot(term_map: object) -> bool:
 
 
 def _valid_term_map_selection(request: dict[str, object], term_map: object) -> bool:
-    mode = request.get("term_map_mode")
-    if mode is None:
-        return True
+    mode = request["term_map_mode"]
     if mode == "none":
         return term_map is None
     if mode == "selected":
