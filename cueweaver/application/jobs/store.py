@@ -18,6 +18,7 @@ from ..database import (
 from ..errors import ServiceError
 from .model import (
     CURRENT_JOB_SCHEMA_VERSION,
+    TERMINAL_JOB_STATUSES,
     JobRecord,
     copy_job_record,
     migrate_record,
@@ -330,7 +331,7 @@ def _ensure_history(record: JobRecord) -> None:
     ):
         return
     finished_at = record.get("finished_at")
-    if status in {"Completed", "Failed", "Interrupted", "Cancelled"}:
+    if status in TERMINAL_JOB_STATUSES:
         finished_at = finished_at if isinstance(finished_at, str) else created_at
         record["finished_at"] = finished_at
     record["status_history"] = [
