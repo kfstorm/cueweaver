@@ -6,13 +6,12 @@ import json
 import os
 import sqlite3
 import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
 from typing import Protocol
 
+from ..database import DatabaseOpenError, DatabasePathError, SqliteDatabase
 from ..errors import ServiceError
 from .model import JobRecord, migrate_record, valid_job_id, valid_record
 
@@ -162,18 +161,16 @@ ON CONFLICT(id) DO UPDATE SET
 class SqliteJobRecordStore:
     """Persist Job records in SQLite while importing the legacy JSON layout."""
 
-    def __init__(self, jobs_root: Path, database_path: Path) -> None:
+    def __init__(self, jobs_root: Path, database: SqliteDatabase) -> None:
         self._jobs_root = jobs_root
-        self._database_path = database_path
+        self._database = database
         self._legacy_store = FileJobRecordStore(jobs_root)
-        self._schema_lock = Lock()
-        self._initialized = False
         self._migration_ready = False
 
     def load(self) -> list[JobRecord]:
         self._ensure_migrated()
         try:
-            with self._connection() as connection:
+            with self._database.connection() as connection:
                 rows = connection.execute(
                     "SELECT id, record_json FROM jobs "
                     "ORDER BY queue_sequence, created_at, id"
@@ -224,7 +221,7 @@ class SqliteJobRecordStore:
         _require_valid_job_id(job_id)
         self._ensure_migrated()
         try:
-            with self._connection() as connection:
+            with self._database.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
                 connection.commit()
@@ -238,12 +235,20 @@ class SqliteJobRecordStore:
 
     def _migration_complete(self) -> bool:
         try:
-            with self._connection() as connection:
+            with self._database.connection() as connection:
                 row = connection.execute(
                     "SELECT value FROM app_metadata "
                     "WHERE key = 'jobs.legacy_json_import_complete'"
                 ).fetchone()
             return row is not None and row[0] == "1"
+        except DatabasePathError as error:
+            raise ServiceError(
+                "invalid_work_directory", "Job Work root cannot be created"
+            ) from error
+        except DatabaseOpenError as error:
+            raise ServiceError(
+                "job_store_unavailable", "Job database cannot be opened"
+            ) from error
         except sqlite3.Error as error:
             raise ServiceError(
                 "job_store_unavailable", "Job migration state could not be read"
@@ -254,7 +259,6 @@ class SqliteJobRecordStore:
             return
         if self._jobs_root.exists() or self._jobs_root.is_symlink():
             self._ensure_jobs_root()
-        self._initialize()
         if self._migration_complete():
             self._retire_legacy_snapshots()
             self._migration_ready = True
@@ -265,7 +269,7 @@ class SqliteJobRecordStore:
             else []
         )
         try:
-            with self._connection() as connection:
+            with self._database.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 for record in legacy_records:
                     job_id, raw_record, created_at, sequence = self._prepare_record(
@@ -290,44 +294,10 @@ class SqliteJobRecordStore:
         self._retire_legacy_snapshots()
         self._migration_ready = True
 
-    def _initialize(self) -> None:
-        with self._schema_lock:
-            if self._initialized:
-                return
-            try:
-                self._database_path.parent.mkdir(parents=True, exist_ok=True)
-            except OSError as error:
-                raise ServiceError(
-                    "invalid_work_directory",
-                    "Job Work root cannot be created",
-                ) from error
-            try:
-                with self._connection() as connection:
-                    connection.executescript(
-                        """
-                        CREATE TABLE IF NOT EXISTS jobs (
-                            id TEXT PRIMARY KEY,
-                            record_json TEXT NOT NULL,
-                            created_at TEXT NOT NULL,
-                            queue_sequence INTEGER NOT NULL
-                        );
-                        CREATE TABLE IF NOT EXISTS app_metadata (
-                            key TEXT PRIMARY KEY,
-                            value TEXT NOT NULL
-                        );
-                        """
-                    )
-            except sqlite3.Error as error:
-                raise ServiceError(
-                    "job_store_unavailable", "Job database cannot be opened"
-                ) from error
-            self._initialized = True
-
     def _upsert(self, record: JobRecord) -> None:
-        self._initialize()
         job_id, raw_record, created_at, sequence = self._prepare_record(record)
         try:
-            with self._connection() as connection:
+            with self._database.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     _UPSERT_JOB_SQL,
@@ -359,18 +329,6 @@ class SqliteJobRecordStore:
         if not isinstance(created_at, str) or not isinstance(sequence, int):
             raise ServiceError("invalid_job_record", "Job record metadata is invalid")
         return job_id, raw_record, created_at, sequence
-
-    @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(
-            self._database_path,
-            timeout=30,
-            isolation_level=None,
-        )
-        try:
-            yield connection
-        finally:
-            connection.close()
 
     def _retire_legacy_snapshots(self) -> None:
         if not self._jobs_root.exists():

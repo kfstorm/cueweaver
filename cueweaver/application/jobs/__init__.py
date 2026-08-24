@@ -19,7 +19,8 @@ from unicodedata import category
 
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
-from ...work import WorkRoot, WorkRootLease
+from ...work import WorkRoot
+from ..database import SqliteDatabase
 from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
 from ..errors import ServiceError, project_service_error
 from ..extraction import Extraction
@@ -104,8 +105,7 @@ class Jobs:
         directory_term_maps: DirectoryTermMaps | None = None,
         *,
         record_store: JobRecordStore | None = None,
-        database_path: Path | None = None,
-        lease: WorkRootLease | None = None,
+        database: SqliteDatabase | None = None,
     ) -> None:
         self._translator = translator
         self._term_maps = term_maps
@@ -113,14 +113,13 @@ class Jobs:
         self._extraction = extraction
         self._media_root = media_root.resolve()
         self._work = WorkRoot(work_root)
-        self._lease = lease or WorkRootLease(self._work.path / ".cueweaver.lease")
         self._jobs_root = self._work.jobs_directory
         self._record_store = (
             record_store
             if record_store is not None
             else SqliteJobRecordStore(
                 self._jobs_root,
-                database_path=database_path or self._work.path / "cueweaver.sqlite3",
+                database or SqliteDatabase(self._work.path / "cueweaver.sqlite3"),
             )
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
@@ -130,30 +129,12 @@ class Jobs:
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._closed = threading.Event()
-        try:
-            self._lease.acquire()
-        except ValueError as error:
-            raise ServiceError(
-                "work_root_in_use", "Another CueWeaver process owns this Work root"
-            ) from error
-        except OSError as error:
-            raise ServiceError(
-                "invalid_work_directory", "Work root lease cannot be created"
-            ) from error
-        try:
-            self._check_jobs_root()
-            self._load_records()
-        except Exception:
-            self._lease.release()
-            raise
+        self._check_jobs_root()
+        self._load_records()
         self._worker = threading.Thread(
             target=self._run, daemon=True, name="cueweaver-job-worker"
         )
-        try:
-            self._worker.start()
-        except Exception:
-            self._lease.release()
-            raise
+        self._worker.start()
         for job_id in self._recovered_queue_ids:
             self._pending.put(job_id)
 
@@ -164,6 +145,11 @@ class Jobs:
                 return
             self._closed.set()
             self._pending.put(None)
+
+    def wait_closed(self) -> None:
+        """Wait until the worker has finished after ``close`` was requested."""
+        self.close()
+        self._worker.join()
 
     def create(self, request: CreateJobRequest) -> dict[str, object]:
         with self._lifecycle_lock:
@@ -920,22 +906,19 @@ class Jobs:
             self._records[job_id] = copy_job_record(record)
 
     def _run(self) -> None:
-        try:
-            while True:
-                job_id = self._pending.get()
-                try:
-                    if job_id is None:
-                        return
-                    if self._closed.is_set():
-                        continue
-                    self._execute(job_id)
-                except Exception as error:
-                    if job_id is not None:
-                        self._mark_failed_after_worker_error(job_id, error)
-                finally:
-                    self._pending.task_done()
-        finally:
-            self._lease.release()
+        while True:
+            job_id = self._pending.get()
+            try:
+                if job_id is None:
+                    return
+                if self._closed.is_set():
+                    continue
+                self._execute(job_id)
+            except Exception as error:
+                if job_id is not None:
+                    self._mark_failed_after_worker_error(job_id, error)
+            finally:
+                self._pending.task_done()
 
     def _execute(self, job_id: str) -> None:
         prepared = self._prepare_execution(job_id)

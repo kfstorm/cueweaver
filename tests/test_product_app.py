@@ -3,11 +3,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cueweaver.application import CueWeaverApplication
 from cueweaver.product import (
     create_development_app_from_env,
     create_product_app,
     create_product_app_from_env,
 )
+from cueweaver.work import WorkRootLease
 
 
 class TranslatorFixture:
@@ -45,6 +47,22 @@ def product_app(tmp_path: Path, translator: TranslatorFixture | None = None):
         TranslatorFixture() if translator is None else translator,
         static_root=static_fixture(tmp_path),
     )
+
+
+def test_application_close_releases_the_work_root_lease(tmp_path: Path):
+    media_root, work_root = configured_roots(tmp_path)
+    application = CueWeaverApplication(
+        TranslatorFixture(), work_root=work_root, media_root=media_root
+    )
+    lease_path = work_root / ".cueweaver.lease"
+
+    with pytest.raises(ValueError, match="already in use"):
+        WorkRootLease(lease_path).acquire()
+
+    application.close()
+    released = WorkRootLease(lease_path)
+    released.acquire()
+    released.release()
 
 
 @pytest.mark.parametrize(

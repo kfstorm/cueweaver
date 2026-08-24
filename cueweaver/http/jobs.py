@@ -81,8 +81,6 @@ class JobsOperation(Protocol):
 
     def get(self, job_id: str) -> dict[str, object]: ...
 
-    def close(self) -> None: ...
-
 
 class JobsApplication(Protocol):
     @property
@@ -91,7 +89,6 @@ class JobsApplication(Protocol):
 
 def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     app.state.jobs = application.jobs
-    app.router.on_shutdown.append(application.jobs.close)
 
     @app.post("/api/jobs")
     def create_job(body: CreateJobBody) -> dict[str, object]:

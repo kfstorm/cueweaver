@@ -20,8 +20,7 @@ def make_client(tmp_path: Path) -> TestClient:
     with _clients_lock:
         previous = _clients.pop(tmp_path, None)
         if previous is not None:
-            previous.app.state.jobs.close()
-            previous.app.state.jobs._worker.join(timeout=5)
+            previous.app.state.application.close()
             previous.close()
         client = TestClient(
             create_product_app(
