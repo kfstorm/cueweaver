@@ -91,7 +91,6 @@ def _create_api_app(
             "roots": {"ready": _roots_ready(media_root, work_root)},
             "translation_provider": provider,
             "worker": {"ready": True, "mode": "single"},
-            "job_records": application.jobs.record_health(),
         }
 
     return app

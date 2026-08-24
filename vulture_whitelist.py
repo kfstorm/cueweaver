@@ -39,6 +39,7 @@ delete_job
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config
 BrowseBody.model_config
+JobOptionsBody.validate_term_map_id
 CreateJobBody.validate_term_map_id
 CreateBatchItem.validate_subtitle_source
 expat.ParserCreate().StartDoctypeDeclHandler

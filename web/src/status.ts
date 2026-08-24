@@ -7,15 +7,6 @@ export interface ProductStatus {
   roots: { ready: boolean };
   translation_provider: { ready: boolean; message?: string };
   worker: { ready: boolean; mode: "single" };
-  job_records?: {
-    corrupt: { count: number; location: string };
-    unsupported: { count: number; location: string };
-  };
-}
-
-export function jobRecordAttention(status: ProductStatus | undefined): boolean {
-  const records = status?.job_records;
-  return (records?.corrupt.count ?? 0) + (records?.unsupported.count ?? 0) > 0;
 }
 
 async function fetchStatus(): Promise<ProductStatus> {

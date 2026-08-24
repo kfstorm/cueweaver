@@ -52,7 +52,7 @@ _Avoid_: job workspace
 The configured writable root owned by CueWeaver. It contains the SQLite
 database and the observable `jobs/` directory; each Job owns one
 `jobs/<job-id>/` Work directory, including its assigned `translation/`
-directory. A legacy `term-maps/` directory may remain during JSON import.
+directory.
 _Avoid_: temporary root
 
 **Job**:
@@ -66,8 +66,7 @@ The application composition owns the SQLite database at
 `<work-root>/.cueweaver.lease`. SQLAlchemy ORM models and versioned Alembic
 migrations define the database schema. Jobs, Term maps, directory bindings, and
 application metadata are database records; the nested Job record remains a
-validated JSON payload for compatibility. Legacy JSON records are imported
-once during startup and then their snapshots are retired. Queued Jobs are
+validated JSON payload for compatibility. Queued Jobs are
 restored in queue order; Jobs already in Extracting or Translating are marked
 Interrupted. Subtitle output is published through a same-directory temporary
 file and atomic rename/link. A completed Job is persisted before best-effort

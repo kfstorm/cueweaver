@@ -230,10 +230,6 @@ def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Pat
         "roots": {"ready": True},
         "translation_provider": {"ready": True},
         "worker": {"ready": True, "mode": "single"},
-        "job_records": {
-            "corrupt": {"count": 0, "location": "jobs/corrupt"},
-            "unsupported": {"count": 0, "location": "jobs/unsupported"},
-        },
     }
     serialized = response.text
     assert str(media_root) not in serialized
@@ -265,39 +261,6 @@ def test_product_status_rechecks_root_health_after_startup(
 
     assert response.status_code == 200
     assert response.json()["roots"] == {"ready": False}
-
-
-def test_product_status_reports_quarantined_job_record_counts(tmp_path: Path):
-    media_root, work_root = configured_roots(tmp_path)
-    jobs_root = work_root / "jobs"
-    jobs_root.mkdir(parents=True)
-    (jobs_root / "broken.json").write_bytes(b"broken")
-    future_bytes = (
-        b'{"schema_version": 2, "id": "future", "status": "Failed", '
-        b'"request": {"media_path": "Movie.mkv", '
-        b'"subtitle_path": "Movie.en.srt", "target_language_code": "zh-Hans", '
-        b'"output_path": "Movie.zh-Hans.srt", "source_format": "srt"}, '
-        b'"attempt": 1, "created_at": "2026-08-13T12:00:00Z", '
-        b'"started_at": null, "finished_at": null, "error": null, '
-        b'"queue_sequence": 0}'
-    )
-    (jobs_root / "future.json").write_bytes(future_bytes)
-
-    client = TestClient(
-        create_product_app(
-            media_root,
-            work_root,
-            TranslatorFixture(),
-            static_root=static_fixture(tmp_path),
-        )
-    )
-
-    assert client.get("/api/status").json()["job_records"] == {
-        "corrupt": {"count": 1, "location": "jobs/corrupt"},
-        "unsupported": {"count": 1, "location": "jobs/unsupported"},
-    }
-    assert (jobs_root / "corrupt" / "broken.json").read_bytes() == b"broken"
-    assert (jobs_root / "unsupported" / "future.json").read_bytes() == future_bytes
 
 
 def test_unconfigured_provider_keeps_product_available_with_actionable_status(

@@ -57,7 +57,6 @@ const ENGLISH = {
   "runtime.provider": "Provider needs configuration",
   "runtime.ready": "Runtime ready",
   "runtime.unavailable": "Runtime unavailable",
-  "runtime.recordsAttention": "Job records need attention",
   "runtime.unreachableTitle": "CueWeaver is not reachable",
   "runtime.tryAgain": "Try again",
   "runtime.unreachableDetail":
@@ -353,15 +352,6 @@ const ENGLISH = {
   "jobs.job_one": "Job",
   "jobs.job_other": "Jobs",
   "jobs.jobPrefix": "Job {id}",
-  "jobs.persistenceWarning": "Persistence warning",
-  "jobs.recordsExcluded":
-    "These records were kept out of active history and need operator review.",
-  "jobs.recordCount_one": "{count} {unit} in",
-  "jobs.recordCount_other": "{count} {unit} in",
-  "jobs.record_one": "record",
-  "jobs.record_other": "records",
-  "jobs.corrupt": "Corrupt",
-  "jobs.unsupported": "Unsupported",
   "jobs.noLongerAvailable": "This Job is no longer available.",
   "jobs.sourceTo": "{source} to {target}",
   "jobs.jobId": "Job {id}",

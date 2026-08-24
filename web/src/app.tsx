@@ -47,7 +47,7 @@ import {
   type UnsupportedSubtitleCandidate,
 } from "./browse";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
-import { jobRecordAttention, useProductStatus } from "./status";
+import { useProductStatus } from "./status";
 import {
   useCreateBatchJobs,
   useCreateJob,
@@ -166,7 +166,6 @@ function Shell() {
     status.data?.api.ready &&
     status.data?.roots.ready &&
     status.data.translation_provider.ready;
-  const recordsNeedAttention = jobRecordAttention(status.data);
   return (
     <div className="product-shell">
       <aside className="sidebar">
@@ -187,11 +186,6 @@ function Shell() {
                 ? t("runtime.ready")
                 : t("runtime.unavailable")}
         </div>
-        {recordsNeedAttention && (
-          <div className="runtime-warning" role="status">
-            {t("runtime.recordsAttention")}
-          </div>
-        )}
         <ThemeToggle className="sidebar-theme-toggle" />
         <LanguageSelector />
       </aside>

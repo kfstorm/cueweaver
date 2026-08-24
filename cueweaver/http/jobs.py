@@ -24,6 +24,7 @@ class JobOptionsBody(BaseModel):
     def validate_term_map_id(
         cls, value: str | None, info: ValidationInfo
     ) -> str | None:
+        del cls
         mode = info.data.get("term_map_mode")
         if mode in {"follow", "none"} and value is not None:
             raise ValueError("Term map ID must be null for follow or none mode")

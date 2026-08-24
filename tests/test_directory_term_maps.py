@@ -1,12 +1,10 @@
 import sqlite3
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
 
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
-from cueweaver.application.errors import ServiceError
 from cueweaver.application.term_maps import TermMapDetail
 
 
@@ -174,29 +172,6 @@ def test_unsafe_stale_directory_removal_does_not_change_safe_bindings(tmp_path: 
         directory_request(client, "GET", "Series").json()["local"]["id"]
         == term_map["id"]
     )
-
-
-def test_directory_term_map_rejects_a_work_term_maps_symlink(tmp_path: Path):
-    work_root = tmp_path / "work"
-    outside = tmp_path / "outside"
-    work_root.mkdir()
-    outside.mkdir()
-    (work_root / "term-maps").symlink_to(outside, target_is_directory=True)
-
-    with pytest.raises(ServiceError, match="Term map storage cannot be opened"):
-        make_client(tmp_path)
-    assert not (outside / "directory-bindings.json").exists()
-
-
-def test_directory_term_map_rejects_a_dangling_work_term_maps_symlink(
-    tmp_path: Path,
-):
-    work_root = tmp_path / "work"
-    work_root.mkdir()
-    (work_root / "term-maps").symlink_to(tmp_path / "missing", target_is_directory=True)
-
-    with pytest.raises(ServiceError, match="Term map storage cannot be opened"):
-        make_client(tmp_path)
 
 
 def test_directory_term_map_get_uses_one_bindings_snapshot(tmp_path: Path):

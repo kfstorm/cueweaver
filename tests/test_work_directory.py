@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from cueweaver.adapters.term_maps import FileTermMapStore
 from cueweaver.application.jobs import Jobs
 from cueweaver.work import WorkRoot, WorkRootLease
 
@@ -15,7 +14,6 @@ def test_work_root_exposes_the_stable_layout(tmp_path: Path):
     work = WorkRoot(tmp_path / "work")
 
     assert work.jobs_directory == tmp_path / "work" / "jobs"
-    assert work.term_maps_directory == tmp_path / "work" / "term-maps"
     assert work.job_directory("job-1") == tmp_path / "work" / "jobs" / "job-1"
     assert work.translation_directory("job-1") == (
         tmp_path / "work" / "jobs" / "job-1" / "translation"
@@ -49,11 +47,6 @@ def test_work_root_rejects_symlinked_translation_directory(tmp_path: Path):
 
     with pytest.raises(ValueError, match="must not be a symbolic link"):
         root.translation_directory("job-1")
-
-
-def test_term_map_store_requires_the_work_root_policy(tmp_path: Path):
-    with pytest.raises(TypeError, match="requires a WorkRoot"):
-        FileTermMapStore(tmp_path)  # type: ignore[arg-type]
 
 
 def test_work_root_lease_blocks_another_process_until_release(tmp_path: Path):

@@ -1,5 +1,4 @@
 import json
-import os
 import shutil
 import sqlite3
 import threading
@@ -17,7 +16,6 @@ from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
 from cueweaver.application.jobs import (
     CreateJobRequest,
-    FileJobRecordStore,
     Jobs,
     SqliteJobRecordStore,
 )
@@ -122,20 +120,6 @@ class FalsyRecordStore:
         del self.records[job_id]
 
 
-class InterruptedWriteFailureStore(FileJobRecordStore):
-    def __init__(self, jobs_root: Path, error: Exception, *, once: bool = False):
-        super().__init__(jobs_root)
-        self.error = error
-        self.once = once
-        self.failed = False
-
-    def write(self, job_id: str, record: dict[str, object]) -> None:
-        if record.get("status") == "Interrupted" and (not self.once or not self.failed):
-            self.failed = True
-            raise self.error
-        super().write(job_id, record)
-
-
 def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -185,12 +169,9 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
 def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     tmp_path: Path,
 ):
-    jobs_root = tmp_path / "jobs"
     record = persisted_job_record("sqlite-job")
 
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
     store.write("sqlite-job", record)
 
     assert (tmp_path / "cueweaver.sqlite3").is_file()
@@ -205,148 +186,8 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     assert store.load() == []
 
 
-def test_sqlite_record_store_imports_legacy_json_and_retires_the_snapshot(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir(parents=True)
-    record = persisted_job_record("legacy-job")
-    (jobs_root / "legacy-job.json").write_text(json.dumps(record), encoding="utf-8")
-
-    loaded = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    ).load()
-
-    assert loaded[0]["id"] == "legacy-job"
-    assert not (jobs_root / "legacy-job.json").exists()
-    assert (tmp_path / "cueweaver.sqlite3").is_file()
-
-
-def test_sqlite_legacy_migration_is_idempotent_when_snapshot_retirement_is_deferred(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = persisted_job_record("legacy-retry")
-    snapshot = jobs_root / "legacy-retry.json"
-    snapshot.write_text(json.dumps(record), encoding="utf-8")
-
-    first_store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
-    monkeypatch.setattr(first_store, "_retire_legacy_snapshots", lambda: None)
-    assert first_store.load()[0]["id"] == "legacy-retry"
-    assert snapshot.exists()
-
-    second_store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
-    assert second_store.load()[0]["id"] == "legacy-retry"
-    assert not snapshot.exists()
-
-
-def test_sqlite_legacy_migration_runs_once_per_store_instance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
-    retire_calls = 0
-
-    def count_retire_calls() -> None:
-        nonlocal retire_calls
-        retire_calls += 1
-
-    monkeypatch.setattr(store, "_retire_legacy_snapshots", count_retire_calls)
-
-    store.load()
-    store.write("migration-ready", persisted_job_record("migration-ready"))
-    store.remove("migration-ready")
-    store.load()
-
-    assert retire_calls == 1
-
-
-def test_sqlite_record_store_delete_removes_unmigrated_legacy_records(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = persisted_job_record("legacy-delete")
-    record_path = jobs_root / "legacy-delete.json"
-    record_path.write_text(json.dumps(record), encoding="utf-8")
-
-    SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    ).remove("legacy-delete")
-
-    assert not record_path.exists()
-
-
-def test_sqlite_record_store_keeps_the_database_authoritative_after_snapshot_removal(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    record = persisted_job_record("durable-job")
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
-    store.write("durable-job", record)
-
-    loaded = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    ).load()
-
-    assert [item["id"] for item in loaded] == ["durable-job"]
-
-
-def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
-    old_record = persisted_job_record("authoritative-job", status="Failed")
-    new_record = persisted_job_record("authoritative-job", status="Completed")
-    store.write("authoritative-job", old_record)
-    store.write("authoritative-job", new_record)
-    snapshot = jobs_root / "authoritative-job.json"
-    snapshot.write_text(json.dumps(old_record), encoding="utf-8")
-    old_timestamp = time.time() - 10
-    os.utime(snapshot, (old_timestamp, old_timestamp))
-
-    loaded = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    ).load()
-
-    assert loaded[0]["status"] == "Completed"
-
-
-def test_sqlite_corruption_preserves_legacy_snapshot_for_recovery(tmp_path: Path):
-    media_root = tmp_path / "media"
-    media_root.mkdir()
-    work_root = tmp_path / "work"
-    jobs_root = work_root / "jobs"
-    jobs_root.mkdir(parents=True)
-    snapshot = jobs_root / "recoverable-job.json"
-    snapshot_bytes = json.dumps(persisted_job_record("recoverable-job")).encode()
-    snapshot.write_bytes(snapshot_bytes)
-    (work_root / "cueweaver.sqlite3").write_bytes(b"not a sqlite database")
-
-    with pytest.raises(ServiceError) as raised:
-        Jobs(FakeTranslator(), media_root, work_root)
-
-    assert raised.value.error_code == "database_unavailable"
-    assert snapshot.read_bytes() == snapshot_bytes
-
-
 def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
     store.write("corrupt-record", persisted_job_record("corrupt-record"))
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute(
@@ -362,10 +203,7 @@ def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
 
 
 def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
     store.write("row-id", persisted_job_record("row-id"))
     mismatched = persisted_job_record("record-id")
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
@@ -392,10 +230,7 @@ def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
 def test_sqlite_operation_errors_keep_their_operation_context(
     tmp_path: Path, operation: str, message: str
 ):
-    jobs_root = tmp_path / "jobs"
-    store = SqliteJobRecordStore(
-        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
-    )
+    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
     store.write("operation-error", persisted_job_record("operation-error"))
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute("DROP TABLE jobs")
@@ -468,432 +303,6 @@ def set_record_status(
         history[-1].update(status=status, attempt=attempt, finished_at=finished_at)
     record["status"] = status
     record["finished_at"] = finished_at
-
-
-def test_record_store_migrates_legacy_records_and_quarantines_unreadable_invalid_and_future_records(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = {
-        "id": "legacy-job",
-        "status": "Failed",
-        "created_at": "2026-08-13T12:00:00Z",
-        "request": {
-            "media_path": "Movie.mkv",
-            "subtitle_path": "Movie.en.srt",
-            "target_language_code": "zh-Hans",
-            "output_path": "Movie.zh-Hans.srt",
-            "source_format": "srt",
-        },
-    }
-    (jobs_root / "legacy-job.json").write_text(json.dumps(legacy), encoding="utf-8")
-    invalid_bytes = b"not-json"
-    (jobs_root / "invalid.json").write_bytes(invalid_bytes)
-    unreadable_bytes = b"\xff\xfe"
-    (jobs_root / "unreadable.json").write_bytes(unreadable_bytes)
-    invalid_schema_bytes = b'{"schema_version": "one"}'
-    (jobs_root / "invalid-schema.json").write_bytes(invalid_schema_bytes)
-    future_bytes = json.dumps(
-        {
-            **legacy,
-            "schema_version": 2,
-            "attempt": 1,
-            "started_at": None,
-            "finished_at": None,
-            "error": None,
-            "queue_sequence": 0,
-            "future": True,
-        }
-    ).encode()
-    (jobs_root / "future.json").write_bytes(future_bytes)
-
-    store = FileJobRecordStore(jobs_root)
-    records = store.load()
-
-    assert records == [
-        {
-            **legacy,
-            "schema_version": 1,
-            "attempt": 1,
-            "started_at": None,
-            "finished_at": None,
-            "error": None,
-            "request": {
-                **legacy["request"],
-                "term_map": None,
-                "term_map_mode": "none",
-                "dynamic_terminology_enabled": True,
-                "subtitle_terminology_filter_enabled": True,
-                "output_suffix": "zh-Hans",
-                "output_conflict_policy": "append-number",
-            },
-            "queue_sequence": 0,
-        }
-    ]
-    assert "status_history" not in records[0]
-    assert (
-        json.loads((jobs_root / "legacy-job.json").read_text())["schema_version"] == 1
-    )
-    assert not (jobs_root / "invalid.json").exists()
-    assert not (jobs_root / "unreadable.json").exists()
-    assert not (jobs_root / "invalid-schema.json").exists()
-    assert not (jobs_root / "future.json").exists()
-    assert (jobs_root / "corrupt" / "invalid.json").read_bytes() == invalid_bytes
-    assert (jobs_root / "corrupt" / "unreadable.json").read_bytes() == unreadable_bytes
-    assert (
-        jobs_root / "corrupt" / "invalid-schema.json"
-    ).read_bytes() == invalid_schema_bytes
-    assert (jobs_root / "unsupported" / "future.json").read_bytes() == future_bytes
-    assert store.health().corrupt_count == 3
-    assert store.health().unsupported_count == 1
-
-
-def test_record_store_migrates_a_legacy_record_with_a_noncanonical_filename(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = persisted_job_record("actual-id")
-    (jobs_root / "legacy-name.json").write_text(json.dumps(legacy), encoding="utf-8")
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert [record["id"] for record in records] == ["actual-id"]
-    assert (jobs_root / "actual-id.json").is_file()
-    assert not (jobs_root / "legacy-name.json").exists()
-
-
-def test_record_store_migrates_a_legacy_term_map_snapshot_to_selected_mode(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = persisted_job_record("legacy-selected")
-    request = legacy["request"]
-    assert isinstance(request, dict)
-    request["term_map"] = {
-        "id": "map-1",
-        "name": "Characters",
-        "content": {"Captain": "队长"},
-    }
-    (jobs_root / "legacy-selected.json").write_text(
-        json.dumps(legacy), encoding="utf-8"
-    )
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert records[0]["request"]["term_map_mode"] == "selected"
-
-
-def test_record_store_keeps_last_value_for_unrelated_duplicate_job_fields(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = persisted_job_record("duplicate-status")
-    raw_record = json.dumps(record).replace(
-        '"status": "Failed"', '"status": "Failed", "status": "Completed"'
-    )
-    (jobs_root / "duplicate-status.json").write_text(raw_record, encoding="utf-8")
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert records[0]["status"] == "Completed"
-    assert not (jobs_root / "corrupt" / "duplicate-status.json").exists()
-
-
-def test_record_store_quarantines_duplicate_term_map_content_keys(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = persisted_job_record("duplicate-term-map")
-    request = record["request"]
-    assert isinstance(request, dict)
-    request["term_map"] = {
-        "id": "map-1",
-        "name": "Terms",
-        "content": {"Source": "one"},
-    }
-    raw_record = json.dumps(record).replace(
-        '"Source": "one"', '"Source": "one", "Source": "two"'
-    )
-    record_path = jobs_root / "duplicate-term-map.json"
-    record_path.write_text(raw_record, encoding="utf-8")
-
-    assert FileJobRecordStore(jobs_root).load() == []
-    assert (jobs_root / "corrupt" / record_path.name).read_text() == raw_record
-
-
-def test_record_store_quarantines_a_symlink_as_regular_record_bytes(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    outside = tmp_path / "outside.json"
-    outside_bytes = b"not-json"
-    outside.write_bytes(outside_bytes)
-    (jobs_root / "linked.json").symlink_to(outside)
-
-    FileJobRecordStore(jobs_root).load()
-
-    quarantine = jobs_root / "corrupt" / "linked.json"
-    assert quarantine.read_bytes() == outside_bytes
-    assert not quarantine.is_symlink()
-    assert not (jobs_root / "linked.json").exists()
-    assert FileJobRecordStore(jobs_root).health().corrupt_count == 1
-
-
-def test_record_store_quarantines_a_legacy_record_with_an_unsafe_id(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    (jobs_root / "unsafe.json").write_text(
-        json.dumps(
-            {
-                "id": "../outside",
-                "status": "Failed",
-                "request": {
-                    "media_path": "Movie.mkv",
-                    "subtitle_path": "Movie.en.srt",
-                    "target_language_code": "zh-Hans",
-                    "output_path": "Movie.zh-Hans.srt",
-                    "source_format": "srt",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    FileJobRecordStore(jobs_root).load()
-
-    assert not (tmp_path / "outside.json").exists()
-    assert (jobs_root / "corrupt" / "unsafe.json").is_file()
-
-
-def test_record_store_keeps_the_canonical_record_when_a_duplicate_legacy_file_exists(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    canonical = {
-        "schema_version": 1,
-        "id": "actual-id",
-        "status": "Completed",
-        "attempt": 1,
-        "created_at": "2026-08-13T12:00:00Z",
-        "started_at": "2026-08-13T12:00:01Z",
-        "finished_at": "2026-08-13T12:00:02Z",
-        "request": {
-            "media_path": "Movie.mkv",
-            "subtitle_path": "Movie.en.srt",
-            "target_language_code": "zh-Hans",
-            "output_path": "Movie.zh-Hans.srt",
-            "source_format": "srt",
-        },
-        "error": None,
-        "queue_sequence": 0,
-    }
-    legacy = {key: value for key, value in canonical.items() if key != "schema_version"}
-    (jobs_root / "actual-id.json").write_text(json.dumps(canonical), encoding="utf-8")
-    legacy_path = jobs_root / "legacy-name.json"
-    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert [record["status"] for record in records] == ["Completed"]
-    assert not legacy_path.exists()
-    assert (jobs_root / "corrupt" / "legacy-name.json").read_text() == json.dumps(
-        legacy
-    )
-
-
-def test_record_store_protects_a_future_canonical_record_from_a_legacy_alias(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = persisted_job_record("future-job")
-    future = {
-        **legacy,
-        "schema_version": 2,
-        "attempt": 1,
-        "created_at": "2026-08-13T12:00:00Z",
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-        "queue_sequence": 0,
-    }
-    (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
-    (jobs_root / "future-job.json").write_text(json.dumps(future), encoding="utf-8")
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert records == []
-    assert (jobs_root / "corrupt" / "a-legacy.json").is_file()
-    assert (jobs_root / "unsupported" / "future-job.json").is_file()
-
-
-def test_record_store_quarantines_an_invalid_future_shape_as_corrupt(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    raw_future = b'{"schema_version":2,"id":"future-job","status":"CancelledV2","request":{"new_shape":true}}'
-    (jobs_root / "future-job.json").write_bytes(raw_future)
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert records == []
-    assert (jobs_root / "corrupt" / "future-job.json").read_bytes() == raw_future
-    assert not (jobs_root / "unsupported" / "future-job.json").exists()
-
-
-@pytest.mark.parametrize(
-    "missing_field",
-    ["created_at", "started_at", "finished_at", "error", "queue_sequence"],
-)
-def test_record_store_quarantines_v1_records_missing_required_fields(
-    tmp_path: Path, missing_field: str
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = {
-        **persisted_job_record("missing-field"),
-        "schema_version": 1,
-        "attempt": 1,
-        "created_at": "2026-08-13T12:00:00Z",
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-        "queue_sequence": 1,
-    }
-    del record[missing_field]
-    raw_record = json.dumps(record).encode()
-    (jobs_root / "missing-field.json").write_bytes(raw_record)
-
-    assert FileJobRecordStore(jobs_root).load() == []
-    assert (jobs_root / "corrupt" / "missing-field.json").read_bytes() == raw_record
-
-
-def test_record_store_protects_a_mismatched_future_path_from_a_legacy_alias(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = persisted_job_record("actual-id")
-    future = {
-        **legacy,
-        "id": "other-id",
-        "schema_version": 2,
-        "attempt": 1,
-        "created_at": "2026-08-13T12:00:00Z",
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-        "queue_sequence": 0,
-    }
-    (jobs_root / "a-alias.json").write_text(json.dumps(legacy), encoding="utf-8")
-    (jobs_root / "actual-id.json").write_text(json.dumps(future), encoding="utf-8")
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert [record["id"] for record in records] == ["actual-id"]
-    assert records[0]["schema_version"] == 1
-    assert (jobs_root / "actual-id.json").is_file()
-    assert not (jobs_root / "corrupt" / "a-alias.json").exists()
-    assert (jobs_root / "unsupported" / "actual-id.json").is_file()
-
-
-@pytest.mark.parametrize("alias_name", ["a-alias.json", "z-alias.json"])
-def test_record_store_preserves_a_different_job_in_a_canonical_path_conflict(
-    tmp_path: Path, alias_name: str
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    alias_record = persisted_job_record("actual-id")
-    other_record = {
-        **alias_record,
-        "id": "other-id",
-        "status": "Completed",
-    }
-    (jobs_root / alias_name).write_text(json.dumps(alias_record), encoding="utf-8")
-    (jobs_root / "actual-id.json").write_text(
-        json.dumps(other_record), encoding="utf-8"
-    )
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert [record["id"] for record in records] == ["other-id"]
-    assert records[0]["status"] == "Completed"
-    assert (jobs_root / "other-id.json").is_file()
-    assert (jobs_root / "corrupt" / alias_name).is_file()
-
-
-def test_record_store_migrates_an_alias_once_when_the_canonical_record_is_corrupt(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = persisted_job_record("z-job")
-    (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
-    (jobs_root / "z-job.json").write_bytes(b"broken-canonical")
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert len(records) == 1
-    assert records[0]["id"] == "z-job"
-    assert json.loads((jobs_root / "z-job.json").read_text())["schema_version"] == 1
-    assert (jobs_root / "corrupt" / "z-job.json").read_bytes() == b"broken-canonical"
-
-
-def test_record_store_quarantines_a_broken_canonical_symlink_before_migration(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    legacy = persisted_job_record("z-job")
-    (jobs_root / "a-legacy.json").write_text(json.dumps(legacy), encoding="utf-8")
-    missing = tmp_path / "missing.json"
-    (jobs_root / "z-job.json").symlink_to(missing)
-
-    records = FileJobRecordStore(jobs_root).load()
-
-    assert len(records) == 1
-    assert records[0]["id"] == "z-job"
-    assert (jobs_root / "z-job.json").is_file()
-    assert (jobs_root / "corrupt" / "z-job.json").is_symlink()
-    assert FileJobRecordStore(jobs_root).health().corrupt_count == 1
-
-
-def test_record_store_does_not_overwrite_a_dangling_quarantine_collision(
-    tmp_path: Path,
-):
-    jobs_root = tmp_path / "jobs"
-    quarantine = jobs_root / "corrupt"
-    quarantine.mkdir(parents=True)
-    dangling_target = tmp_path / "missing.json"
-    existing = quarantine / "broken.json"
-    existing.symlink_to(dangling_target)
-    source = jobs_root / "broken.json"
-    source.write_bytes(b"broken")
-
-    FileJobRecordStore(jobs_root).load()
-
-    assert existing.is_symlink()
-    assert (quarantine / "broken.2.json").read_bytes() == b"broken"
-    assert FileJobRecordStore(jobs_root).health().corrupt_count == 2
-
-
-def test_record_store_rejects_path_traversal_job_ids(tmp_path: Path):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    outside = tmp_path / "outside.json"
-    outside.write_bytes(b"keep")
-    store = FileJobRecordStore(jobs_root)
-
-    with pytest.raises(ServiceError, match="Job ID is invalid"):
-        store.write("../outside", {})
-    with pytest.raises(ServiceError, match="Job ID is invalid"):
-        store.remove("../outside")
-
-    assert outside.read_bytes() == b"keep"
 
 
 def test_new_job_records_include_schema_version_one(tmp_path: Path):
@@ -1430,7 +839,7 @@ def persisted_external_job(
 
 def sqlite_job_record(work_root: Path, job_id: str) -> dict[str, object]:
     records = SqliteJobRecordStore(
-        work_root / "jobs", SqliteDatabase(work_root / "cueweaver.sqlite3")
+        SqliteDatabase(work_root / "cueweaver.sqlite3")
     ).load()
     record = next((item for item in records if item.get("id") == job_id), None)
     assert record is not None
@@ -1440,9 +849,9 @@ def sqlite_job_record(work_root: Path, job_id: str) -> dict[str, object]:
 def persist_job_record(work_root: Path, record: dict[str, object]) -> None:
     job_id = record.get("id")
     assert isinstance(job_id, str)
-    SqliteJobRecordStore(
-        work_root / "jobs", SqliteDatabase(work_root / "cueweaver.sqlite3")
-    ).write(job_id, record)
+    SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3")).write(
+        job_id, record
+    )
 
 
 def wait_for_status(
@@ -1684,107 +1093,6 @@ def test_restart_appends_interrupted_without_fabricating_earlier_history(
     assert recovered["status_history"][-1]["started_at"]
     assert recovered["status_history"][-1]["finished_at"]
     restarted.close()
-
-
-@pytest.mark.parametrize(
-    "status_history",
-    [
-        None,
-        {},
-        [{"status": "Queued"}],
-        [
-            {
-                "status": "Queued",
-                "attempt": True,
-                "started_at": None,
-                "finished_at": None,
-            }
-        ],
-    ],
-)
-def test_record_store_quarantines_an_invalid_optional_status_history(
-    tmp_path: Path, status_history: object
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = {
-        **persisted_job_record("invalid-history"),
-        "schema_version": 1,
-        "attempt": 1,
-        "created_at": "2026-08-13T12:00:00Z",
-        "started_at": None,
-        "finished_at": None,
-        "error": None,
-        "queue_sequence": 1,
-        "status_history": status_history,
-    }
-    raw_record = json.dumps(record).encode()
-    (jobs_root / "invalid-history.json").write_bytes(raw_record)
-
-    assert FileJobRecordStore(jobs_root).load() == []
-    assert (jobs_root / "corrupt" / "invalid-history.json").read_bytes() == raw_record
-
-
-@pytest.mark.parametrize(
-    "status, attempt, status_history",
-    [
-        ("Failed", 1, [status_history_entry("Completed")]),
-        ("Failed", 2, [status_history_entry("Failed")]),
-        (
-            "Failed",
-            1,
-            [status_history_entry("Failed", started_at=None)],
-        ),
-        (
-            "Failed",
-            1,
-            [status_history_entry("Failed", finished_at=None)],
-        ),
-        (
-            "Translating",
-            1,
-            [status_history_entry("Translating")],
-        ),
-        (
-            "Completed",
-            1,
-            [
-                status_history_entry("Queued", finished_at=None),
-                status_history_entry("Completed"),
-            ],
-        ),
-    ],
-)
-def test_record_store_quarantines_inconsistent_status_history(
-    tmp_path: Path,
-    status: str,
-    attempt: int,
-    status_history: list[dict[str, object]],
-):
-    jobs_root = tmp_path / "jobs"
-    jobs_root.mkdir()
-    record = {
-        **persisted_job_record("inconsistent-history", status),
-        "schema_version": 1,
-        "attempt": attempt,
-        "created_at": "2026-08-13T12:00:00Z",
-        "started_at": None if status == "Queued" else "2026-08-13T12:00:00Z",
-        "finished_at": (
-            None
-            if status in {"Queued", "Extracting", "Translating"}
-            else "2026-08-13T12:00:01Z"
-        ),
-        "error": None,
-        "queue_sequence": 1,
-        "status_history": status_history,
-    }
-    raw_record = json.dumps(record).encode()
-    (jobs_root / "inconsistent-history.json").write_bytes(raw_record)
-
-    assert FileJobRecordStore(jobs_root).load() == []
-    assert (
-        jobs_root / "corrupt" / "inconsistent-history.json"
-    ).read_bytes() == raw_record
 
 
 def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
@@ -2705,7 +2013,6 @@ def test_job_rejects_missing_term_map_before_queueing(tmp_path: Path):
             "matching_count": 0,
             "completed_count": 0,
         }
-        assert list((work_root / "jobs").glob("*.json")) == []
 
 
 def test_job_list_separates_active_jobs_and_redacts_term_map_content(tmp_path: Path):
@@ -3496,7 +2803,6 @@ def test_job_validation_rejects_before_queueing(
 
     assert response.status_code == 400
     assert response.json()["error_code"] == expected_code
-    assert list((work_root / "jobs").glob("*.json")) == []
 
 
 def test_job_appends_a_number_to_an_existing_suggested_output(tmp_path: Path):
@@ -3537,7 +2843,6 @@ def test_job_skips_existing_output_without_provider_or_persisting_a_job(
         "reason": "Output path already exists",
     }
     assert output.read_bytes() == b"keep"
-    assert list((work_root / "jobs").glob("*.json")) == []
 
 
 def test_batch_skips_existing_outputs_and_only_queues_remaining_items(tmp_path: Path):
@@ -3612,7 +2917,6 @@ def test_all_skipped_batch_succeeds_without_a_provider_or_jobs(tmp_path: Path):
             "reason": "Output path already exists",
         },
     ]
-    assert list((work_root / "jobs").glob("*.json")) == []
 
 
 def test_batch_isolates_invalid_subtitle_source_items(tmp_path: Path):
@@ -4019,34 +3323,6 @@ def test_restart_retains_extracted_source_for_an_interrupted_embedded_job(
     restarted.close()
 
 
-def test_restart_ignores_job_with_invalid_conflict_policy(tmp_path: Path):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    jobs_root = work_root / "jobs"
-    jobs_root.mkdir(parents=True)
-    (jobs_root / "broken.json").write_text(
-        json.dumps(
-            {
-                "id": "broken",
-                "status": "Completed",
-                "request": {
-                    "media_path": "Movie.mkv",
-                    "subtitle_path": "Movie.en.srt",
-                    "target_language_code": "zh",
-                    "output_path": "Movie.zh.srt",
-                    "source_format": "srt",
-                    "output_conflict_policy": [],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    jobs = Jobs(FakeTranslator(), media_root, work_root)
-
-    assert jobs.list() == []
-    jobs.close()
-
-
 def test_close_returns_while_translation_is_blocked(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     started = threading.Event()
@@ -4141,29 +3417,3 @@ def test_shutdown_marks_blocked_extraction_interrupted_before_translation(
     assert interrupted["status"] == "Interrupted"
     assert translator.sources == []
     assert not (media_root / "Movie.zh.srt").exists()
-
-
-def test_shutdown_recovers_after_interrupted_record_write_failure(
-    tmp_path: Path,
-):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    started = threading.Event()
-    release = threading.Event()
-    store = InterruptedWriteFailureStore(
-        work_root / "jobs", OSError("record unavailable"), once=True
-    )
-    jobs = Jobs(
-        FakeTranslator(started=started, release=release),
-        media_root,
-        work_root,
-        record_store=store,
-    )
-    queued = start_blocked_translation(jobs, started)
-
-    assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
-        "Translating"
-    )
-
-    restarted = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
-    assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
-    restarted.close()
