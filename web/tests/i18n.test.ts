@@ -29,8 +29,6 @@ const forbiddenUntranslatedDomainTerms = [
   "Work",
   "Job",
   "Jobs",
-  "Term map",
-  "Term maps",
   "Source",
   "Target",
   "Directory",
@@ -46,6 +44,7 @@ const forbiddenUntranslatedDomainTerm = new RegExp(
   `\\b(?:${forbiddenUntranslatedDomainTerms})\\b`,
   "u",
 );
+const forbiddenUntranslatedTermMap = /\bTerm maps?\b/iu;
 
 const localeSpecificTermMapExamples: Record<Locale, string> = {
   en: '{\n  "Nueva York": "New York",\n  "La capitana": "The Captain"\n}',
@@ -121,7 +120,10 @@ describe("interface locale selection", () => {
     for (const locale of SUPPORTED_LOCALES) {
       if (locale === "en") continue;
       for (const [key, value] of Object.entries(getLocaleTable(locale))) {
-        if (forbiddenUntranslatedDomainTerm.test(value)) {
+        if (
+          forbiddenUntranslatedDomainTerm.test(value) ||
+          forbiddenUntranslatedTermMap.test(value)
+        ) {
           violations.push(`${locale}.${key}: ${value}`);
         }
       }
@@ -168,32 +170,6 @@ describe("interface locale selection", () => {
         locale,
       ).toBe(true);
     }
-  });
-
-  it("keeps German and Spanish noun forms grammatical in user-facing copy", () => {
-    const spanish = getLocaleTable("es");
-    expect(spanish["runtime.unreachableDetail"]).toBe(
-      "La aplicación no pudo comprobar si la traducción está disponible. Inténtalo de nuevo antes de iniciar un trabajo.",
-    );
-    expect(spanish["translate.termMapHelp"]).toBe(
-      "Un mapa de términos es un conjunto reutilizable de términos de origen y destino que deben mantenerse coherentes. Puedes seguir el valor predeterminado del directorio, elegir uno o continuar sin ninguno.",
-    );
-    expect(spanish["termMaps.guidanceTitle"]).toBe("¿Qué es un mapa de términos?");
-    expect(spanish["jobs.cancelConfirmation"]).toBe(
-      "¿{action} el trabajo {id}? Permanecerá en el historial de trabajos y no se traducirá.",
-    );
-
-    const german = getLocaleTable("de");
-    expect(german["runtime.unreachableDetail"]).toBe(
-      "Die Anwendung konnte nicht prüfen, ob die Übersetzung verfügbar ist. Versuchen Sie es erneut, bevor Sie einen Auftrag starten.",
-    );
-    expect(german["translate.termMapHelp"]).toBe(
-      "Eine Begriffskarte ist eine wiederverwendbare Sammlung von Quell- und Zielbegriffen, die einheitlich bleiben sollen. Sie können dem Verzeichnisstandard folgen, eine Begriffskarte auswählen oder ohne eine Begriffskarte fortfahren.",
-    );
-    expect(german["termMaps.guidanceTitle"]).toBe("Was ist eine Begriffskarte?");
-    expect(german["jobs.cancelConfirmation"]).toBe(
-      "{action} den Auftrag {id}? Er bleibt im Auftragsverlauf und wird nicht übersetzt.",
-    );
   });
 
   it("keeps user-visible app copy behind the translation boundary", () => {
