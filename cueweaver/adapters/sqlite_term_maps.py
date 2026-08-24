@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -29,7 +30,6 @@ from ..application.term_maps import (
     TermMapSummary,
     validate_term_map_content,
 )
-from .term_maps import _utc_timestamp
 
 
 class LegacyTermMapSource(Protocol):
@@ -411,6 +411,10 @@ def _term_map_name_write_error(error: Exception, name: str) -> ServiceError:
 
 def _new_id() -> str:
     return uuid.uuid4().hex
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 _IMPORT_MARKER = "term_maps.legacy_json_import_complete"

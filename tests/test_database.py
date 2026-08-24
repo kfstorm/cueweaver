@@ -9,7 +9,8 @@ from cueweaver.application.jobs.store import SqliteJobRecordStore
 def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
     database = SqliteDatabase(tmp_path / "nested" / "cueweaver.sqlite3")
 
-    with database.connection() as connection:
+    database.initialize()
+    with sqlite3.connect(tmp_path / "nested" / "cueweaver.sqlite3") as connection:
         tables = {
             row[0]
             for row in connection.execute(
@@ -65,7 +66,8 @@ def test_migration_adopts_the_database_created_by_issue_193(tmp_path: Path):
         )
 
     database = SqliteDatabase(path)
-    with database.connection() as connection:
+    database.initialize()
+    with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT id FROM jobs").fetchone() == ("job-1",)
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
@@ -77,3 +79,15 @@ def test_migration_adopts_the_database_created_by_issue_193(tmp_path: Path):
     loaded = SqliteJobRecordStore(tmp_path / "jobs", database).load()
     assert loaded[0]["id"] == "job-1"
     assert loaded[0]["schema_version"] == 1
+
+
+def test_sqlite_database_supports_question_marks_in_the_work_root_path(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "work?special" / "cueweaver.sqlite3"
+    database = SqliteDatabase(database_path)
+
+    database.initialize()
+
+    assert database_path.is_file()
+    assert not (tmp_path / "work").exists()

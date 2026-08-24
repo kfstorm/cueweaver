@@ -10,7 +10,7 @@ from threading import Lock
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import ForeignKey, create_engine, event
+from sqlalchemy import URL, ForeignKey, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import Integer, String, Text
@@ -77,20 +77,13 @@ class SqliteDatabase:
         self._engine: Engine | None = None
         self._session_factory: sessionmaker[Session] | None = None
 
-    @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
-        """Provide a raw connection for diagnostics and compatibility callers."""
+    def initialize(self) -> None:
+        """Open the database and apply all pending schema migrations."""
         self._initialize()
-        connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        connection.execute("PRAGMA foreign_keys = ON")
-        try:
-            yield connection
-        finally:
-            connection.close()
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        self._initialize()
+        self.initialize()
         assert self._session_factory is not None
         session = self._session_factory()
         try:
@@ -120,7 +113,7 @@ class SqliteDatabase:
                 raise DatabasePathError from error
             try:
                 engine = create_engine(
-                    f"sqlite+pysqlite:///{self.path}",
+                    URL.create("sqlite+pysqlite", database=str(self.path)),
                     connect_args={"timeout": 30},
                 )
                 event.listen(engine, "connect", _configure_sqlite_connection)

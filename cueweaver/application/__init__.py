@@ -72,6 +72,7 @@ class CueWeaverApplication:
             legacy_term_map_store.recover_pending_deletions
         )
         try:
+            database.initialize()
             legacy_bindings = None
             if (
                 configured_work_root.term_maps_directory.exists()
