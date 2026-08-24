@@ -58,3 +58,16 @@ _Avoid_: temporary root
 A durable product task that will orchestrate optional Extraction and
 Translation.
 _Avoid_: request, task
+
+**Job persistence**:
+The application composition owns the SQLite database at
+`<work-root>/cueweaver.sqlite3` and the Work-root lease at
+`<work-root>/.cueweaver.lease`. The database bootstrap and connection lifecycle
+are shared application infrastructure; the current Jobs-only schema is still
+the authoritative Job record store. Legacy JSON records are imported once
+during startup and then their snapshots are retired. Queued Jobs are restored
+in queue order; Jobs already in Extracting or Translating are marked
+Interrupted. Subtitle output is published through a same-directory temporary
+file and atomic rename/link. A completed Job is persisted before best-effort
+Work-directory cleanup; cleanup failure leaves the Job Completed and logs an
+orphaned Work directory for later removal.

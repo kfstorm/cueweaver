@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -56,17 +55,11 @@ class Translation:
         translator: Translator,
         output: OutputPublisher,
         *,
-        publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
-        before_publication: Callable[[], None] | None = None,
-        on_publication_failure: Callable[[Exception], None] | None = None,
-        after_publication: Callable[[], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self._translator = translator
         self._output = output
-        self._publication_guard = publication_guard or nullcontext
-        self._before_publication = before_publication or (lambda: None)
-        self._on_publication_failure = on_publication_failure or (lambda _error: None)
-        self._after_publication = after_publication or (lambda: None)
+        self._should_stop = should_stop or (lambda: False)
 
     def translate(self, request: TranslateRequest) -> TranslateResult:
         subtitle_format = matching_format(request.subtitle_path, request.output_path)
@@ -88,16 +81,11 @@ class Translation:
         def write(temporary_path: Path) -> None:
             temporary_path.write_bytes(content)
 
-        with self._publication_guard():
-            self._before_publication()
-            try:
-                self._output.publish(
-                    request.output_path, write, overwrite=request.overwrite
-                )
-            except Exception as error:
-                self._on_publication_failure(error)
-                raise
-            self._after_publication()
+        if self._should_stop():
+            raise ServiceError(
+                "job_interrupted", "Job was interrupted when CueWeaver stopped"
+            )
+        self._output.publish(request.output_path, write, overwrite=request.overwrite)
         return TranslateResult(
             request.output_path, request.target_language_code, subtitle_format
         )

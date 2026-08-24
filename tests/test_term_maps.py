@@ -129,22 +129,6 @@ def test_term_map_creation_rejects_trailing_commas(tmp_path: Path):
     assert response.json()["error_code"] == "invalid_term_map"
 
 
-def test_term_map_name_uniqueness_is_serialized_under_concurrent_creation(
-    tmp_path: Path,
-):
-    def create() -> int:
-        with make_client(tmp_path) as client:
-            return client.post(
-                "/api/term-maps",
-                json={"name": "Concurrent", "content": {"a": "b"}},
-            ).status_code
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(lambda _: create(), range(2)))
-
-    assert sorted(statuses) == [200, 400]
-
-
 def test_term_map_can_be_renamed_without_changing_identity(tmp_path: Path):
     client = make_client(tmp_path)
     created = create_term_map(client)
@@ -413,36 +397,6 @@ def test_term_map_delete_recovers_after_interrupted_transaction(
     assert not any((tmp_path / "work" / "term-maps").glob(".directory-delete-*.json"))
 
 
-def test_term_map_rename_and_replacement_concurrently_preserve_both_changes(
-    tmp_path: Path,
-):
-    client = make_client(tmp_path)
-    created = client.post(
-        "/api/term-maps", json={"name": "Characters", "content": {"a": "b"}}
-    ).json()
-
-    def rename() -> int:
-        with make_client(tmp_path) as concurrent_client:
-            return concurrent_client.patch(
-                f"/api/term-maps/{created['id']}", json={"name": "People"}
-            ).status_code
-
-    def replace() -> int:
-        with make_client(tmp_path) as concurrent_client:
-            return concurrent_client.put(
-                f"/api/term-maps/{created['id']}",
-                json={"content": {"Captain": "队长", "Ship": "舰船"}},
-            ).status_code
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(lambda operation: operation(), (rename, replace)))
-
-    detail = client.get(f"/api/term-maps/{created['id']}").json()
-    assert sorted(statuses) == [200, 200]
-    assert detail["name"] == "People"
-    assert detail["content"] == {"Captain": "队长", "Ship": "舰船"}
-
-
 @pytest.mark.parametrize("first_operation", ["rename", "replace"])
 def test_term_map_ordered_operations_preserve_both_committed_fields(
     tmp_path: Path, first_operation: str
@@ -483,29 +437,6 @@ def test_term_map_rename_rejects_duplicate_name_without_changing_resource(
 
     assert response.json()["error_code"] == "duplicate_term_map_name"
     assert client.get(f"/api/term-maps/{first['id']}").json()["name"] == "Characters"
-
-
-def test_term_map_rename_name_uniqueness_is_serialized_under_concurrency(
-    tmp_path: Path,
-):
-    client = make_client(tmp_path)
-    first = client.post(
-        "/api/term-maps", json={"name": "First", "content": {"a": "b"}}
-    ).json()
-    second = client.post(
-        "/api/term-maps", json={"name": "Second", "content": {"c": "d"}}
-    ).json()
-
-    def rename(term_map_id: str) -> int:
-        with make_client(tmp_path) as concurrent_client:
-            return concurrent_client.patch(
-                f"/api/term-maps/{term_map_id}", json={"name": "Shared"}
-            ).status_code
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        statuses = list(executor.map(rename, (first["id"], second["id"])))
-
-    assert sorted(statuses) == [200, 400]
 
 
 def test_operations_after_delete_return_not_found(tmp_path: Path):

@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import TextIO
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the supported runtime is POSIX
+    fcntl = None  # type: ignore[assignment]
 
 
 class WorkRoot:
@@ -101,6 +107,41 @@ class WorkRoot:
         )
 
 
+class WorkRootLease:
+    """Hold an exclusive process lease for one Work root."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._handle: TextIO | None = None
+
+    def acquire(self) -> None:
+        if self._handle is not None:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self._path.open("a+")
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            handle.close()
+            raise ValueError("Work root is already in use") from error
+        except OSError:
+            handle.close()
+            raise
+        self._handle = handle
+
+    def release(self) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is None:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 def is_safe_job_identifier(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -113,4 +154,4 @@ def is_safe_job_identifier(value: object) -> bool:
     )
 
 
-__all__ = ["WorkRoot", "is_safe_job_identifier"]
+__all__ = ["WorkRoot", "WorkRootLease", "is_safe_job_identifier"]

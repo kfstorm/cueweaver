@@ -32,6 +32,8 @@ BUSINESS_ROUTES = frozenset(
 
 
 class Application(Protocol):
+    def close(self) -> None: ...
+
     @property
     def discovery(self) -> DiscoveryOperation: ...
 
@@ -51,6 +53,8 @@ class Application(Protocol):
 def create_app(application: Application, media_root: Path | None = None) -> FastAPI:
     """Create the HTTP service without coupling it to CLI startup."""
     app = FastAPI()
+    app.state.application = application
+    app.router.on_shutdown.append(application.close)
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(RequestValidationError, request_validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_error_handler)

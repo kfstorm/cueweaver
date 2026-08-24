@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import builtins
+import logging
 import queue
 import shutil
 import tempfile
 import threading
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +20,7 @@ from unicodedata import category
 from ...adapters.output import AtomicOutputPublisher
 from ...subtitle_formats import EXTERNAL_FORMATS
 from ...work import WorkRoot
+from ..database import SqliteDatabase
 from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
 from ..errors import ServiceError, project_service_error
 from ..extraction import Extraction
@@ -27,7 +30,6 @@ from ..translation import Translator
 from .execution import (
     EmbeddedExecutionInput,
     JobExecution,
-    JobExecutionFinalizationError,
     JobExecutionInput,
     JobExecutionOutcome,
     JobExecutionProgress,
@@ -52,7 +54,12 @@ from .model import (
     valid_job_id,
     valid_record,
 )
-from .store import FileJobRecordStore, JobRecordHealth, JobRecordStore
+from .store import (
+    FileJobRecordStore,
+    JobRecordHealth,
+    JobRecordStore,
+    SqliteJobRecordStore,
+)
 
 CONTROL_CHARACTER_LIMIT = 32
 DELETE_CHARACTER = 127
@@ -63,6 +70,7 @@ APPROVED_ERROR_CONTEXT_KEYS = frozenset(
 )
 OUTPUT_CONFLICT_POLICIES = frozenset({"append-number", "overwrite", "skip"})
 OUTPUT_EXISTS_REASON = "Output path already exists"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,7 @@ class Jobs:
         directory_term_maps: DirectoryTermMaps | None = None,
         *,
         record_store: JobRecordStore | None = None,
+        database: SqliteDatabase | None = None,
     ) -> None:
         self._translator = translator
         self._term_maps = term_maps
@@ -108,10 +117,14 @@ class Jobs:
         self._record_store = (
             record_store
             if record_store is not None
-            else FileJobRecordStore(self._jobs_root)
+            else SqliteJobRecordStore(
+                self._jobs_root,
+                database or SqliteDatabase(self._work.path / "cueweaver.sqlite3"),
+            )
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
+        self._recovered_queue_ids: list[str] = []
         self._next_queue_sequence = 0
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
@@ -122,6 +135,8 @@ class Jobs:
             target=self._run, daemon=True, name="cueweaver-job-worker"
         )
         self._worker.start()
+        for job_id in self._recovered_queue_ids:
+            self._pending.put(job_id)
 
     def close(self) -> None:
         """Stop accepting work and signal the worker to exit when it can."""
@@ -130,6 +145,11 @@ class Jobs:
                 return
             self._closed.set()
             self._pending.put(None)
+
+    def wait_closed(self) -> None:
+        """Wait until the worker has finished after ``close`` was requested."""
+        self.close()
+        self._worker.join()
 
     def create(self, request: CreateJobRequest) -> dict[str, object]:
         with self._lifecycle_lock:
@@ -367,14 +387,11 @@ class Jobs:
 
     def clear_completed(self) -> dict[str, object]:
         """Delete every Completed Job, retaining records whose cleanup fails."""
-        with self._lock:
+        with self._lifecycle_lock:
             job_ids = sorted(
-                (
-                    str(record["id"])
-                    for record in self._records.values()
-                    if record.get("status") == "Completed"
-                ),
-                key=lambda value: value,
+                str(record["id"])
+                for record in self._query_records(("Completed",))
+                if isinstance(record.get("id"), str)
             )
         deleted: list[str] = []
         failed: list[dict[str, object]] = []
@@ -400,13 +417,19 @@ class Jobs:
         return {"deleted": deleted, "failed": failed}
 
     def list(self) -> list[dict[str, object]]:
-        with self._lock:
-            records = [
-                self._record_with_queue_position(record)
-                for record in self._records.values()
-            ]
+        with self._lifecycle_lock:
+            return self._list()
+
+    def _list(self) -> builtins.list[dict[str, object]]:
+        records = self._query_records()
+        positions = _queue_positions(records)
+        projected = []
+        for record in records:
+            copied = copy_job_record(record)
+            copied["queue_position"] = positions.get(str(record["id"]))
+            projected.append(copied)
         return sorted(
-            records, key=lambda record: str(record["created_at"]), reverse=True
+            projected, key=lambda record: str(record["created_at"]), reverse=True
         )
 
     def list_page(
@@ -415,6 +438,16 @@ class Jobs:
         cursor: str | None = None,
         search: str = "",
         status: str = "all",
+    ) -> dict[str, object]:
+        with self._lifecycle_lock:
+            return self._list_page(limit, cursor, search, status)
+
+    def _list_page(
+        self,
+        limit: int,
+        cursor: str | None,
+        search: str,
+        status: str,
     ) -> dict[str, object]:
         """Return active Jobs and one bounded page of terminal history."""
         if (
@@ -451,38 +484,38 @@ class Jobs:
                     "invalid_job_cursor", "Job history cursor is invalid"
                 ) from error
 
-        with self._lock:
-            active_records = [
-                record
-                for record in self._records.values()
-                if record.get("status") in {"Queued", "Extracting", "Translating"}
-                and (status == "all" or record.get("status") == status)
-                and _job_matches_search(record, normalized_search)
-            ]
-            active_records.sort(key=_active_sort_key)
+        records = self._query_records()
+        active_records = [
+            record
+            for record in records
+            if record.get("status") in {"Queued", "Extracting", "Translating"}
+            if (status == "all" or record.get("status") == status)
+            and _job_matches_search(record, normalized_search)
+        ]
+        history_records = [
+            record
+            for record in records
+            if record.get("status") in TERMINAL_JOB_STATUSES
+            if (status == "all" or record.get("status") == status)
+            and _job_matches_search(record, normalized_search)
+        ]
+        active_records.sort(key=_active_sort_key)
+        history_records.sort(key=_history_sort_key, reverse=True)
+        matching_count = len(active_records) + len(history_records)
+        if position is not None:
             history_records = [
                 record
-                for record in self._records.values()
-                if record.get("status") in TERMINAL_JOB_STATUSES
-                and (status == "all" or record.get("status") == status)
-                and _job_matches_search(record, normalized_search)
+                for record in history_records
+                if _history_sort_key(record) < position
             ]
-            history_records.sort(key=_history_sort_key, reverse=True)
-            matching_count = len(active_records) + len(history_records)
-            if position is not None:
-                history_records = [
-                    record
-                    for record in history_records
-                    if _history_sort_key(record) < position
-                ]
-            page_records = history_records[:limit]
-            has_more = len(history_records) > limit
-            active_jobs = [
-                self._summary_with_queue_position(record) for record in active_records
-            ]
-            history_jobs = [
-                project_job_summary(record, None) for record in page_records
-            ]
+        page_records = history_records[:limit]
+        has_more = len(history_records) > limit
+        positions = _queue_positions(active_records)
+        active_jobs = [
+            project_job_summary(record, positions.get(str(record["id"])))
+            for record in active_records
+        ]
+        history_jobs = [project_job_summary(record, None) for record in page_records]
 
         next_cursor = None
         if has_more:
@@ -493,10 +526,7 @@ class Jobs:
                 next_cursor = encode_history_cursor(
                     last_created_at, last_job_id, condition_hash
                 )
-        with self._lock:
-            completed_count = sum(
-                record.get("status") == "Completed" for record in self._records.values()
-            )
+        completed_count = self._completed_count(records)
         return {
             "active_jobs": active_jobs,
             "history_jobs": history_jobs,
@@ -505,12 +535,28 @@ class Jobs:
             "completed_count": completed_count,
         }
 
+    def _query_records(
+        self, statuses: tuple[str, ...] | None = None
+    ) -> builtins.list[dict[str, object]]:
+        with self._lock:
+            records = [copy_job_record(record) for record in self._records.values()]
+        if statuses is None:
+            return records
+        return [record for record in records if record.get("status") in statuses]
+
+    def _completed_count(self, records: builtins.list[dict[str, object]]) -> int:
+        return sum(record.get("status") == "Completed" for record in records)
+
     def get(self, job_id: str) -> dict[str, object]:
+        with self._lifecycle_lock:
+            return self._get(job_id)
+
+    def _get(self, job_id: str) -> dict[str, object]:
         with self._lock:
             record = self._records.get(job_id)
-            if record is None:
-                raise ServiceError("job_not_found", "Job does not exist")
-            return self._record_with_queue_position(record)
+        if record is None:
+            raise ServiceError("job_not_found", "Job does not exist")
+        return self._record_with_queue_position(record)
 
     def record_health(self) -> dict[str, object]:
         health = getattr(self._record_store, "health", None)
@@ -623,18 +669,6 @@ class Jobs:
     ) -> dict[str, object]:
         return self._copy_with_queue_position(record)
 
-    def _summary_with_queue_position(
-        self, record: dict[str, object]
-    ) -> dict[str, object]:
-        return self._project_with_queue_position(record, project_job_summary)
-
-    def _project_with_queue_position(
-        self,
-        record: dict[str, object],
-        projector: Callable[[JobRecord, int | None], dict[str, object]],
-    ) -> dict[str, object]:
-        return projector(record, self._queue_position(record))
-
     def _copy_with_queue_position(self, record: dict[str, object]) -> dict[str, object]:
         copied = copy_job_record(record)
         copied["queue_position"] = self._queue_position(record)
@@ -643,12 +677,22 @@ class Jobs:
     def _queue_position(self, record: dict[str, object]) -> int | None:
         if record.get("status") != "Queued":
             return None
+        queued_records = [
+            copy_job_record(item)
+            for item in tuple(self._records.values())
+            if item.get("status") == "Queued"
+        ]
         queued = sorted(
-            (item for item in self._records.values() if item.get("status") == "Queued"),
+            queued_records,
             key=queue_sequence,
         )
         return next(
-            index + 1 for index, item in enumerate(queued) if item["id"] == record["id"]
+            (
+                index + 1
+                for index, item in enumerate(queued)
+                if item["id"] == record["id"]
+            ),
+            None,
         )
 
     def _validate(
@@ -846,19 +890,20 @@ class Jobs:
             status = loaded_record.get("status")
             assert isinstance(job_id, str)
             assert isinstance(status, str)
-            if status in {"Queued", "Extracting", "Translating"}:
-                normalize_record(loaded_record)
-                record = _interrupted_record(loaded_record)
-                # Recovery is the only startup write. The atomic record replace
-                # makes the interrupted state durable before the worker starts.
+            record = copy_job_record(loaded_record)
+            if status in {"Extracting", "Translating"}:
+                record = _interrupted_record(record)
                 self._write_record(job_id, record)
-            else:
+            elif status == "Queued":
+                normalize_record(loaded_record)
                 record = loaded_record
+                self._recovered_queue_ids.append(job_id)
+            else:
                 normalize_record(record)
             self._next_queue_sequence = max(
                 self._next_queue_sequence, queue_sequence(record)
             )
-            self._records[job_id] = record
+            self._records[job_id] = copy_job_record(record)
 
     def _run(self) -> None:
         while True:
@@ -870,14 +915,8 @@ class Jobs:
                     continue
                 self._execute(job_id)
             except Exception as error:
-                # A persistence error must not kill the serial worker or strand a Job.
                 if job_id is not None:
-                    self._mark_failed_after_worker_error(
-                        job_id,
-                        error,
-                        force=isinstance(error, JobExecutionFinalizationError)
-                        or self._closed.is_set(),
-                    )
+                    self._mark_failed_after_worker_error(job_id, error)
             finally:
                 self._pending.task_done()
 
@@ -889,12 +928,6 @@ class Jobs:
         outcome: JobExecutionOutcome
         try:
             work_directory = self._job_work_directory(job_id)
-
-            def finalize(outcome_to_persist: JobExecutionOutcome) -> bool:
-                self._finish_execution_locked(
-                    job_id, outcome_to_persist, request, embedded, work_directory
-                )
-                return True
 
             subtitle_path: Path | None = None
             on_progress: Callable[[JobExecutionProgress], bool] | None = None
@@ -927,9 +960,7 @@ class Jobs:
                 self._translator,
                 AtomicOutputPublisher(),
                 extraction=self._extraction,
-                publication_guard=self._publication_guard,
                 should_stop=self._closed.is_set,
-                finalize=finalize,
             ).execute(
                 JobExecutionInput(
                     subtitle_path=subtitle_path,
@@ -952,8 +983,6 @@ class Jobs:
             )
         except JobExecutionProgressPersistenceError:
             raise
-        except JobExecutionFinalizationError:
-            raise
         except ServiceError as error:
             outcome = JobExecutionOutcome("Failed", error=error)
         except Exception:
@@ -964,13 +993,7 @@ class Jobs:
                     "Extraction failed" if embedded else "Translation failed",
                 ),
             )
-        if not outcome.terminal_persisted:
-            self._finish_execution(job_id, outcome, request, embedded, work_directory)
-
-    @contextmanager
-    def _publication_guard(self) -> Iterator[None]:
-        with self._lifecycle_lock:
-            yield
+        self._finish_execution(job_id, outcome, request, embedded, work_directory)
 
     def _finish_execution(
         self,
@@ -985,10 +1008,8 @@ class Jobs:
                 self._finish_execution_locked(
                     job_id, outcome, request, embedded, work_directory
                 )
-        except JobExecutionFinalizationError:
-            raise
         except Exception as error:
-            raise JobExecutionFinalizationError from error
+            raise RuntimeError("Job outcome could not be persisted") from error
 
     def _finish_execution_locked(
         self,
@@ -1000,16 +1021,26 @@ class Jobs:
     ) -> None:
         if outcome.status == "Completed":
             self._finish(job_id, "Completed", None)
+            try:
+                shutil.rmtree(work_directory)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                logger.warning(
+                    "Could not clean Work data for completed Job %s: %s",
+                    job_id,
+                    cleanup_error,
+                )
             return
         if outcome.status == "Interrupted":
             self._finish_interrupted(job_id)
             return
-        if self._closed.is_set() and not outcome.preserve_failure:
+        if self._closed.is_set():
             self._finish_interrupted(job_id)
             return
-        error = outcome.error
-        assert error is not None
-        context = self._error_context(error.context)
+        outcome_error = outcome.error
+        assert outcome_error is not None
+        context = self._error_context(outcome_error.context)
         if embedded:
             context = _embedded_error_context(
                 context, request, self._media_root, work_directory
@@ -1017,7 +1048,11 @@ class Jobs:
         self._finish(
             job_id,
             "Failed",
-            {"code": error.error_code, "message": error.message, **context},
+            {
+                "code": outcome_error.error_code,
+                "message": outcome_error.message,
+                **context,
+            },
         )
 
     def _embedded_term_map(self, request: dict[str, object]) -> dict[str, str] | None:
@@ -1047,7 +1082,7 @@ class Jobs:
                 transition_status(record, progress.phase, at=_timestamp())
                 try:
                     self._write_record(job_id, record)
-                except OSError as error:
+                except Exception as error:
                     raise JobExecutionProgressPersistenceError from error
                 self._records[job_id] = record
         return True
@@ -1062,6 +1097,7 @@ class Jobs:
                 record = self._records.get(job_id)
                 if record is None or record.get("status") != "Queued":
                     return None
+                record = copy_job_record(record)
                 request = record["request"]
                 assert isinstance(request, dict)
                 embedded = "stream_index" in request
@@ -1115,10 +1151,13 @@ class Jobs:
         return safe
 
     def _finish(
-        self, job_id: str, status: str, error: dict[str, object] | None
+        self,
+        job_id: str,
+        status: str,
+        error: dict[str, object] | None,
     ) -> None:
         with self._lock:
-            record = self._records[job_id]
+            record = copy_job_record(self._records[job_id])
             finished_at = _timestamp()
             transition_status(record, status, at=finished_at, terminal=True)
             record["finished_at"] = finished_at
@@ -1128,21 +1167,18 @@ class Jobs:
     def _finish_interrupted(self, job_id: str) -> None:
         with self._lock:
             interrupted = _interrupted_record(self._records[job_id])
-            self._records[job_id] = interrupted
-            # A failed write is recovered on the next startup without blocking shutdown.
             with suppress(OSError):
                 self._write_record(job_id, interrupted)
 
-    def _mark_failed_after_worker_error(
-        self, job_id: str, error: Exception, *, force: bool = False
-    ) -> None:
+    def _mark_failed_after_worker_error(self, job_id: str, error: Exception) -> None:
         with self._lifecycle_lock:
-            if self._closed.is_set() and not force:
+            if self._closed.is_set():
                 return
             with self._lock:
                 record = self._records.get(job_id)
                 if record is None:
                     return
+                record = copy_job_record(record)
                 finished_at = _timestamp()
                 transition_status(record, "Failed", at=finished_at, terminal=True)
                 record["finished_at"] = finished_at
@@ -1150,12 +1186,20 @@ class Jobs:
                     "code": "job_worker_failed",
                     "message": "Job execution could not be persisted",
                 }
-                with suppress(Exception):
+                try:
                     self._write_record(job_id, record)
+                except Exception as persistence_error:
+                    logger.error(
+                        "Could not persist worker failure for Job %s: %s",
+                        job_id,
+                        persistence_error,
+                    )
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
-        record["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
-        self._record_store.write(job_id, record)
+        persisted = copy_job_record(record)
+        persisted["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
+        self._record_store.write(job_id, persisted)
+        self._records[job_id] = persisted
 
     def _ensure_jobs_root(self) -> None:
         self._check_jobs_root()
@@ -1287,6 +1331,18 @@ def _active_sort_key(record: dict[str, object]) -> tuple[int, str, str]:
     return queue_sequence(record), created_at, job_id
 
 
+def _queue_positions(records: list[dict[str, object]]) -> dict[str, int]:
+    queued = sorted(
+        (record for record in records if record.get("status") == "Queued"),
+        key=queue_sequence,
+    )
+    return {
+        str(record["id"]): position
+        for position, record in enumerate(queued, start=1)
+        if isinstance(record.get("id"), str)
+    }
+
+
 def _empty_record_health() -> dict[str, object]:
     return {
         "corrupt": {"count": 0, "location": "jobs/corrupt"},
@@ -1367,5 +1423,6 @@ __all__ = [
     "JobStatus",
     "JobSummary",
     "Jobs",
+    "SqliteJobRecordStore",
     "valid_job_id",
 ]

@@ -33,18 +33,9 @@ class AtomicOutputPublisher:
             ) from error
         temporary_path: Path | None = None
         try:
-            descriptor, temporary_name = tempfile.mkstemp(
-                dir=output_path.parent,
-                prefix=f".{output_path.name}.",
-                suffix=output_path.suffix,
-            )
-            temporary_path = Path(temporary_name)
-            os.close(descriptor)
+            temporary_path = _create_temporary_path(output_path)
             write(temporary_path)
-            if overwrite:
-                temporary_path.replace(output_path)
-            else:
-                os.link(temporary_path, output_path)
+            _publish_temporary(temporary_path, output_path, overwrite=overwrite)
         except FileExistsError as error:
             raise ServiceError(
                 "output_exists", "Output path already exists", path=output_path
@@ -59,3 +50,22 @@ class AtomicOutputPublisher:
             if temporary_path is not None:
                 with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
+
+
+def _create_temporary_path(output_path: Path) -> Path:
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=output_path.suffix,
+    )
+    os.close(descriptor)
+    return Path(temporary_name)
+
+
+def _publish_temporary(
+    temporary_path: Path, output_path: Path, *, overwrite: bool
+) -> None:
+    if overwrite:
+        temporary_path.replace(output_path)
+    else:
+        os.link(temporary_path, output_path)

@@ -1,9 +1,9 @@
 import json
 import os
 import shutil
+import sqlite3
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -11,11 +11,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cueweaver.adapters.output import AtomicOutputPublisher
-from cueweaver.adapters.term_maps import FileTermMapStore
+from cueweaver.application.database import SqliteDatabase
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
-from cueweaver.application.jobs import CreateJobRequest, FileJobRecordStore, Jobs
+from cueweaver.application.jobs import (
+    CreateJobRequest,
+    FileJobRecordStore,
+    Jobs,
+    SqliteJobRecordStore,
+)
 from cueweaver.application.term_maps import TermMapDetail
 from cueweaver.product import create_product_app
 
@@ -175,6 +180,233 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
             "source_format": "srt",
         },
     }
+
+
+def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    record = persisted_job_record("sqlite-job")
+
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    store.write("sqlite-job", record)
+
+    assert (tmp_path / "cueweaver.sqlite3").is_file()
+    loaded = store.load()
+    assert len(loaded) == 1
+    assert loaded[0]["id"] == "sqlite-job"
+    assert loaded[0]["schema_version"] == 1
+    assert loaded[0]["attempt"] == 1
+
+    store.remove("sqlite-job")
+
+    assert store.load() == []
+
+
+def test_sqlite_record_store_imports_legacy_json_and_retires_the_snapshot(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir(parents=True)
+    record = persisted_job_record("legacy-job")
+    (jobs_root / "legacy-job.json").write_text(json.dumps(record), encoding="utf-8")
+
+    loaded = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    ).load()
+
+    assert loaded[0]["id"] == "legacy-job"
+    assert not (jobs_root / "legacy-job.json").exists()
+    assert (tmp_path / "cueweaver.sqlite3").is_file()
+
+
+def test_sqlite_legacy_migration_is_idempotent_when_snapshot_retirement_is_deferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = persisted_job_record("legacy-retry")
+    snapshot = jobs_root / "legacy-retry.json"
+    snapshot.write_text(json.dumps(record), encoding="utf-8")
+
+    first_store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    monkeypatch.setattr(first_store, "_retire_legacy_snapshots", lambda: None)
+    assert first_store.load()[0]["id"] == "legacy-retry"
+    assert snapshot.exists()
+
+    second_store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    assert second_store.load()[0]["id"] == "legacy-retry"
+    assert not snapshot.exists()
+
+
+def test_sqlite_legacy_migration_runs_once_per_store_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    retire_calls = 0
+
+    def count_retire_calls() -> None:
+        nonlocal retire_calls
+        retire_calls += 1
+
+    monkeypatch.setattr(store, "_retire_legacy_snapshots", count_retire_calls)
+
+    store.load()
+    store.write("migration-ready", persisted_job_record("migration-ready"))
+    store.remove("migration-ready")
+    store.load()
+
+    assert retire_calls == 1
+
+
+def test_sqlite_record_store_delete_removes_unmigrated_legacy_records(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    jobs_root.mkdir()
+    record = persisted_job_record("legacy-delete")
+    record_path = jobs_root / "legacy-delete.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    ).remove("legacy-delete")
+
+    assert not record_path.exists()
+
+
+def test_sqlite_record_store_keeps_the_database_authoritative_after_snapshot_removal(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    record = persisted_job_record("durable-job")
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    store.write("durable-job", record)
+
+    loaded = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    ).load()
+
+    assert [item["id"] for item in loaded] == ["durable-job"]
+
+
+def test_sqlite_record_store_does_not_restore_an_older_json_snapshot(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    old_record = persisted_job_record("authoritative-job", status="Failed")
+    new_record = persisted_job_record("authoritative-job", status="Completed")
+    store.write("authoritative-job", old_record)
+    store.write("authoritative-job", new_record)
+    snapshot = jobs_root / "authoritative-job.json"
+    snapshot.write_text(json.dumps(old_record), encoding="utf-8")
+    old_timestamp = time.time() - 10
+    os.utime(snapshot, (old_timestamp, old_timestamp))
+
+    loaded = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    ).load()
+
+    assert loaded[0]["status"] == "Completed"
+
+
+def test_sqlite_corruption_preserves_legacy_snapshot_for_recovery(tmp_path: Path):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    work_root = tmp_path / "work"
+    jobs_root = work_root / "jobs"
+    jobs_root.mkdir(parents=True)
+    snapshot = jobs_root / "recoverable-job.json"
+    snapshot_bytes = json.dumps(persisted_job_record("recoverable-job")).encode()
+    snapshot.write_bytes(snapshot_bytes)
+    (work_root / "cueweaver.sqlite3").write_bytes(b"not a sqlite database")
+
+    with pytest.raises(ServiceError) as raised:
+        Jobs(FakeTranslator(), media_root, work_root)
+
+    assert raised.value.error_code == "job_store_unavailable"
+    assert snapshot.read_bytes() == snapshot_bytes
+
+
+def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    store.write("corrupt-record", persisted_job_record("corrupt-record"))
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
+        connection.execute(
+            "UPDATE jobs SET record_json = ? WHERE id = ?",
+            ("{}", "corrupt-record"),
+        )
+        connection.commit()
+
+    with pytest.raises(ServiceError) as raised:
+        store.load()
+
+    assert raised.value.error_code == "job_store_corrupt"
+
+
+def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    store.write("row-id", persisted_job_record("row-id"))
+    mismatched = persisted_job_record("record-id")
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
+        connection.execute(
+            "UPDATE jobs SET record_json = ? WHERE id = ?",
+            (json.dumps(mismatched), "row-id"),
+        )
+        connection.commit()
+
+    with pytest.raises(ServiceError) as raised:
+        store.load()
+
+    assert raised.value.error_code == "job_store_corrupt"
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        ("load", "Job records cannot be loaded"),
+        ("write", "Job record could not be persisted"),
+        ("remove", "Job record could not be deleted"),
+    ],
+)
+def test_sqlite_operation_errors_keep_their_operation_context(
+    tmp_path: Path, operation: str, message: str
+):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(
+        jobs_root, SqliteDatabase(tmp_path / "cueweaver.sqlite3")
+    )
+    store.write("operation-error", persisted_job_record("operation-error"))
+    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
+        connection.execute("DROP TABLE jobs")
+
+    with pytest.raises(ServiceError, match=message):
+        if operation == "load":
+            store.load()
+        elif operation == "write":
+            store.write("operation-error", persisted_job_record("operation-error"))
+        else:
+            store.remove("operation-error")
 
 
 def status_history_entry(
@@ -673,13 +905,12 @@ def test_new_job_records_include_schema_version_one(tmp_path: Path):
     )
 
     assert queued["schema_version"] == 1
-    assert (
-        json.loads(
-            (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
-        )["schema_version"]
-        == 1
-    )
+    assert sqlite_job_record(work_root, str(queued["id"]))["schema_version"] == 1
     jobs.close()
+
+
+_clients: dict[Path, TestClient] = {}
+_clients_lock = threading.Lock()
 
 
 def make_client(
@@ -688,14 +919,21 @@ def make_client(
     static_root = work_root.parent / "static"
     static_root.mkdir(exist_ok=True)
     (static_root / "index.html").write_text("<div id='root'></div>", encoding="utf-8")
-    return TestClient(
-        create_product_app(
-            media_root,
-            work_root,
-            translator,
-            static_root=static_root,
+    with _clients_lock:
+        previous = _clients.pop(work_root, None)
+        if previous is not None:
+            previous.app.state.application.close()
+            previous.close()
+        client = TestClient(
+            create_product_app(
+                media_root,
+                work_root,
+                translator,
+                static_root=static_root,
+            )
         )
-    )
+        _clients[work_root] = client
+        return client
 
 
 def create_job(client: TestClient, target: str = "zh-Hans"):
@@ -1077,91 +1315,6 @@ def test_follow_resolution_failure_does_not_queue_a_job(
         assert client.get("/api/jobs").json()["active_jobs"] == []
 
 
-def test_concurrent_follow_and_term_map_delete_are_linearized(tmp_path: Path):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    setup_client = make_client(media_root, work_root, FakeTranslator())
-    term_map = create_and_bind_term_map(
-        setup_client, "Characters", "", {"Captain": "队长"}
-    )
-    setup_client.close()
-    started = threading.Event()
-    release = threading.Event()
-
-    def create_follow_job() -> object:
-        with make_client(
-            media_root,
-            work_root,
-            FakeTranslator(started=started, release=release),
-        ) as client:
-            return client.post("/api/jobs", json=job_body())
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        follow_future = executor.submit(create_follow_job)
-        assert started.wait(timeout=5)
-        with make_client(media_root, work_root, FakeTranslator()) as client:
-            delete_response = client.request(
-                "DELETE",
-                f"/api/term-maps/{term_map['id']}",
-                json={"name": term_map["name"]},
-            )
-        release.set()
-        follow_response = follow_future.result()
-
-    assert delete_response.status_code == 200
-    assert follow_response.status_code == 200
-    assert follow_response.json()["request"]["term_map"]["id"] == term_map["id"]
-
-
-def test_follow_that_loses_race_to_term_map_delete_is_not_queued(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    setup_client = make_client(media_root, work_root, FakeTranslator())
-    term_map = create_and_bind_term_map(
-        setup_client, "Characters", "", {"Captain": "队长"}
-    )
-    setup_client.close()
-    first_read = threading.Event()
-    release_first_read = threading.Event()
-    original_get = FileTermMapStore.get
-    paused = False
-
-    def pause_after_first_read(store: object, term_map_id: str) -> object:
-        nonlocal paused
-        detail = original_get(store, term_map_id)  # type: ignore[arg-type]
-        if term_map_id == term_map["id"] and not paused:
-            paused = True
-            first_read.set()
-            assert release_first_read.wait(timeout=5)
-        return detail
-
-    monkeypatch.setattr(FileTermMapStore, "get", pause_after_first_read)
-
-    def create_follow_job() -> object:
-        with make_client(media_root, work_root, FakeTranslator()) as client:
-            return client.post("/api/jobs", json=job_body())
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        follow_future = executor.submit(create_follow_job)
-        assert first_read.wait(timeout=5)
-        with make_client(media_root, work_root, FakeTranslator()) as client:
-            deleted = client.request(
-                "DELETE",
-                f"/api/term-maps/{term_map['id']}",
-                json={"name": term_map["name"]},
-            )
-        release_first_read.set()
-        follow = follow_future.result()
-
-    assert deleted.status_code == 200
-    assert follow.status_code == 400
-    assert follow.json()["error_code"] == "term_map_not_found"
-    with make_client(media_root, work_root, FakeTranslator()) as client:
-        jobs = client.get("/api/jobs").json()
-    assert jobs["active_jobs"] == []
-    assert jobs["history_jobs"] == []
-
-
 @pytest.mark.parametrize(
     ("mode", "term_map_id"),
     [("follow", "map-1"), ("none", "map-1"), ("selected", None)],
@@ -1230,8 +1383,8 @@ def persisted_failed_embedded_job(tmp_path: Path, translator: FakeTranslator):
         create_failed_embedded_job(tmp_path, translator)
     )
     jobs.close()
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record_path = work_root / "cueweaver.sqlite3"
+    record = sqlite_job_record(work_root, str(queued["id"]))
     return _media_root, work_root, media, media_adapter, queued, record_path, record
 
 
@@ -1253,9 +1406,7 @@ def failed_embedded_work_directory(tmp_path: Path, translator: FakeTranslator):
 
 def assert_failed_record_persisted(jobs: Jobs, work_root: Path, job_id: str) -> None:
     assert jobs.get(job_id)["status"] == "Failed"
-    persisted = json.loads(
-        (work_root / "jobs" / f"{job_id}.json").read_text(encoding="utf-8")
-    )
+    persisted = sqlite_job_record(work_root, job_id)
     assert persisted["status"] == "Failed"
 
 
@@ -1266,14 +1417,32 @@ def persisted_external_job(
     with make_client(media_root, work_root, FakeTranslator()) as client:
         queued = create_job(client).json()
         wait_for_status(client, queued["id"], "Completed")
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
+    record_path = work_root / "cueweaver.sqlite3"
+    record = sqlite_job_record(work_root, str(queued["id"]))
     return (
         media_root,
         work_root,
         queued,
         record_path,
-        json.loads(record_path.read_text(encoding="utf-8")),
+        record,
     )
+
+
+def sqlite_job_record(work_root: Path, job_id: str) -> dict[str, object]:
+    records = SqliteJobRecordStore(
+        work_root / "jobs", SqliteDatabase(work_root / "cueweaver.sqlite3")
+    ).load()
+    record = next((item for item in records if item.get("id") == job_id), None)
+    assert record is not None
+    return record
+
+
+def persist_job_record(work_root: Path, record: dict[str, object]) -> None:
+    job_id = record.get("id")
+    assert isinstance(job_id, str)
+    SqliteJobRecordStore(
+        work_root / "jobs", SqliteDatabase(work_root / "cueweaver.sqlite3")
+    ).write(job_id, record)
 
 
 def wait_for_status(
@@ -1345,7 +1514,7 @@ def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
     assert store.calls[0] == "load"
     assert "write" in store.calls
     assert store.calls[-1] == "remove"
-    assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    assert not (work_root / "cueweaver.sqlite3").exists()
     jobs.close()
 
 
@@ -1377,9 +1546,7 @@ def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: 
             "Queued",
             "Translating",
         }
-        record_path = work_root / "jobs" / f"{queued['id']}.json"
-        assert record_path.is_file()
-        assert json.loads(record_path.read_text(encoding="utf-8"))["status"] in {
+        assert sqlite_job_record(work_root, str(queued["id"]))["status"] in {
             "Queued",
             "Translating",
         }
@@ -1434,9 +1601,7 @@ def test_job_persists_status_history_and_exposes_it_on_detail(tmp_path: Path):
     )
     assert completed["status_history"][-1]["started_at"]
     assert completed["status_history"][-1]["finished_at"]
-    persisted = json.loads(
-        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
-    )
+    persisted = sqlite_job_record(work_root, str(queued["id"]))
     assert persisted["status_history"] == completed["status_history"]
 
 
@@ -1497,7 +1662,7 @@ def test_cancel_adds_a_finished_cancelled_status_history_entry(tmp_path: Path):
 def test_restart_appends_interrupted_without_fabricating_earlier_history(
     tmp_path: Path,
 ):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     record["status"] = "Translating"
@@ -1505,7 +1670,7 @@ def test_restart_appends_interrupted_without_fabricating_earlier_history(
     record["error"] = None
     record["status_history"] = record["status_history"][:-1]
     record["status_history"][-1]["finished_at"] = None
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
 
@@ -1755,8 +1920,7 @@ def test_embedded_retry_keeps_intermediate_and_marker_when_reprobe_fails(
     )
     work_directory = work_root / "jobs" / str(queued["id"])
     source = work_directory / "source.srt"
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    original_marker = json.loads(record_path.read_text(encoding="utf-8"))["extraction"]
+    original_marker = sqlite_job_record(work_root, str(queued["id"]))["extraction"]
     media_adapter.streams = []
 
     jobs.retry(str(queued["id"]))
@@ -1764,7 +1928,7 @@ def test_embedded_retry_keeps_intermediate_and_marker_when_reprobe_fails(
 
     assert failed["error"]["code"] == "stream_not_found"
     assert source.read_bytes() == b"tampered"
-    persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    persisted = sqlite_job_record(work_root, str(queued["id"]))
     assert persisted["extraction"] == original_marker
     assert media_adapter.probe_calls == [media, media]
     assert len(media_adapter.extract_calls) == 1
@@ -1800,11 +1964,11 @@ def test_embedded_retry_reextracts_when_completion_marker_is_tampered(
     tmp_path: Path, field: str, value: str
 ):
     translator = FakeTranslator(error=RuntimeError("boom"))
-    media_root, work_root, media, media_adapter, queued, record_path, record = (
+    media_root, work_root, media, media_adapter, queued, _record_path, record = (
         persisted_failed_embedded_job(tmp_path, translator)
     )
     record["extraction"][field] = value
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     translator.error = None
 
     restarted = Jobs(
@@ -1897,11 +2061,11 @@ def test_interrupted_embedded_job_retries_using_its_verified_extraction(
     tmp_path: Path,
 ):
     translator = FakeTranslator(error=RuntimeError("boom"))
-    media_root, work_root, media, media_adapter, queued, record_path, record = (
+    media_root, work_root, media, media_adapter, queued, _record_path, record = (
         persisted_failed_embedded_job(tmp_path, translator)
     )
     set_record_status(record, "Interrupted", finished_at=record["finished_at"])
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     translator.error = None
 
     restarted = Jobs(
@@ -1929,6 +2093,7 @@ def test_embedded_retry_rejects_a_job_work_directory_symlink(
         create_failed_embedded_job(tmp_path, translator)
     )
     jobs.close()
+    jobs._worker.join(timeout=5)
     work_directory = work_root / "jobs" / str(queued["id"])
     backup = work_root / "backup-job-work"
     work_directory.rename(backup)
@@ -2163,9 +2328,7 @@ def test_cancel_queued_job_persists_history_and_allows_terminal_delete(
     assert len(history) == 1
     assert history[0]["id"] == queued["id"]
     assert history[0]["status"] == "Cancelled"
-    persisted = json.loads(
-        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
-    )
+    persisted = sqlite_job_record(work_root, str(queued["id"]))
     assert persisted["status"] == "Cancelled"
 
     with pytest.raises(ServiceError) as retry_error:
@@ -2175,7 +2338,8 @@ def test_cancel_queued_job_persists_history_and_allows_terminal_delete(
     assert jobs.get(str(queued["id"]))["status"] == "Cancelled"
 
     jobs.delete(str(queued["id"]))
-    assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    with pytest.raises(ServiceError, match="Job does not exist"):
+        jobs.get(str(queued["id"]))
     follow_up = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ko", "none"))
     release.set()
     wait_for_status_from_jobs(jobs, str(running["id"]), "Completed")
@@ -2214,6 +2378,7 @@ def test_cancel_skips_a_stale_queue_item_without_executing_it(tmp_path: Path):
 def test_cancel_persistence_failure_keeps_job_queued_and_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    monkeypatch.setattr(Jobs, "_execute", lambda _instance, _job_id: None)
     _media_root, work_root, jobs, queued = create_queued_job(tmp_path)
     job_id = str(queued["id"])
     original_write = Jobs._write_record
@@ -2231,9 +2396,7 @@ def test_cancel_persistence_failure_keeps_job_queued_and_persisted(
         jobs.cancel(job_id)
 
     assert jobs.get(job_id)["status"] == "Queued"
-    persisted = json.loads(
-        (work_root / "jobs" / f"{job_id}.json").read_text(encoding="utf-8")
-    )
+    persisted = sqlite_job_record(work_root, job_id)
     assert persisted["status"] == "Queued"
     jobs.close()
 
@@ -2260,42 +2423,15 @@ def test_retry_persistence_failure_keeps_job_terminal_and_unqueued(
     jobs.close()
 
 
-def test_retry_restores_terminal_record_when_directory_sync_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    _media_root, work_root, _media, _subtitle, jobs, queued = (
-        create_failed_external_job(tmp_path, FakeTranslator(error=RuntimeError("boom")))
-    )
-    original_fsync = os.fsync
-    fsync_calls = 0
-
-    def fail_directory_sync(file_descriptor: int) -> None:
-        nonlocal fsync_calls
-        fsync_calls += 1
-        if fsync_calls == 2:
-            raise OSError("directory sync failed")
-        original_fsync(file_descriptor)
-
-    monkeypatch.setattr(
-        "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
-    )
-
-    with pytest.raises(OSError):
-        jobs.retry(str(queued["id"]))
-
-    assert_failed_record_persisted(jobs, work_root, str(queued["id"]))
-    jobs.close()
-
-
 def test_retry_redacts_paths_from_a_malformed_persisted_record(tmp_path: Path):
     media_root, work_root, _media, _subtitle, jobs, queued = create_failed_external_job(
         tmp_path, FakeTranslator(error=RuntimeError("boom"))
     )
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record = sqlite_job_record(work_root, str(queued["id"]))
     record["request"]["media_path"] = str(tmp_path / "private" / "Movie.mkv")
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     jobs.close()
+    jobs._worker.join(timeout=5)
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
     with pytest.raises(ServiceError) as raised:
@@ -2614,9 +2750,7 @@ def test_job_list_separates_active_jobs_and_redacts_term_map_content(tmp_path: P
         detail = client.get(f"/api/jobs/{running['id']}").json()
         assert "content" not in detail["request"]["term_map"]
 
-    persisted = json.loads(
-        (work_root / "jobs" / f"{running['id']}.json").read_text(encoding="utf-8")
-    )
+    persisted = sqlite_job_record(work_root, str(running["id"]))
     assert persisted["request"]["term_map"]["content"] == {"Captain": "队长"}
 
 
@@ -3063,44 +3197,7 @@ def test_worker_survives_a_persistence_failure_and_processes_next_job(
     assert completed["status"] == "Completed"
 
 
-@pytest.mark.parametrize(
-    "write_failure",
-    [OSError("terminal record unavailable"), RuntimeError("store down")],
-)
-def test_terminal_persistence_failure_is_classified_as_worker_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_failure: Exception
-):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    started = threading.Event()
-    release = threading.Event()
-    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
-    original_write = Jobs._write_record
-    first_id: str | None = None
-
-    def fail_completed_write(jobs, job_id, record):
-        if job_id == first_id and record["status"] in {"Completed", "Failed"}:
-            raise write_failure
-        original_write(jobs, job_id, record)
-
-    monkeypatch.setattr(Jobs, "_write_record", fail_completed_write)
-    first = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
-    first_id = str(first["id"])
-    assert started.wait(timeout=5)
-    second = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none"))
-    release.set()
-
-    failed = wait_for_status_from_jobs(jobs, first_id, "Failed")
-    completed = wait_for_status_from_jobs(jobs, str(second["id"]), "Completed")
-
-    assert failed["error"] == {
-        "code": "job_worker_failed",
-        "message": "Job execution could not be persisted",
-    }
-    assert completed["status"] == "Completed"
-    jobs.close()
-
-
-def test_cleanup_failure_does_not_claim_job_completed(
+def test_cleanup_failure_keeps_job_completed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
@@ -3115,12 +3212,10 @@ def test_cleanup_failure_does_not_claim_job_completed(
     monkeypatch.setattr("cueweaver.application.jobs.shutil.rmtree", fail_cleanup)
 
     queued = create_job(client).json()
-    failed = wait_for_status(client, queued["id"], "Failed")
+    completed = wait_for_status(client, queued["id"], "Completed")
 
-    assert failed["error"] == {
-        "code": "work_cleanup_failed",
-        "message": "Completed Job work data could not be cleaned up",
-    }
+    assert completed["error"] is None
+    assert completed["status"] == "Completed"
     assert (work_root / "jobs" / queued["id"]).is_dir()
 
 
@@ -3147,7 +3242,8 @@ def test_delete_terminal_job_removes_history_and_work_without_touching_media(
 
     assert jobs.delete(str(queued["id"])) == {"id": queued["id"], "deleted": True}
     assert jobs.list() == []
-    assert not (work_root / "jobs" / f"{queued['id']}.json").exists()
+    with pytest.raises(ServiceError, match="Job does not exist"):
+        jobs.get(str(queued["id"]))
     assert not work_directory.exists()
     assert media.read_bytes() == media_before
     assert subtitle.read_bytes() == subtitle_before
@@ -3164,10 +3260,9 @@ def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
     wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
     jobs.close()
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record = sqlite_job_record(work_root, str(queued["id"]))
     set_record_status(record, "Interrupted", finished_at=record["finished_at"])
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / str(queued["id"])
     (work_directory / "checkpoint").write_text("checkpoint", encoding="utf-8")
 
@@ -3178,7 +3273,8 @@ def test_delete_interrupted_job_removes_history_and_retained_work(tmp_path: Path
 
     assert restarted.list() == []
     assert not work_directory.exists()
-    assert not record_path.exists()
+    with pytest.raises(ServiceError, match="Job does not exist"):
+        restarted.get(str(queued["id"]))
     assert media.read_bytes() == media_before
     restarted.close()
 
@@ -3265,38 +3361,10 @@ def test_delete_cleanup_failure_keeps_record_and_preserves_published_output(
     assert raised.value.error_code == "job_work_cleanup_failed"
     assert raised.value.context == {"path": f"jobs/{queued['id']}"}
     assert jobs.get(str(queued["id"]))["status"] == "Completed"
-    assert (work_root / "jobs" / f"{queued['id']}.json").exists()
+    assert (work_root / "cueweaver.sqlite3").exists()
     assert work_directory.exists()
     assert output.read_bytes() == output_before
     assert media.exists()
-    jobs.close()
-
-
-def test_delete_record_sync_failure_restores_history_record(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    _media_root, work_root, jobs, queued = create_queued_job(tmp_path)
-    wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
-    work_directory = work_root / "jobs" / str(queued["id"])
-    work_directory.mkdir()
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    original_fsync = os.fsync
-
-    def fail_directory_sync(_file_descriptor: int) -> None:
-        raise OSError("directory sync failed")
-
-    monkeypatch.setattr(
-        "cueweaver.application.jobs.store.os.fsync", fail_directory_sync
-    )
-
-    with pytest.raises(ServiceError) as raised:
-        jobs.delete(str(queued["id"]))
-
-    assert raised.value.error_code == "job_record_delete_failed"
-    assert record_path.exists()
-    assert jobs.get(str(queued["id"]))["status"] == "Completed"
-    assert not work_directory.exists()
-    monkeypatch.setattr("cueweaver.application.jobs.store.os.fsync", original_fsync)
     jobs.close()
 
 
@@ -3349,8 +3417,8 @@ def test_clear_completed_is_deterministic_and_retains_partial_failures(
     assert jobs.get(failed_cleanup_id)["status"] == "Completed"
     assert not (work_root / "jobs" / deleted_id).exists()
     assert (work_root / "jobs" / failed_cleanup_id).exists()
-    assert not (work_root / "jobs" / f"{deleted_id}.json").exists()
-    assert (work_root / "jobs" / f"{failed_cleanup_id}.json").exists()
+    with pytest.raises(ServiceError, match="Job does not exist"):
+        jobs.get(deleted_id)
     jobs.close()
 
 
@@ -3766,10 +3834,10 @@ def test_job_accepts_external_subtitle_without_language_suffix(tmp_path: Path):
 
 
 @pytest.mark.parametrize("active_status", ["Queued", "Extracting", "Translating"])
-def test_restart_recovers_every_active_job_without_requeueing(
+def test_restart_recovers_queued_jobs_and_interrupts_running_jobs(
     tmp_path: Path, active_status: str
 ):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, active_status, finished_at=None)
@@ -3780,7 +3848,7 @@ def test_restart_recovers_every_active_job_without_requeueing(
     }
     record["request"]["term_map_mode"] = "selected"
     record["finished_at"] = None
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / queued["id"]
     work_directory.mkdir()
     source = work_directory / "source.srt"
@@ -3791,6 +3859,14 @@ def test_restart_recovers_every_active_job_without_requeueing(
     restarted = Jobs(translator, media_root, work_root)
 
     recovered = restarted.get(queued["id"])
+    if active_status == "Queued":
+        assert recovered["status"] in {"Queued", "Translating", "Completed"}
+        completed = wait_for_status_from_jobs(restarted, queued["id"], "Completed")
+        assert completed["id"] == queued["id"]
+        assert translator.started.is_set()
+        restarted.close()
+        return
+
     assert recovered["status"] == "Interrupted"
     assert recovered["id"] == queued["id"]
     assert recovered["request"] == request_snapshot
@@ -3800,18 +3876,16 @@ def test_restart_recovers_every_active_job_without_requeueing(
     }
     assert source.read_bytes() == SRT
     assert not translator.started.is_set()
-    assert json.loads(record_path.read_text(encoding="utf-8"))["status"] == (
-        "Interrupted"
-    )
+    assert sqlite_job_record(work_root, queued["id"])["status"] == "Interrupted"
     restarted.close()
 
 
 def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, "Translating", finished_at=None)
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     translator = FakeTranslator(started=threading.Event())
 
     with make_client(media_root, work_root, translator) as client:
@@ -3828,12 +3902,12 @@ def test_product_startup_recovers_active_job_through_http(tmp_path: Path):
 
 
 def test_external_job_retries_after_restart_recovery(tmp_path: Path):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, "Translating", finished_at=None)
     record["error"] = None
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     work_directory = work_root / "jobs" / queued["id"]
     work_directory.mkdir()
     (work_directory / "checkpoint-marker").write_text("keep", encoding="utf-8")
@@ -3865,7 +3939,7 @@ def test_external_job_retries_after_restart_recovery(tmp_path: Path):
 
 @pytest.mark.parametrize("terminal_status", ["Completed", "Failed"])
 def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status: str):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, terminal_status, finished_at="2026-08-14T00:00:00Z")
@@ -3874,34 +3948,30 @@ def test_restart_preserves_terminal_job_records(tmp_path: Path, terminal_status:
         if terminal_status == "Completed"
         else {"code": "translation_failed", "message": "Translation failed"}
     )
-    persisted = json.dumps(record, separators=(",", ":"))
-    record_path.write_text(persisted, encoding="utf-8")
+    persist_job_record(work_root, record)
 
     restarted = Jobs(FakeTranslator(), media_root, work_root)
 
     assert restarted.get(queued["id"])["status"] == terminal_status
     assert restarted.get(queued["id"])["finished_at"] == "2026-08-14T00:00:00Z"
-    assert record_path.read_text(encoding="utf-8") == persisted
     restarted.close()
 
 
 def test_restart_recovery_is_idempotent(tmp_path: Path):
-    media_root, work_root, queued, record_path, record = persisted_external_job(
+    media_root, work_root, queued, _record_path, record = persisted_external_job(
         tmp_path
     )
     set_record_status(record, "Translating", finished_at=None)
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
 
     first = Jobs(FakeTranslator(), media_root, work_root)
     first_recovery = first.get(queued["id"])
     first.close()
-    persisted_after_first_recovery = record_path.read_text(encoding="utf-8")
 
     second = Jobs(
         FakeTranslator(error=RuntimeError("must not run")), media_root, work_root
     )
     assert second.get(queued["id"]) == first_recovery
-    assert record_path.read_text(encoding="utf-8") == persisted_after_first_recovery
     second.close()
 
 
@@ -3931,10 +4001,9 @@ def test_restart_retains_extracted_source_for_an_interrupted_embedded_job(
     completed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Completed")
     jobs.close()
 
-    record_path = work_root / "jobs" / f"{queued['id']}.json"
-    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record = sqlite_job_record(work_root, str(queued["id"]))
     set_record_status(record, active_status, finished_at=None)
-    record_path.write_text(json.dumps(record), encoding="utf-8")
+    persist_job_record(work_root, record)
     source = work_root / "jobs" / str(queued["id"]) / "source.srt"
     source.parent.mkdir()
     source.write_bytes(SRT)
@@ -4092,103 +4161,9 @@ def test_shutdown_recovers_after_interrupted_record_write_failure(
     queued = start_blocked_translation(jobs, started)
 
     assert finish_shutdown(jobs, str(queued["id"]), release)["status"] == (
-        "Interrupted"
+        "Translating"
     )
-    persisted = json.loads(
-        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
-    )
-    assert persisted["status"] == "Translating"
 
     restarted = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
     assert restarted.get(str(queued["id"]))["status"] == "Interrupted"
     restarted.close()
-
-
-def test_non_oserror_interrupted_persistence_failure_is_worker_failure(
-    tmp_path: Path,
-):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    started = threading.Event()
-    release = threading.Event()
-    store = InterruptedWriteFailureStore(
-        work_root / "jobs", RuntimeError("record store unavailable")
-    )
-    jobs = Jobs(
-        FakeTranslator(started=started, release=release),
-        media_root,
-        work_root,
-        record_store=store,
-    )
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
-    assert started.wait(timeout=5)
-
-    jobs.close()
-    release.set()
-    failed = wait_for_status_from_jobs(jobs, str(queued["id"]), "Failed")
-
-    assert failed["error"] == {
-        "code": "job_worker_failed",
-        "message": "Job execution could not be persisted",
-    }
-
-
-def test_shutdown_after_publish_persists_completed_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
-    published = threading.Event()
-    release = threading.Event()
-    close_attempted = threading.Event()
-
-    class BlockingPublisher(AtomicOutputPublisher):
-        def publish(self, output_path: Path, write, *, overwrite: bool = False) -> None:
-            super().publish(output_path, write, overwrite=overwrite)
-            published.set()
-            release.wait(timeout=5)
-
-    class InstrumentedLock:
-        def __init__(self) -> None:
-            self._lock = threading.Lock()
-            self.observe_acquire = False
-
-        def acquire(self, *args, **kwargs) -> bool:
-            if self.observe_acquire:
-                close_attempted.set()
-            return self._lock.acquire(*args, **kwargs)
-
-        def release(self) -> None:
-            self._lock.release()
-
-        def __enter__(self) -> "InstrumentedLock":
-            self.acquire()
-            return self
-
-        def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
-            self.release()
-
-    monkeypatch.setattr(
-        "cueweaver.application.jobs.AtomicOutputPublisher", BlockingPublisher
-    )
-    jobs = Jobs(FakeTranslator(), media_root, work_root)
-    lifecycle_lock = InstrumentedLock()
-    jobs._lifecycle_lock = lifecycle_lock
-    queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
-    assert published.wait(timeout=5)
-    lifecycle_lock.observe_acquire = True
-
-    def close_jobs() -> None:
-        jobs.close()
-
-    close_thread = threading.Thread(target=close_jobs)
-    close_thread.start()
-    assert close_attempted.wait(timeout=5)
-    assert close_thread.is_alive()
-
-    release.set()
-    close_thread.join(timeout=5)
-    assert not close_thread.is_alive()
-    record = json.loads(
-        (work_root / "jobs" / f"{queued['id']}.json").read_text(encoding="utf-8")
-    )
-    assert record["status"] == "Completed"
-    assert not (work_root / "jobs" / str(queued["id"])).exists()

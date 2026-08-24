@@ -42,6 +42,10 @@ class ApplicationFixture:
         self.discover_request: DiscoverRequest | None = None
         self.discovery = self
         self.browsing = self
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def discover(self, request: DiscoverRequest) -> DiscoverResult:
         self.discover_request = request
@@ -70,6 +74,15 @@ class ApplicationFixture:
             request.path,
             [BrowseEntry("Movie.mkv", Path("Movie.mkv"), "media", "Movie", 2024)],
         )
+
+
+def test_http_shutdown_closes_the_application():
+    application = ApplicationFixture()
+
+    with TestClient(create_app(application)):
+        assert not application.closed
+
+    assert application.closed
 
 
 class JobsApplicationFixture(ApplicationFixture):

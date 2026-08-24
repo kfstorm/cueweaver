@@ -8,10 +8,12 @@ from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
 from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
-from ..work import WorkRoot
+from ..work import WorkRoot, WorkRootLease
 from .browsing import MediaBrowser
+from .database import SqliteDatabase
 from .directory_term_maps import DirectoryTermMaps
 from .discovery import Discovery
+from .errors import ServiceError
 from .extraction import Extraction
 from .jobs import Jobs
 from .term_maps import TermMaps
@@ -36,6 +38,21 @@ class CueWeaverApplication:
             PySubtransTranslator() if translator is None else translator
         )
         configured_work_root = WorkRoot(work_root or Path.cwd())
+        database_path = configured_work_root.path / "cueweaver.sqlite3"
+        database = SqliteDatabase(database_path)
+        lease = WorkRootLease(configured_work_root.path / ".cueweaver.lease")
+        try:
+            lease.acquire()
+        except ValueError as error:
+            raise ServiceError(
+                "work_root_in_use", "Another CueWeaver process owns this Work root"
+            ) from error
+        except OSError as error:
+            raise ServiceError(
+                "invalid_work_directory", "Work root lease cannot be created"
+            ) from error
+        self._lease = lease
+        self._database = database
         storage_lock = DurableFileLock(
             configured_work_root.term_maps_directory / ".lock"
         )
@@ -48,21 +65,36 @@ class CueWeaverApplication:
             lock=storage_lock,
         )
         directory_term_map_store.set_recovery(term_map_store.recover_pending_deletions)
-        term_map_store.recover_pending_deletions()
-        self.term_maps = TermMaps(term_map_store)
-        if media_root is not None:
-            self.directory_term_maps = DirectoryTermMaps(
-                directory_term_map_store, self.term_maps, media_root
-            )
-        if work_root is not None and media_root is not None:
-            self.jobs = Jobs(
-                configured_translator,
-                media_root,
-                work_root,
-                self.term_maps,
-                self.extraction,
-                self.directory_term_maps,
-            )
+        try:
+            term_map_store.recover_pending_deletions()
+            self.term_maps = TermMaps(term_map_store)
+            if media_root is not None:
+                self.directory_term_maps = DirectoryTermMaps(
+                    directory_term_map_store, self.term_maps, media_root
+                )
+            if work_root is not None and media_root is not None:
+                self.jobs = Jobs(
+                    configured_translator,
+                    media_root,
+                    work_root,
+                    self.term_maps,
+                    self.extraction,
+                    self.directory_term_maps,
+                    database=database,
+                )
+        except Exception:
+            self._lease.release()
+            raise
+
+    def close(self) -> None:
+        """Stop application workers before releasing the Work-root lease."""
+        try:
+            jobs = getattr(self, "jobs", None)
+            if jobs is not None:
+                jobs.close()
+                jobs.wait_closed()
+        finally:
+            self._lease.release()
 
 
 __all__ = ["CueWeaverApplication"]
