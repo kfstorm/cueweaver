@@ -31,7 +31,7 @@ class JobRecordStore(Protocol):
 
     def load(self) -> list[JobRecord]: ...
 
-    def write(self, job_id: str, record: JobRecord) -> None: ...
+    def write(self, record: JobRecord) -> None: ...
 
     def remove(self, job_id: str) -> None: ...
 
@@ -56,19 +56,8 @@ class SqliteJobRecordStore:
                 "database_unavailable", "Job records cannot be loaded"
             ) from error
 
-    def write(self, job_id: str, record: JobRecord) -> None:
-        _require_valid_job_id(job_id)
-        prepared = self._prepare_record(record)
-        if prepared.get("id") != job_id:
-            raise ServiceError("invalid_job_record", "Job ID does not match the record")
-        try:
-            with self._database.session() as session:
-                _upsert_row(session, prepared)
-                session.commit()
-        except (sqlite3.Error, SQLAlchemyError) as error:
-            raise ServiceError(
-                "database_unavailable", "Job record could not be persisted"
-            ) from error
+    def write(self, record: JobRecord) -> None:
+        self._upsert(record)
 
     def remove(self, job_id: str) -> None:
         _require_valid_job_id(job_id)
@@ -81,6 +70,17 @@ class SqliteJobRecordStore:
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
                 "database_unavailable", "Job record could not be deleted"
+            ) from error
+
+    def _upsert(self, record: JobRecord) -> None:
+        prepared = self._prepare_record(record)
+        try:
+            with self._database.session() as session:
+                _upsert_row(session, prepared)
+                session.commit()
+        except (sqlite3.Error, SQLAlchemyError) as error:
+            raise ServiceError(
+                "database_unavailable", "Job record could not be persisted"
             ) from error
 
     @staticmethod
@@ -98,6 +98,7 @@ class SqliteJobRecordStore:
             raise ServiceError("invalid_job_id", "Job ID is invalid")
         if not valid_record(prepared, strict=True):
             raise ServiceError("invalid_job_record", "Job record is invalid")
+        _require_valid_job_id(job_id)
         return prepared
 
 

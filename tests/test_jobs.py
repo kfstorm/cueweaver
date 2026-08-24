@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from cueweaver.application.jobs import (
     CreateJobRequest,
     Jobs,
     SqliteJobRecordStore,
+    copy_job_record,
 )
 from cueweaver.application.term_maps import TermMapDetail
 from cueweaver.product import create_product_app
@@ -111,9 +113,11 @@ class FalsyRecordStore:
         self.calls.append("load")
         return list(self.records.values())
 
-    def write(self, job_id: str, record: dict[str, object]) -> None:
+    def write(self, record: dict[str, object]) -> None:
         self.calls.append("write")
-        self.records[job_id] = json.loads(json.dumps(record))
+        job_id = record["id"]
+        assert isinstance(job_id, str)
+        self.records[job_id] = deepcopy(record)
 
     def remove(self, job_id: str) -> None:
         self.calls.append("remove")
@@ -166,13 +170,40 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
     }
 
 
+def test_copy_job_record_isolates_nested_values():
+    source = {
+        "request": {"term_map": {"content": {"source": "target"}}},
+        "status_history": [{"status": "Queued"}],
+    }
+
+    copied = copy_job_record(source)
+
+    assert copied == source
+    assert isinstance(copied, dict)
+    copied_request = copied["request"]
+    copied_history = copied["status_history"]
+    assert isinstance(copied_request, dict)
+    assert isinstance(copied_history, list)
+    copied_term_map = copied_request["term_map"]
+    assert isinstance(copied_term_map, dict)
+    copied_content = copied_term_map["content"]
+    assert isinstance(copied_content, dict)
+    copied_content["source"] = "changed"
+    copied_history.append({"status": "Completed"})
+
+    assert source == {
+        "request": {"term_map": {"content": {"source": "target"}}},
+        "status_history": [{"status": "Queued"}],
+    }
+
+
 def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     tmp_path: Path,
 ):
     record = persisted_job_record("sqlite-job")
 
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("sqlite-job", record)
+    store.write(record)
 
     assert (tmp_path / "cueweaver.sqlite3").is_file()
     loaded = store.load()
@@ -198,7 +229,7 @@ def test_sqlite_operation_errors_keep_their_operation_context(
     tmp_path: Path, operation: str, message: str
 ):
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("operation-error", persisted_job_record("operation-error"))
+    store.write(persisted_job_record("operation-error"))
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute("DROP TABLE jobs")
 
@@ -206,7 +237,7 @@ def test_sqlite_operation_errors_keep_their_operation_context(
         if operation == "load":
             store.load()
         elif operation == "write":
-            store.write("operation-error", persisted_job_record("operation-error"))
+            store.write(persisted_job_record("operation-error"))
         else:
             store.remove("operation-error")
 
@@ -856,11 +887,7 @@ def sqlite_job_record(work_root: Path, job_id: str) -> dict[str, object]:
 
 
 def persist_job_record(work_root: Path, record: dict[str, object]) -> None:
-    job_id = record.get("id")
-    assert isinstance(job_id, str)
-    SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3")).write(
-        job_id, record
-    )
+    SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3")).write(record)
 
 
 def wait_for_status(
@@ -1136,7 +1163,7 @@ def test_failed_external_job_retries_in_place_and_reuses_work_directory(
     work_directory = work_root / "jobs" / str(queued["id"])
     checkpoint_marker = work_directory / "checkpoint-marker"
     checkpoint_marker.write_text("keep", encoding="utf-8")
-    original_request = json.loads(json.dumps(failed["request"]))
+    original_request = deepcopy(failed["request"])
 
     translator.error = None
     retried = jobs.retry(str(queued["id"]))
