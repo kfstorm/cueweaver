@@ -17,11 +17,8 @@ from ..database import (
 )
 from ..errors import ServiceError
 from .model import (
-    CURRENT_JOB_SCHEMA_VERSION,
-    TERMINAL_JOB_STATUSES,
     JobRecord,
     copy_job_record,
-    migrate_record,
     valid_job_id,
     valid_record,
 )
@@ -84,18 +81,11 @@ class SqliteJobRecordStore:
 
     @staticmethod
     def _prepare_record(record: JobRecord) -> JobRecord:
-        migrated, _was_migrated, future = migrate_record(record)
-        if future:
-            raise ServiceError(
-                "unsupported_job_record", "Job record schema is unsupported"
-            )
-        prepared = copy_job_record(migrated or record)
-        prepared.setdefault("schema_version", CURRENT_JOB_SCHEMA_VERSION)
-        _ensure_history(prepared)
+        prepared = copy_job_record(record)
         job_id = prepared.get("id")
         if not isinstance(job_id, str):
             raise ServiceError("invalid_job_id", "Job ID is invalid")
-        if not valid_record(prepared, strict=True):
+        if not valid_record(prepared):
             raise ServiceError("invalid_job_record", "Job record is invalid")
         _require_valid_job_id(job_id)
         return prepared
@@ -118,13 +108,10 @@ def _upsert_row(session: Session, record: JobRecord) -> None:
         row = JobRow(id=str(record["id"]))
         session.add(row)
 
-    schema_version = record["schema_version"]
     attempt = record["attempt"]
     queue_sequence = record["queue_sequence"]
-    assert isinstance(schema_version, int)
     assert isinstance(attempt, int)
     assert isinstance(queue_sequence, int)
-    row.schema_version = schema_version
     row.status = str(record["status"])
     row.attempt = attempt
     row.created_at = str(record["created_at"])
@@ -212,7 +199,6 @@ def _record_from_row(session: Session, row: JobRow) -> JobRecord:
 
     record: JobRecord = {
         "id": row.id,
-        "schema_version": row.schema_version,
         "status": row.status,
         "attempt": row.attempt,
         "created_at": row.created_at,
@@ -246,13 +232,11 @@ def _record_from_row(session: Session, row: JobRow) -> JobRecord:
                 "content_digest": row.extraction_content_digest,
             }
         )
-    history = record.get("status_history")
-    migrated, _legacy, future = migrate_record(record)
-    if not isinstance(history, list) or not history or migrated is None or future:
+    if not valid_record(record):
         raise ServiceError(
             "job_store_corrupt", "Job database contains an invalid record"
         )
-    return migrated
+    return record
 
 
 def _set_error_fields(row: JobRow, error: dict[str, object]) -> None:
@@ -314,32 +298,6 @@ def _error_from_row(row: JobRow) -> dict[str, object] | None:
         }
     )
     return error
-
-
-def _ensure_history(record: JobRecord) -> None:
-    if isinstance(record.get("status_history"), list):
-        return
-    status = record.get("status")
-    attempt = record.get("attempt")
-    created_at = record.get("created_at")
-    if (
-        not isinstance(status, str)
-        or not isinstance(attempt, int)
-        or not isinstance(created_at, str)
-    ):
-        return
-    finished_at = record.get("finished_at")
-    if status in TERMINAL_JOB_STATUSES:
-        finished_at = finished_at if isinstance(finished_at, str) else created_at
-        record["finished_at"] = finished_at
-    record["status_history"] = [
-        {
-            "status": status,
-            "attempt": attempt,
-            "started_at": created_at,
-            "finished_at": finished_at,
-        }
-    ]
 
 
 def _optional_str(value: Any) -> str | None:

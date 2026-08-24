@@ -8,7 +8,6 @@ from binascii import Error as Base64Error
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Literal
 
@@ -26,7 +25,6 @@ JobStatus = Literal[
     "Cancelled",
 ]
 JobRecord = dict[str, object]
-CURRENT_JOB_SCHEMA_VERSION = 1
 STATUS_HISTORY_FIELDS = frozenset({"status", "attempt", "started_at", "finished_at"})
 
 JOB_STATUSES = frozenset(
@@ -189,9 +187,8 @@ def valid_job_id(value: object) -> bool:
     return is_safe_job_identifier(value)
 
 
-def _valid_strict_record_metadata(record: JobRecord) -> bool:
+def _valid_record_metadata(record: JobRecord) -> bool:
     required_fields = {
-        "schema_version",
         "id",
         "status",
         "attempt",
@@ -201,20 +198,17 @@ def _valid_strict_record_metadata(record: JobRecord) -> bool:
         "request",
         "error",
         "queue_sequence",
+        "status_history",
     }
     if not required_fields <= record.keys():
         return False
-    schema_version = record["schema_version"]
     created_at = record["created_at"]
     started_at = record["started_at"]
     finished_at = record["finished_at"]
     error = record["error"]
     queue_sequence = record["queue_sequence"]
     return (
-        isinstance(schema_version, int)
-        and not isinstance(schema_version, bool)
-        and schema_version >= CURRENT_JOB_SCHEMA_VERSION
-        and isinstance(created_at, str)
+        isinstance(created_at, str)
         and bool(created_at)
         and all(
             value is None or (isinstance(value, str) and bool(value))
@@ -236,8 +230,8 @@ def _valid_strict_record_metadata(record: JobRecord) -> bool:
     )
 
 
-def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
-    if strict and not _valid_strict_record_metadata(record):
+def valid_record(record: JobRecord) -> bool:
+    if not _valid_record_metadata(record):
         return False
     job_id = record.get("id")
     status = record.get("status")
@@ -258,44 +252,8 @@ def valid_record(record: JobRecord, *, strict: bool = False) -> bool:
         return False
     if not isinstance(request, dict) or not valid_request(request):
         return False
-    for field in (
-        "dynamic_terminology_enabled",
-        "subtitle_terminology_filter_enabled",
-    ):
-        if field in request and not isinstance(request[field], bool):
-            return False
-    term_map = request.get("term_map")
-    return (
-        (
-            "status_history" not in record
-            or valid_status_history(
-                record["status_history"], status=status, attempt=attempt
-            )
-        )
-        and (
-            "output_suffix" not in request
-            or (
-                isinstance(request["output_suffix"], str)
-                and bool(request["output_suffix"])
-            )
-        )
-        and (
-            "output_conflict_policy" not in request
-            or (
-                isinstance(request["output_conflict_policy"], str)
-                and request["output_conflict_policy"]
-                in {"append-number", "overwrite", "skip"}
-            )
-        )
-        and all(
-            field not in request or isinstance(request[field], bool)
-            for field in (
-                "dynamic_terminology_enabled",
-                "subtitle_terminology_filter_enabled",
-            )
-        )
-        and _valid_term_map_snapshot(term_map)
-        and _valid_term_map_selection(request, term_map)
+    return valid_status_history(
+        record["status_history"], status=status, attempt=attempt
     )
 
 
@@ -319,9 +277,7 @@ def _valid_term_map_snapshot(term_map: object) -> bool:
 
 
 def _valid_term_map_selection(request: dict[str, object], term_map: object) -> bool:
-    mode = request.get("term_map_mode")
-    if mode is None:
-        return True
+    mode = request["term_map_mode"]
     if mode == "none":
         return term_map is None
     if mode == "selected":
@@ -333,12 +289,40 @@ def valid_request(request: dict[str, object]) -> bool:
     required_request_fields = {
         "media_path",
         "target_language_code",
+        "term_map_mode",
+        "term_map",
+        "dynamic_terminology_enabled",
+        "subtitle_terminology_filter_enabled",
+        "output_suffix",
+        "output_conflict_policy",
         "output_path",
         "source_format",
     }
-    if not required_request_fields <= request.keys() or not all(
-        isinstance(request[field], str) and request[field]
-        for field in required_request_fields
+    string_fields = required_request_fields - {
+        "term_map",
+        "dynamic_terminology_enabled",
+        "subtitle_terminology_filter_enabled",
+    }
+    if (
+        not required_request_fields <= request.keys()
+        or not all(
+            isinstance(request[field], str) and request[field]
+            for field in string_fields
+        )
+        or not all(
+            isinstance(request[field], bool)
+            for field in (
+                "dynamic_terminology_enabled",
+                "subtitle_terminology_filter_enabled",
+            )
+        )
+    ):
+        return False
+    if request["output_conflict_policy"] not in {"append-number", "overwrite", "skip"}:
+        return False
+    term_map = request["term_map"]
+    if not _valid_term_map_snapshot(term_map) or not _valid_term_map_selection(
+        request, term_map
     ):
         return False
     stream_index = request.get("stream_index")
@@ -433,62 +417,12 @@ def transition_status(
     record["status"] = status
 
 
-def normalize_record(record: JobRecord) -> None:
-    record.setdefault("created_at", datetime.now(timezone.utc).isoformat())
-    record.setdefault("started_at", None)
-    record.setdefault("finished_at", None)
-    record.setdefault("error", None)
-    request = record["request"]
-    assert isinstance(request, dict)
-    request.setdefault("term_map", None)
-    request.setdefault(
-        "term_map_mode", "selected" if request["term_map"] is not None else "none"
-    )
-    request.setdefault("dynamic_terminology_enabled", True)
-    request.setdefault("subtitle_terminology_filter_enabled", True)
-    request.setdefault("output_suffix", str(request["target_language_code"]))
-    request.setdefault("output_conflict_policy", "append-number")
-    attempt = record.get("attempt")
-    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
-        record["attempt"] = 1
-    queue_sequence = record.get("queue_sequence")
-    if not isinstance(queue_sequence, int) or queue_sequence < 1:
-        record["queue_sequence"] = 0
-
-
-def migrate_record(record: JobRecord) -> tuple[JobRecord | None, bool, bool]:
-    """Return the v1 record, whether it was migrated, and whether it is future data."""
-    if "schema_version" not in record:
-        legacy = True
-    else:
-        schema_version = record["schema_version"]
-        if (
-            not isinstance(schema_version, int)
-            or isinstance(schema_version, bool)
-            or schema_version < CURRENT_JOB_SCHEMA_VERSION
-        ):
-            return None, False, False
-        if schema_version > CURRENT_JOB_SCHEMA_VERSION:
-            if not valid_record(record, strict=True):
-                return None, False, False
-            return None, False, True
-        legacy = False
-
-    if not valid_record(record, strict=not legacy):
-        return None, False, False
-    migrated = copy_job_record(record)
-    normalize_record(migrated)
-    migrated["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
-    return migrated, legacy, False
-
-
 def queue_sequence(record: Mapping[str, object]) -> int:
     sequence = record.get("queue_sequence")
     return sequence if isinstance(sequence, int) else 0
 
 
 __all__ = [
-    "CURRENT_JOB_SCHEMA_VERSION",
     "JOB_STATUSES",
     "TERMINAL_JOB_STATUSES",
     "JobDetail",
@@ -499,8 +433,6 @@ __all__ = [
     "decode_history_cursor",
     "encode_history_cursor",
     "history_cursor_condition",
-    "migrate_record",
-    "normalize_record",
     "project_job_detail",
     "project_job_summary",
     "queue_sequence",

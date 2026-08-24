@@ -35,7 +35,6 @@ from .execution import (
     JobExecutionProgressPersistenceError,
 )
 from .model import (
-    CURRENT_JOB_SCHEMA_VERSION,
     JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
     JobDetail,
@@ -46,7 +45,6 @@ from .model import (
     decode_history_cursor,
     encode_history_cursor,
     history_cursor_condition,
-    normalize_record,
     project_job_summary,
     queue_sequence,
     transition_status,
@@ -189,7 +187,6 @@ class Jobs:
                 job_request["stream_index"] = request.stream_index
             record: dict[str, object] = {
                 "id": job_id,
-                "schema_version": CURRENT_JOB_SCHEMA_VERSION,
                 "status": "Queued",
                 "attempt": 1,
                 "created_at": now,
@@ -855,7 +852,7 @@ class Jobs:
 
     def _load_records(self) -> None:
         for loaded_record in self._record_store.load():
-            if not valid_record(loaded_record, strict=True):
+            if not valid_record(loaded_record):
                 continue
             job_id = loaded_record.get("id")
             status = loaded_record.get("status")
@@ -866,11 +863,7 @@ class Jobs:
                 record = _interrupted_record(record)
                 self._write_record(job_id, record)
             elif status == "Queued":
-                normalize_record(loaded_record)
-                record = loaded_record
                 self._recovered_queue_ids.append(job_id)
-            else:
-                normalize_record(record)
             self._next_queue_sequence = max(
                 self._next_queue_sequence, queue_sequence(record)
             )
@@ -1174,7 +1167,6 @@ class Jobs:
 
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
         persisted = copy_job_record(record)
-        persisted["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
         self._record_store.write(persisted)
         self._records[job_id] = persisted
 
@@ -1371,7 +1363,6 @@ def _validate_output_suffix(value: str) -> None:
 
 
 __all__ = [
-    "CURRENT_JOB_SCHEMA_VERSION",
     "JOB_STATUSES",
     "TERMINAL_JOB_STATUSES",
     "CreateJobRequest",
