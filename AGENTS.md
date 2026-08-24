@@ -26,6 +26,7 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 - Run backend tests with `scripts/test-backend.sh`, frontend tests with `scripts/test-frontend.sh`, and Docker E2E with `scripts/test-e2e.sh`.
 - Run static checks and the frontend build with `scripts/lint-backend.sh --check` and `scripts/lint-frontend.sh --check`; the `--check` flag prevents formatting changes.
 - Run focused tests with `uv run pytest -q tests/test_product_app.py` or `pnpm --dir web exec vitest run tests/app.test.tsx`.
+- Test localization behavior and invariants, not translation wording. Do not assert exact translated strings unless the wording is a product contract; semantically equivalent rewrites should normally not require test changes. Prefer checking key completeness and non-empty values, placeholder preservation, pluralization behavior, structured-value parseability, and forbidden untranslated product-domain terms.
 - Build the production image with `docker build -t cueweaver .`; production runtime and mount requirements are documented in `README.md`.
 - Frontend scripts invoke the `pnpm` executable from `PATH`. CI provisions it with `pnpm/action-setup`; the Docker Web builder provisions it with Corepack.
 

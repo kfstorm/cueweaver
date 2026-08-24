@@ -144,21 +144,23 @@ describe("interface locale selection", () => {
       "Movie.mkv",
     );
     expect(translate("jobs.matching", { count: 3 })).toContain("3");
-    expect(translate("translate.targetLanguageCode")).toBe("目标语言代码");
+    expect(translate("translate.targetLanguageCode")).toBe(
+      getLocaleTable("zh-CN")["translate.targetLanguageCode"],
+    );
   });
 
   it("formats a cached localized error with the active locale", () => {
     const error = localizedError("errors.mediaDirectory");
     setActiveLocale("en");
-    expect(formatError(error)).toBe("This Media directory could not be loaded.");
+    expect(formatError(error)).toBe(getLocaleTable("en")["errors.mediaDirectory"]);
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此媒体目录。");
+    expect(formatError(error)).toBe(getLocaleTable("zh-CN")["errors.mediaDirectory"]);
   });
 
   it("keeps server error details separate from the localized user message", () => {
     const error = localizedError("errors.mediaDirectory", "backend failure");
     setActiveLocale("zh-CN");
-    expect(formatError(error)).toBe("无法加载此媒体目录。");
+    expect(formatError(error)).toBe(getLocaleTable("zh-CN")["errors.mediaDirectory"]);
     expect(getErrorDetail(error)).toBe("backend failure");
   });
 
@@ -169,8 +171,15 @@ describe("interface locale selection", () => {
   });
 
   it("selects plural forms with i18next", () => {
-    expect(translate("jobs.job", { count: 1 }, "fr")).toBe("Tâche");
-    expect(translate("jobs.job", { count: 2 }, "fr")).toBe("Tâches");
-    expect(translate("jobs.job", { count: 1 }, "ja")).toBe("ジョブ");
+    const french = getLocaleTable("fr");
+    expect(translate("jobs.job", { count: 1 }, "fr")).toBe(french["jobs.job_one"]);
+    expect(translate("jobs.job", { count: 2 }, "fr")).toBe(french["jobs.job_other"]);
+    expect(french["jobs.job_one"]).not.toBe(french["jobs.job_other"]);
+
+    const japaneseOne = translate("jobs.job", { count: 1 }, "ja");
+    const japaneseOther = translate("jobs.job", { count: 2 }, "ja");
+    expect(japaneseOne).toBeTruthy();
+    expect(japaneseOther).toBeTruthy();
+    expect(japaneseOne).toBe(japaneseOther);
   });
 });
