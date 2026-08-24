@@ -2,6 +2,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from cueweaver.application.database import SqliteDatabase
 from cueweaver.application.jobs.store import SqliteJobRecordStore
 
@@ -104,3 +106,46 @@ def test_sqlite_database_supports_question_marks_in_the_work_root_path(
 
     assert database_path.is_file()
     assert not (tmp_path / "work").exists()
+
+
+def test_sqlite_schema_rejects_partial_extraction_state(tmp_path: Path):
+    database_path = tmp_path / "cueweaver.sqlite3"
+    SqliteDatabase(database_path).initialize()
+
+    with (
+        sqlite3.connect(database_path) as connection,
+        pytest.raises(sqlite3.IntegrityError),
+    ):
+        connection.execute(
+            """
+                INSERT INTO jobs (
+                    id, schema_version, status, attempt, created_at, queue_sequence,
+                    media_path, stream_index, target_language_code, term_map_mode,
+                    output_path, source_format, dynamic_terminology_enabled,
+                    subtitle_terminology_filter_enabled, output_suffix,
+                    output_conflict_policy, extraction_status, extraction_format,
+                    extraction_content_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            (
+                "partial-extraction",
+                1,
+                "Queued",
+                1,
+                "2026-08-24T00:00:00Z",
+                0,
+                "Movie.mkv",
+                0,
+                "zh-Hans",
+                "none",
+                "Movie.zh-Hans.srt",
+                "srt",
+                True,
+                True,
+                "zh-Hans",
+                "skip",
+                "Completed",
+                "srt",
+                "0" * 64,
+            ),
+        )

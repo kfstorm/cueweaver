@@ -17,6 +17,11 @@ _TERM_MAP_ENTRY_COLUMNS = """
             source_folded VARCHAR NOT NULL CHECK (length(source_folded) > 0),
             target VARCHAR NOT NULL CHECK (length(target) > 0),
 """
+_JOB_STATUS_VALUES = (
+    "'Queued', 'Extracting', 'Translating', 'Completed', "
+    "'Failed', 'Interrupted', 'Cancelled'"
+)
+_TERMINAL_JOB_STATUS_VALUES = "'Completed', 'Failed', 'Interrupted', 'Cancelled'"
 
 
 def upgrade() -> None:
@@ -29,13 +34,12 @@ def upgrade() -> None:
     op.execute("DROP TABLE IF EXISTS app_metadata")
 
     op.execute(
-        """
+        f"""
         CREATE TABLE jobs (
             id VARCHAR NOT NULL PRIMARY KEY,
             schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
             status VARCHAR NOT NULL CHECK (
-                status IN ('Queued', 'Extracting', 'Translating', 'Completed',
-                           'Failed', 'Interrupted', 'Cancelled')
+                status IN ({_JOB_STATUS_VALUES})
             ),
             attempt INTEGER NOT NULL CHECK (attempt >= 1),
             created_at VARCHAR NOT NULL,
@@ -110,7 +114,7 @@ def upgrade() -> None:
                 )
             ),
             CHECK (
-                (status IN ('Completed', 'Failed', 'Interrupted', 'Cancelled'))
+                (status IN ({_TERMINAL_JOB_STATUS_VALUES}))
                 = (finished_at IS NOT NULL)
             ),
             CHECK (
@@ -125,6 +129,10 @@ def upgrade() -> None:
                 )
                 OR (
                     stream_index IS NOT NULL
+                    AND extraction_status IS NOT NULL
+                    AND extraction_path IS NOT NULL
+                    AND extraction_format IS NOT NULL
+                    AND extraction_content_digest IS NOT NULL
                     AND length(extraction_status) > 0
                     AND length(extraction_path) > 0
                     AND extraction_format IN ('srt', 'ass', 'vtt')
@@ -135,20 +143,19 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        """
+        f"""
         CREATE TABLE job_status_history (
             job_id VARCHAR NOT NULL,
             sequence INTEGER NOT NULL CHECK (sequence >= 0),
             status VARCHAR NOT NULL CHECK (
-                status IN ('Queued', 'Extracting', 'Translating', 'Completed',
-                           'Failed', 'Interrupted', 'Cancelled')
+                status IN ({_JOB_STATUS_VALUES})
             ),
             attempt INTEGER NOT NULL CHECK (attempt >= 1),
             started_at VARCHAR NOT NULL,
             finished_at VARCHAR,
             PRIMARY KEY (job_id, sequence),
             CHECK (
-                status NOT IN ('Completed', 'Failed', 'Interrupted', 'Cancelled')
+                status NOT IN ({_TERMINAL_JOB_STATUS_VALUES})
                 OR finished_at IS NOT NULL
             ),
             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
