@@ -6,6 +6,7 @@ import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -181,10 +182,7 @@ def history_cursor_condition(search: str, status: str) -> str:
 
 
 def copy_job_record(record: Mapping[str, object]) -> JobRecord:
-    copied = json.loads(json.dumps(record))
-    if not isinstance(copied, dict):
-        raise TypeError("Job record must be an object")
-    return copied
+    return deepcopy(dict(record))
 
 
 def valid_job_id(value: object) -> bool:
