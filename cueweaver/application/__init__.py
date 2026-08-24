@@ -6,11 +6,15 @@ from ..adapters.directory_term_maps import FileDirectoryTermMapStore
 from ..adapters.locking import DurableFileLock
 from ..adapters.media import FfmpegMediaAdapter
 from ..adapters.output import AtomicOutputPublisher
+from ..adapters.sqlite_term_maps import (
+    SqliteDirectoryTermMapStore,
+    SqliteTermMapStore,
+)
 from ..adapters.term_maps import FileTermMapStore
 from ..adapters.translation import PySubtransTranslator
 from ..work import WorkRoot, WorkRootLease
 from .browsing import MediaBrowser
-from .database import SqliteDatabase
+from .database import DatabaseOpenError, DatabasePathError, SqliteDatabase
 from .directory_term_maps import DirectoryTermMaps
 from .discovery import Discovery
 from .errors import ServiceError
@@ -56,17 +60,32 @@ class CueWeaverApplication:
         storage_lock = DurableFileLock(
             configured_work_root.term_maps_directory / ".lock"
         )
-        directory_term_map_store = FileDirectoryTermMapStore(
+        legacy_directory_term_map_store = FileDirectoryTermMapStore(
             configured_work_root, lock=storage_lock
         )
-        term_map_store = FileTermMapStore(
+        legacy_term_map_store = FileTermMapStore(
             configured_work_root,
-            directory_bindings=directory_term_map_store,
+            directory_bindings=legacy_directory_term_map_store,
             lock=storage_lock,
         )
-        directory_term_map_store.set_recovery(term_map_store.recover_pending_deletions)
+        legacy_directory_term_map_store.set_recovery(
+            legacy_term_map_store.recover_pending_deletions
+        )
         try:
-            term_map_store.recover_pending_deletions()
+            legacy_bindings = None
+            if (
+                configured_work_root.term_maps_directory.exists()
+                or configured_work_root.term_maps_directory.is_symlink()
+            ):
+                legacy_term_map_store.recover_pending_deletions()
+                legacy_bindings = legacy_directory_term_map_store
+            term_map_store = SqliteTermMapStore(database)
+            term_map_store.import_legacy(
+                configured_work_root.path,
+                legacy_term_map_store,
+                legacy_bindings,
+            )
+            directory_term_map_store = SqliteDirectoryTermMapStore(database)
             self.term_maps = TermMaps(term_map_store)
             if media_root is not None:
                 self.directory_term_maps = DirectoryTermMaps(
@@ -82,9 +101,23 @@ class CueWeaverApplication:
                     self.directory_term_maps,
                     database=database,
                 )
+        except DatabasePathError as error:
+            self._abort_startup()
+            raise ServiceError(
+                "invalid_work_directory", "Application database path cannot be created"
+            ) from error
+        except DatabaseOpenError as error:
+            self._abort_startup()
+            raise ServiceError(
+                "job_store_unavailable", "Application database cannot be opened"
+            ) from error
         except Exception:
-            self._lease.release()
+            self._abort_startup()
             raise
+
+    def _abort_startup(self) -> None:
+        self._database.close()
+        self._lease.release()
 
     def close(self) -> None:
         """Stop application workers before releasing the Work-root lease."""
@@ -94,7 +127,10 @@ class CueWeaverApplication:
                 jobs.close()
                 jobs.wait_closed()
         finally:
-            self._lease.release()
+            try:
+                self._database.close()
+            finally:
+                self._lease.release()
 
 
 __all__ = ["CueWeaverApplication"]

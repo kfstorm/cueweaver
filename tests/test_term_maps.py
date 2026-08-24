@@ -1,13 +1,10 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from test_term_map_helpers import make_client
-
-from cueweaver.adapters.directory_term_maps import FileDirectoryTermMapStore
-from cueweaver.adapters.term_maps import FileTermMapStore
-from cueweaver.application.errors import ServiceError
 
 
 def create_term_map(client: TestClient, name: str = "Characters") -> dict[str, object]:
@@ -183,48 +180,61 @@ def test_term_map_replacement_rejects_invalid_content_without_changing_old_conte
     assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
 
 
-@pytest.mark.parametrize("failure_kind", ["content", "index"])
-def test_term_map_replacement_failure_keeps_old_content(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_kind: str
-):
+def test_term_maps_are_persisted_in_sqlite_without_json_snapshots(tmp_path: Path):
     client = make_client(tmp_path)
     created = create_term_map(client)
-    original_write = FileTermMapStore._write_json
 
-    def fail_write(_store: object, path: Path, payload: object) -> None:
-        fails = (
-            path.name == "index.json"
-            if failure_kind == "index"
-            else path.name.startswith(f"{created['id']}.")
-        )
-        if fails:
-            raise ServiceError("term_map_write_failed", "replacement write failed")
-        original_write(path, payload)
+    with sqlite3.connect(tmp_path / "work" / "cueweaver.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT name, entry_count FROM term_maps WHERE id = ?",
+            (created["id"],),
+        ).fetchone() == ("Characters", 1)
+    assert not (tmp_path / "work" / "term-maps").exists()
 
-    monkeypatch.setattr(FileTermMapStore, "_write_json", fail_write)
 
-    response = client.put(
-        f"/api/term-maps/{created['id']}", json={"content": {"c": "d"}}
+def test_term_map_listing_preserves_creation_order(tmp_path: Path):
+    client = make_client(tmp_path)
+    for name in ("First", "Second", "Third"):
+        create_term_map(client, name)
+
+    assert [
+        item["name"] for item in client.get("/api/term-maps").json()["term_maps"]
+    ] == ["First", "Second", "Third"]
+
+
+def test_legacy_term_map_json_is_imported_and_retired(tmp_path: Path):
+    work_root = tmp_path / "work"
+    term_maps_root = work_root / "term-maps"
+    term_maps_root.mkdir(parents=True)
+    (tmp_path / "media" / "Series").mkdir(parents=True)
+    term_map_id = "legacy-map"
+    (term_maps_root / f"{term_map_id}.json").write_text(
+        '{"Captain":"队长"}', encoding="utf-8"
+    )
+    (term_maps_root / "index.json").write_text(
+        (
+            '[{"id":"legacy-map","name":"Legacy",'
+            '"entry_count":1,"updated_at":"2026-08-24T00:00:00Z",'
+            '"content_file":"legacy-map.json"}]'
+        ),
+        encoding="utf-8",
+    )
+    (term_maps_root / "directory-bindings.json").write_text(
+        '{"Series":"legacy-map"}', encoding="utf-8"
     )
 
-    assert response.json()["error_code"] == "term_map_write_failed"
-    assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
-
-
-def test_restart_removes_atomic_write_temp_files(tmp_path: Path):
     client = make_client(tmp_path)
-    created = create_term_map(client)
-    directory = tmp_path / "work" / "term-maps"
-    leftovers = [
-        directory / ".index.json.crash",
-        directory / f".{created['id']}.json.crash",
-    ]
-    for leftover in leftovers:
-        leftover.write_text("incomplete", encoding="utf-8")
 
-    restarted = make_client(tmp_path)
-    assert restarted.get("/api/term-maps").status_code == 200
-    assert all(not leftover.exists() for leftover in leftovers)
+    assert client.get("/api/term-maps/legacy-map").json()["content"] == {
+        "Captain": "队长"
+    }
+    assert (
+        client.get("/api/term-maps/directory", params={"path": "Series"}).json()[
+            "effective"
+        ]["id"]
+        == term_map_id
+    )
+    assert not any(term_maps_root.glob("*.json"))
 
 
 def test_unknown_term_map_api_path_remains_a_structured_not_found(tmp_path: Path):
@@ -269,132 +279,6 @@ def test_term_map_delete_requires_current_name_and_removes_resource(tmp_path: Pa
         "message": "Term map does not exist",
         "id": created["id"],
     }
-
-
-def test_term_map_delete_index_failure_keeps_old_content(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    client = make_client(tmp_path)
-    created = create_term_map(client)
-    original_write = FileTermMapStore._write_json
-
-    def fail_index(_store: object, path: Path, payload: object) -> None:
-        if path.name == "index.json":
-            raise ServiceError("term_map_write_failed", "index write failed")
-        original_write(path, payload)
-
-    monkeypatch.setattr(FileTermMapStore, "_write_json", fail_index)
-
-    response = client.request(
-        "DELETE", f"/api/term-maps/{created['id']}", json={"name": "Characters"}
-    )
-
-    assert response.json()["error_code"] == "term_map_write_failed"
-    assert client.get(f"/api/term-maps/{created['id']}").json()["content"] == {"a": "b"}
-
-
-def test_term_map_delete_rolls_back_when_index_commit_reports_failure_after_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    client = make_client(tmp_path)
-    (tmp_path / "media" / "Series").mkdir(parents=True)
-    created = create_term_map(client)
-    assert (
-        client.put(
-            "/api/term-maps/directory",
-            json={"path": "Series", "term_map_id": created["id"]},
-        ).status_code
-        == 200
-    )
-    original_write_index = FileTermMapStore._write_index
-    failed = False
-
-    def fail_after_index_write(store: object, records: list[object]) -> None:
-        nonlocal failed
-        original_write_index(store, records)  # type: ignore[arg-type]
-        if not failed:
-            failed = True
-            raise ServiceError("term_map_write_failed", "index write failed")
-
-    monkeypatch.setattr(FileTermMapStore, "_write_index", fail_after_index_write)
-
-    response = client.request(
-        "DELETE", f"/api/term-maps/{created['id']}", json={"name": created["name"]}
-    )
-
-    assert response.json()["error_code"] == "term_map_write_failed"
-    assert client.get(f"/api/term-maps/{created['id']}").status_code == 200
-    assert (
-        client.get("/api/term-maps/directory", params={"path": "Series"}).json()[
-            "local"
-        ]["id"]
-        == created["id"]
-    )
-
-
-@pytest.mark.parametrize("failure_point", ["journal", "bindings", "index"])
-def test_term_map_delete_recovers_after_interrupted_transaction(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
-):
-    client = make_client(tmp_path)
-    (tmp_path / "media" / "Series").mkdir()
-    created = create_term_map(client)
-    assert (
-        client.put(
-            "/api/term-maps/directory",
-            json={"path": "Series", "term_map_id": created["id"]},
-        ).status_code
-        == 200
-    )
-
-    if failure_point == "journal":
-
-        def fail_remove(store: object, term_map_id: str) -> dict[str, str]:
-            raise RuntimeError("crash after journal")
-
-        monkeypatch.setattr(
-            FileDirectoryTermMapStore, "remove_term_map_locked", fail_remove
-        )
-    elif failure_point == "bindings":
-        original_write = FileDirectoryTermMapStore._write
-        failed = False
-
-        def fail_bindings(store: object, bindings: dict[str, str]) -> None:
-            nonlocal failed
-            original_write(store, bindings)
-            if not failed:
-                failed = True
-                raise RuntimeError("crash after bindings")
-
-        monkeypatch.setattr(FileDirectoryTermMapStore, "_write", fail_bindings)
-    else:
-        original_write_index = FileTermMapStore._write_index
-        failed = False
-
-        def fail_index(store: object, records: list[object]) -> None:
-            nonlocal failed
-            original_write_index(store, records)
-            if not failed:
-                failed = True
-                raise RuntimeError("crash after index")
-
-        monkeypatch.setattr(FileTermMapStore, "_write_index", fail_index)
-
-    with pytest.raises(RuntimeError):
-        client.request(
-            "DELETE", f"/api/term-maps/{created['id']}", json={"name": created["name"]}
-        )
-
-    assert any((tmp_path / "work" / "term-maps").glob(".directory-delete-*.json"))
-    restarted = make_client(tmp_path)
-    assert (
-        restarted.get("/api/term-maps/directory", params={"path": "Series"}).json()[
-            "effective"
-        ]["id"]
-        == created["id"]
-    )
-    assert restarted.get(f"/api/term-maps/{created['id']}").status_code == 200
-    assert not any((tmp_path / "work" / "term-maps").glob(".directory-delete-*.json"))
 
 
 @pytest.mark.parametrize("first_operation", ["rename", "replace"])

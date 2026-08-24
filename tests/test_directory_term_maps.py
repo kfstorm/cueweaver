@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,10 @@ def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
         "source_directory": None,
     }
     assert directory_request(restarted, "GET", "Other").json()["effective"] is None
+    with sqlite3.connect(tmp_path / "work" / "cueweaver.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM directory_term_map_bindings"
+        ).fetchone() == (0,)
     restarted_again = make_client(tmp_path)
     assert restarted_again.get(f"/api/term-maps/{term_map['id']}").status_code == 400
     assert (
@@ -181,6 +186,17 @@ def test_directory_term_map_rejects_a_work_term_maps_symlink(tmp_path: Path):
     with pytest.raises(ServiceError, match="Term map storage cannot be opened"):
         make_client(tmp_path)
     assert not (outside / "directory-bindings.json").exists()
+
+
+def test_directory_term_map_rejects_a_dangling_work_term_maps_symlink(
+    tmp_path: Path,
+):
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    (work_root / "term-maps").symlink_to(tmp_path / "missing", target_is_directory=True)
+
+    with pytest.raises(ServiceError, match="Term map storage cannot be opened"):
+        make_client(tmp_path)
 
 
 def test_directory_term_map_get_uses_one_bindings_snapshot(tmp_path: Path):

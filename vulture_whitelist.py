@@ -44,3 +44,12 @@ CreateBatchItem.validate_subtitle_source
 expat.ParserCreate().StartDoctypeDeclHandler
 expat.ParserCreate().EntityDeclHandler
 expat.ParserCreate().ExternalEntityRefHandler
+
+# SQLAlchemy and Alembic consume these declarations through reflection.
+TermMapRow.name_folded
+name_folded
+revision
+down_revision
+branch_labels
+depends_on
+downgrade
