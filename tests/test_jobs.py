@@ -236,6 +236,27 @@ def test_sqlite_legacy_migration_is_idempotent_when_snapshot_retirement_is_defer
     assert not snapshot.exists()
 
 
+def test_sqlite_legacy_migration_runs_once_per_store_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    jobs_root = tmp_path / "jobs"
+    store = SqliteJobRecordStore(jobs_root, tmp_path / "cueweaver.sqlite3")
+    retire_calls = 0
+
+    def count_retire_calls() -> None:
+        nonlocal retire_calls
+        retire_calls += 1
+
+    monkeypatch.setattr(store, "_retire_legacy_snapshots", count_retire_calls)
+
+    store.load()
+    store.write("migration-ready", persisted_job_record("migration-ready"))
+    store.remove("migration-ready")
+    store.load()
+
+    assert retire_calls == 1
+
+
 def test_sqlite_record_store_delete_removes_unmigrated_legacy_records(
     tmp_path: Path,
 ):

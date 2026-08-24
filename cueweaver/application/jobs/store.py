@@ -168,6 +168,7 @@ class SqliteJobRecordStore:
         self._legacy_store = FileJobRecordStore(jobs_root)
         self._schema_lock = Lock()
         self._initialized = False
+        self._migration_ready = False
 
     def load(self) -> list[JobRecord]:
         self._ensure_migrated()
@@ -249,11 +250,14 @@ class SqliteJobRecordStore:
             ) from error
 
     def _ensure_migrated(self) -> None:
+        if self._migration_ready:
+            return
         if self._jobs_root.exists() or self._jobs_root.is_symlink():
             self._ensure_jobs_root()
         self._initialize()
         if self._migration_complete():
             self._retire_legacy_snapshots()
+            self._migration_ready = True
             return
         legacy_records = (
             self._legacy_store.load()
@@ -284,6 +288,7 @@ class SqliteJobRecordStore:
                 "job_store_unavailable", "Legacy Job records could not be imported"
             ) from error
         self._retire_legacy_snapshots()
+        self._migration_ready = True
 
     def _initialize(self) -> None:
         with self._schema_lock:
