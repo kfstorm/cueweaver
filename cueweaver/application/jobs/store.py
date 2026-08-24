@@ -23,7 +23,7 @@ class JobRecordStore(Protocol):
 
     def load(self) -> list[JobRecord]: ...
 
-    def write(self, job_id: str, record: JobRecord) -> None: ...
+    def write(self, record: JobRecord) -> None: ...
 
     def remove(self, job_id: str) -> None: ...
 
@@ -75,8 +75,7 @@ class SqliteJobRecordStore:
             self._upsert(record)
         return records
 
-    def write(self, job_id: str, record: JobRecord) -> None:
-        _require_valid_job_id(job_id)
+    def write(self, record: JobRecord) -> None:
         self._upsert(record)
 
     def remove(self, job_id: str) -> None:
@@ -93,10 +92,10 @@ class SqliteJobRecordStore:
             ) from error
 
     def _upsert(self, record: JobRecord) -> None:
-        self._prepare_record(record)
+        prepared = self._prepare_record(record)
         try:
             with self._database.session() as session:
-                _upsert_row(session, record)
+                _upsert_row(session, prepared)
                 session.commit()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
@@ -115,6 +114,7 @@ class SqliteJobRecordStore:
         job_id = record.get("id")
         if not isinstance(job_id, str):
             raise ServiceError("invalid_job_id", "Job ID is invalid")
+        _require_valid_job_id(job_id)
         if not valid_record(record, strict=True):
             raise ServiceError("invalid_job_record", "Job record is invalid")
         raw_record = json.dumps(record, ensure_ascii=True, separators=(",", ":"))
@@ -130,10 +130,8 @@ def _require_valid_job_id(job_id: str) -> None:
         raise ServiceError("invalid_job_id", "Job ID is invalid")
 
 
-def _upsert_row(session: Session, record: JobRecord) -> None:
-    job_id, raw_record, created_at, sequence = SqliteJobRecordStore._prepare_record(
-        record
-    )
+def _upsert_row(session: Session, prepared: tuple[str, str, str, int]) -> None:
+    job_id, raw_record, created_at, sequence = prepared
     row = session.get(JobRow, job_id)
     if row is None:
         row = JobRow(id=job_id)

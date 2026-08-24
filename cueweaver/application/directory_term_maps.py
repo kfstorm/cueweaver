@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -26,7 +25,6 @@ class DirectoryTermMapStore(Protocol):
         self,
         directory: str,
         term_map_id: str,
-        validate: Callable[[str], object] | None = None,
     ) -> None: ...
 
     def remove(self, directory: str) -> None: ...
@@ -59,7 +57,7 @@ class DirectoryTermMaps:
 
     def bind(self, directory: str, term_map_id: str) -> DirectoryTermMapState:
         canonical = self._canonical_directory(directory, require_existing=True)
-        self._store.bind(canonical, term_map_id, self._summary)
+        self._store.bind(canonical, term_map_id)
         return self.get(canonical)
 
     def remove(self, directory: str) -> DirectoryTermMapState:
