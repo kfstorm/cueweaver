@@ -97,6 +97,153 @@ def test_migration_discards_issue_193_application_data(tmp_path: Path):
     assert SqliteJobRecordStore(database).load() == []
 
 
+def test_retiring_job_schema_version_preserves_populated_relational_data(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "cueweaver.sqlite3"
+    engine = create_engine(URL.create("sqlite+pysqlite", database=str(database_path)))
+    config: Config = _migration_config()
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0002_normalize_relational_storage")
+
+    timestamp = "2026-08-24T00:00:00Z"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO jobs (
+                id, schema_version, status, attempt, created_at, started_at,
+                finished_at, error_code, error_message, error_field,
+                error_media_path, error_output_path, error_path,
+                error_stream_index, queue_sequence, media_path, subtitle_path,
+                stream_index, target_language_code, term_map_mode, term_map_id,
+                term_map_name, output_path, source_format,
+                dynamic_terminology_enabled, subtitle_terminology_filter_enabled,
+                output_suffix, output_conflict_policy, extraction_status,
+                extraction_path, extraction_format, extraction_content_digest
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                "retained-job",
+                1,
+                "Failed",
+                2,
+                timestamp,
+                timestamp,
+                timestamp,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                7,
+                "Movie.mkv",
+                "Movie.en.srt",
+                None,
+                "zh-Hans",
+                "selected",
+                "map-1",
+                "Characters",
+                "Movie.zh-Hans.srt",
+                "srt",
+                True,
+                True,
+                "zh-Hans",
+                "append-number",
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO job_status_history (
+                job_id, sequence, status, attempt, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("retained-job", 0, "Queued", 1, timestamp, timestamp),
+                ("retained-job", 1, "Failed", 2, timestamp, timestamp),
+            ],
+        )
+        connection.execute(
+            """
+            INSERT INTO job_term_map_snapshots (
+                job_id, position, source, source_folded, target
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("retained-job", 0, "Captain", "captain", "队长"),
+        )
+
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+    engine.dispose()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+        assert "schema_version" not in columns
+        assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM job_status_history"
+        ).fetchone() == (2,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM job_term_map_snapshots"
+        ).fetchone() == (1,)
+
+    loaded = SqliteJobRecordStore(SqliteDatabase(database_path)).load()
+
+    assert loaded == [
+        {
+            "id": "retained-job",
+            "status": "Failed",
+            "attempt": 2,
+            "created_at": timestamp,
+            "started_at": timestamp,
+            "finished_at": timestamp,
+            "request": {
+                "media_path": "Movie.mkv",
+                "subtitle_path": "Movie.en.srt",
+                "target_language_code": "zh-Hans",
+                "term_map_mode": "selected",
+                "term_map": {
+                    "id": "map-1",
+                    "name": "Characters",
+                    "content": {"Captain": "队长"},
+                },
+                "dynamic_terminology_enabled": True,
+                "subtitle_terminology_filter_enabled": True,
+                "output_suffix": "zh-Hans",
+                "output_conflict_policy": "append-number",
+                "output_path": "Movie.zh-Hans.srt",
+                "source_format": "srt",
+            },
+            "error": None,
+            "queue_sequence": 7,
+            "status_history": [
+                {
+                    "status": "Queued",
+                    "attempt": 1,
+                    "started_at": timestamp,
+                    "finished_at": timestamp,
+                },
+                {
+                    "status": "Failed",
+                    "attempt": 2,
+                    "started_at": timestamp,
+                    "finished_at": timestamp,
+                },
+            ],
+        }
+    ]
+
+
 def test_sqlite_database_supports_question_marks_in_the_work_root_path(
     tmp_path: Path,
 ):

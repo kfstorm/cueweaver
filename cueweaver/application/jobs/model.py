@@ -252,39 +252,8 @@ def valid_record(record: JobRecord) -> bool:
         return False
     if not isinstance(request, dict) or not valid_request(request):
         return False
-    for field in (
-        "dynamic_terminology_enabled",
-        "subtitle_terminology_filter_enabled",
-    ):
-        if field in request and not isinstance(request[field], bool):
-            return False
-    term_map = request.get("term_map")
-    return (
-        valid_status_history(record["status_history"], status=status, attempt=attempt)
-        and (
-            "output_suffix" not in request
-            or (
-                isinstance(request["output_suffix"], str)
-                and bool(request["output_suffix"])
-            )
-        )
-        and (
-            "output_conflict_policy" not in request
-            or (
-                isinstance(request["output_conflict_policy"], str)
-                and request["output_conflict_policy"]
-                in {"append-number", "overwrite", "skip"}
-            )
-        )
-        and all(
-            field not in request or isinstance(request[field], bool)
-            for field in (
-                "dynamic_terminology_enabled",
-                "subtitle_terminology_filter_enabled",
-            )
-        )
-        and _valid_term_map_snapshot(term_map)
-        and _valid_term_map_selection(request, term_map)
+    return valid_status_history(
+        record["status_history"], status=status, attempt=attempt
     )
 
 
@@ -349,6 +318,13 @@ def valid_request(request: dict[str, object]) -> bool:
                 "subtitle_terminology_filter_enabled",
             )
         )
+    ):
+        return False
+    if request["output_conflict_policy"] not in {"append-number", "overwrite", "skip"}:
+        return False
+    term_map = request["term_map"]
+    if not _valid_term_map_snapshot(term_map) or not _valid_term_map_selection(
+        request, term_map
     ):
         return False
     stream_index = request.get("stream_index")
