@@ -157,13 +157,34 @@ def make_batch_jobs(tmp_path: Path, monkeypatch, failure: Exception):
 
 
 def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, object]:
+    timestamp = "2026-08-13T12:00:00Z"
     return {
         "id": job_id,
         "status": status,
+        "attempt": 1,
+        "created_at": timestamp,
+        "started_at": timestamp,
+        "finished_at": timestamp,
+        "status_history": [
+            {
+                "status": status,
+                "attempt": 1,
+                "started_at": timestamp,
+                "finished_at": timestamp,
+            }
+        ],
+        "error": None,
+        "queue_sequence": 0,
         "request": {
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh-Hans",
+            "term_map_mode": "none",
+            "term_map": None,
+            "dynamic_terminology_enabled": True,
+            "subtitle_terminology_filter_enabled": True,
+            "output_suffix": "zh-Hans",
+            "output_conflict_policy": "append-number",
             "output_path": "Movie.zh-Hans.srt",
             "source_format": "srt",
         },
@@ -209,28 +230,12 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     loaded = store.load()
     assert len(loaded) == 1
     assert loaded[0]["id"] == "sqlite-job"
-    assert loaded[0]["schema_version"] == 1
+    assert "schema_version" not in loaded[0]
     assert loaded[0]["attempt"] == 1
 
     store.remove("sqlite-job")
 
     assert store.load() == []
-
-
-def test_sqlite_record_store_rejects_a_future_schema_version(tmp_path: Path):
-    store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write(persisted_job_record("future-schema"))
-    with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
-        connection.execute(
-            "UPDATE jobs SET schema_version = ? WHERE id = ?",
-            (2, "future-schema"),
-        )
-        connection.commit()
-
-    with pytest.raises(ServiceError) as raised:
-        store.load()
-
-    assert raised.value.error_code == "job_store_corrupt"
 
 
 def test_sqlite_record_store_rejects_a_job_without_status_history(tmp_path: Path):
@@ -335,7 +340,7 @@ def set_record_status(
     record["finished_at"] = finished_at
 
 
-def test_new_job_records_include_schema_version_one(tmp_path: Path):
+def test_new_job_records_do_not_include_a_schema_version(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     jobs = Jobs(FakeTranslator(), media_root, work_root)
 
@@ -343,8 +348,8 @@ def test_new_job_records_include_schema_version_one(tmp_path: Path):
         CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
     )
 
-    assert queued["schema_version"] == 1
-    assert sqlite_job_record(work_root, str(queued["id"]))["schema_version"] == 1
+    assert "schema_version" not in queued
+    assert "schema_version" not in sqlite_job_record(work_root, str(queued["id"]))
     jobs.close()
 
 

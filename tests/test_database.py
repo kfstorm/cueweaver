@@ -36,11 +36,9 @@ def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone() == (0,)
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0002_normalize_relational_storage",)
-        assert connection.execute("PRAGMA table_info(jobs)").fetchall()
-        assert {
-            row[1] for row in connection.execute("PRAGMA table_info(jobs)")
-        }.isdisjoint({"record_json", "content_json"})
+        ).fetchone() == ("0003_retire_job_record_schema_version",)
+        job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+        assert job_columns.isdisjoint({"record_json", "content_json", "schema_version"})
 
     with database.session() as session:
         assert session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
@@ -91,7 +89,7 @@ def test_migration_discards_issue_193_application_data(tmp_path: Path):
         )
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0002_normalize_relational_storage",)
+        ).fetchone() == ("0003_retire_job_record_schema_version",)
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'term_maps'"
         ).fetchone() == ("term_maps",)
@@ -122,17 +120,16 @@ def test_sqlite_schema_rejects_partial_extraction_state(tmp_path: Path):
         connection.execute(
             """
                 INSERT INTO jobs (
-                    id, schema_version, status, attempt, created_at, queue_sequence,
+                    id, status, attempt, created_at, queue_sequence,
                     media_path, stream_index, target_language_code, term_map_mode,
                     output_path, source_format, dynamic_terminology_enabled,
                     subtitle_terminology_filter_enabled, output_suffix,
                     output_conflict_policy, extraction_status, extraction_format,
                     extraction_content_digest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             (
                 "partial-extraction",
-                1,
                 "Queued",
                 1,
                 "2026-08-24T00:00:00Z",
@@ -211,4 +208,4 @@ def test_normalized_migration_downgrade_recreates_the_legacy_schema(
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0002_normalize_relational_storage",)
+        ).fetchone() == ("0003_retire_job_record_schema_version",)
