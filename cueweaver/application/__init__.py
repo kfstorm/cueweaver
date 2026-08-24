@@ -110,7 +110,7 @@ class CueWeaverApplication:
         except DatabaseOpenError as error:
             self._abort_startup()
             raise ServiceError(
-                "job_store_unavailable", "Application database cannot be opened"
+                "database_unavailable", "Application database cannot be opened"
             ) from error
         except Exception:
             self._abort_startup()

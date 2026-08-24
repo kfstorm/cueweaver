@@ -338,7 +338,7 @@ def test_sqlite_corruption_preserves_legacy_snapshot_for_recovery(tmp_path: Path
     with pytest.raises(ServiceError) as raised:
         Jobs(FakeTranslator(), media_root, work_root)
 
-    assert raised.value.error_code == "job_store_unavailable"
+    assert raised.value.error_code == "database_unavailable"
     assert snapshot.read_bytes() == snapshot_bytes
 
 

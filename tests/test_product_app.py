@@ -132,13 +132,17 @@ def test_product_startup_reports_corrupt_database_at_the_application_boundary(
     work_root.mkdir()
     (work_root / "cueweaver.sqlite3").write_bytes(b"not a sqlite database")
 
-    with pytest.raises(ServiceError, match="Application database cannot be opened"):
+    with pytest.raises(
+        ServiceError, match="Application database cannot be opened"
+    ) as raised:
         create_product_app(
             media_root,
             work_root,
             TranslatorFixture(),
             static_root=static_fixture(tmp_path),
         )
+
+    assert raised.value.error_code == "database_unavailable"
 
 
 @pytest.mark.parametrize("operation", ["read", "write", "mkdir", "replace"])

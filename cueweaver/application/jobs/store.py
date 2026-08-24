@@ -177,7 +177,7 @@ class SqliteJobRecordStore:
                 ).all()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job records cannot be loaded"
+                "database_unavailable", "Job records cannot be loaded"
             ) from error
         records: list[JobRecord] = []
         migrated_records: list[JobRecord] = []
@@ -228,7 +228,7 @@ class SqliteJobRecordStore:
                 session.commit()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job record could not be deleted"
+                "database_unavailable", "Job record could not be deleted"
             ) from error
 
     def _ensure_jobs_root(self) -> None:
@@ -245,11 +245,11 @@ class SqliteJobRecordStore:
             ) from error
         except DatabaseOpenError as error:
             raise ServiceError(
-                "job_store_unavailable", "Job database cannot be opened"
+                "database_unavailable", "Job database cannot be opened"
             ) from error
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job migration state could not be read"
+                "database_unavailable", "Job migration state could not be read"
             ) from error
 
     def _ensure_migrated(self) -> None:
@@ -274,7 +274,7 @@ class SqliteJobRecordStore:
                 session.commit()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Legacy Job records could not be imported"
+                "database_unavailable", "Legacy Job records could not be imported"
             ) from error
         self._retire_legacy_snapshots()
         self._migration_ready = True
@@ -287,7 +287,7 @@ class SqliteJobRecordStore:
                 session.commit()
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job record could not be persisted"
+                "database_unavailable", "Job record could not be persisted"
             ) from error
 
     @staticmethod
