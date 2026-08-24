@@ -716,7 +716,7 @@ function JobDetail({
       </section>
 
       <section className="job-detail-section" aria-labelledby="job-time-title">
-        <h3 id="job-time-title">{t("jobs.timestampsLocal")}</h3>
+        <h3 id="job-time-title">{t("jobs.timeInformation")}</h3>
         <dl className="job-summary">
           <SummaryItem
             label={t("jobs.created")}

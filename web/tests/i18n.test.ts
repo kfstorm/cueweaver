@@ -13,6 +13,7 @@ import {
   setActiveLocale,
   SUPPORTED_LOCALES,
   translate,
+  type Locale,
 } from "../src/i18n";
 
 function placeholders(value: string): string[] {
@@ -94,6 +95,24 @@ describe("interface locale selection", () => {
       const table = getLocaleTable(locale);
       for (const key of getTranslationKeys()) expect(table[key]).toBeTruthy();
       expect(getMissingTranslationKeys(locale), locale).toEqual([]);
+    }
+  });
+
+  it("uses approachable labels for job time information", () => {
+    const labels: Record<Locale, string> = {
+      en: "Time information",
+      "zh-CN": "时间信息",
+      "zh-TW": "時間資訊",
+      ja: "時間情報",
+      ko: "시간 정보",
+      es: "Información de fecha y hora",
+      fr: "Informations sur la date et l'heure",
+      de: "Zeitangaben",
+      "pt-BR": "Informações de data e hora",
+    };
+
+    for (const locale of SUPPORTED_LOCALES) {
+      expect(getLocaleTable(locale)["jobs.timeInformation"]).toBe(labels[locale]);
     }
   });
 

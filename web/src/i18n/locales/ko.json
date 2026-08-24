@@ -328,7 +328,7 @@
   "jobs.enabled": "사용",
   "jobs.disabled": "사용 안 함",
   "jobs.none": "없음",
-  "jobs.timestampsLocal": "타임스탬프(현지 시간)",
+  "jobs.timeInformation": "시간 정보",
   "jobs.statusUnavailable": "이 작업의 상태 기록을 사용할 수 없습니다.",
   "jobs.showDiagnostics": "승인된 진단 컨텍스트 표시",
   "jobs.errorCode": "오류 코드",

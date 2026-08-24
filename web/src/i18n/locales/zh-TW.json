@@ -328,7 +328,7 @@
   "jobs.enabled": "已啟用",
   "jobs.disabled": "已停用",
   "jobs.none": "無",
-  "jobs.timestampsLocal": "時間戳記（當地時間）",
+  "jobs.timeInformation": "時間資訊",
   "jobs.statusUnavailable": "此任務的狀態歷史不可用。",
   "jobs.showDiagnostics": "顯示已核准的診斷內容",
   "jobs.errorCode": "錯誤代碼",
