@@ -43,12 +43,39 @@ class SqliteJobRecordStore:
     def load(self) -> list[JobRecord]:
         try:
             with self._database.read_session() as session:
-                rows = session.scalars(
+                job_rows = session.scalars(
                     select(JobRow).order_by(
                         JobRow.queue_sequence, JobRow.created_at, JobRow.id
                     )
                 ).all()
-                return [_record_from_row(session, row) for row in rows]
+                history_rows = session.scalars(
+                    select(JobStatusHistoryRow).order_by(
+                        JobStatusHistoryRow.job_id, JobStatusHistoryRow.sequence
+                    )
+                ).all()
+                snapshot_rows = session.scalars(
+                    select(JobTermMapSnapshotRow).order_by(
+                        JobTermMapSnapshotRow.job_id, JobTermMapSnapshotRow.position
+                    )
+                ).all()
+                histories_by_job: dict[str, list[JobStatusHistoryRow]] = {}
+                for history_row in history_rows:
+                    histories_by_job.setdefault(history_row.job_id, []).append(
+                        history_row
+                    )
+                snapshots_by_job: dict[str, list[JobTermMapSnapshotRow]] = {}
+                for snapshot_row in snapshot_rows:
+                    snapshots_by_job.setdefault(snapshot_row.job_id, []).append(
+                        snapshot_row
+                    )
+                return [
+                    _record_from_row(
+                        row,
+                        histories_by_job.get(row.id, []),
+                        snapshots_by_job.get(row.id, []),
+                    )
+                    for row in job_rows
+                ]
         except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
                 "database_unavailable", "Job records cannot be loaded"
@@ -104,6 +131,7 @@ def _upsert_row(session: Session, record: JobRecord) -> None:
     extraction = record.get("extraction")
     extraction_values = extraction if isinstance(extraction, dict) else {}
     row = session.get(JobRow, record["id"])
+    is_new_job = row is None
     if row is None:
         row = JobRow(id=str(record["id"]))
         session.add(row)
@@ -121,6 +149,9 @@ def _upsert_row(session: Session, record: JobRecord) -> None:
     _set_error_fields(row, error_values)
     term_map = _set_request_fields(row, request)
     _set_extraction_fields(row, extraction_values)
+
+    if is_new_job:
+        _set_snapshot_fields(row, term_map, session)
 
     session.execute(
         delete(JobStatusHistoryRow).where(JobStatusHistoryRow.job_id == row.id)
@@ -140,36 +171,32 @@ def _upsert_row(session: Session, record: JobRecord) -> None:
             )
         )
 
-    # A Job owns this snapshot.  Once populated, later Job writes cannot replace it.
-    has_snapshot = (
-        session.scalar(
-            select(JobTermMapSnapshotRow.position)
-            .where(JobTermMapSnapshotRow.job_id == row.id)
-            .limit(1)
+
+def _set_snapshot_fields(row: JobRow, term_map: object, session: Session) -> None:
+    if not isinstance(term_map, dict):
+        return
+    row.term_map_id = _optional_str(term_map.get("id"))
+    row.term_map_name = _optional_str(term_map.get("name"))
+    content = term_map.get("content")
+    if not isinstance(content, dict):
+        return
+    for position, (source, target) in enumerate(content.items()):
+        session.add(
+            JobTermMapSnapshotRow(
+                job_id=row.id,
+                position=position,
+                source=str(source),
+                source_folded=str(source).casefold(),
+                target=str(target),
+            )
         )
-        is not None
-    )
-    if not has_snapshot and isinstance(term_map, dict):
-        content = term_map.get("content")
-        if isinstance(content, dict):
-            for position, (source, target) in enumerate(content.items()):
-                session.add(
-                    JobTermMapSnapshotRow(
-                        job_id=row.id,
-                        position=position,
-                        source=str(source),
-                        source_folded=str(source).casefold(),
-                        target=str(target),
-                    )
-                )
 
 
-def _record_from_row(session: Session, row: JobRow) -> JobRecord:
-    snapshot_rows = session.scalars(
-        select(JobTermMapSnapshotRow)
-        .where(JobTermMapSnapshotRow.job_id == row.id)
-        .order_by(JobTermMapSnapshotRow.position)
-    ).all()
+def _record_from_row(
+    row: JobRow,
+    history_rows: list[JobStatusHistoryRow],
+    snapshot_rows: list[JobTermMapSnapshotRow],
+) -> JobRecord:
     content = {item.source: item.target for item in snapshot_rows}
     term_map: dict[str, object] | None = None
     if row.term_map_id is not None:
@@ -214,11 +241,7 @@ def _record_from_row(session: Session, row: JobRow) -> JobRecord:
                 "started_at": item.started_at,
                 "finished_at": item.finished_at,
             }
-            for item in session.scalars(
-                select(JobStatusHistoryRow)
-                .where(JobStatusHistoryRow.job_id == row.id)
-                .order_by(JobStatusHistoryRow.sequence)
-            ).all()
+            for item in history_rows
         ],
     }
     if row.stream_index is not None:
@@ -256,12 +279,6 @@ def _set_request_fields(row: JobRow, request: dict[str, object]) -> object:
     row.target_language_code = str(request["target_language_code"])
     row.term_map_mode = str(request["term_map_mode"])
     term_map = request.get("term_map")
-    row.term_map_id = (
-        _optional_str(term_map.get("id")) if isinstance(term_map, dict) else None
-    )
-    row.term_map_name = (
-        _optional_str(term_map.get("name")) if isinstance(term_map, dict) else None
-    )
     row.output_path = str(request["output_path"])
     row.source_format = str(request["source_format"])
     row.dynamic_terminology_enabled = bool(request["dynamic_terminology_enabled"])
