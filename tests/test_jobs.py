@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from cueweaver.application.jobs import (
     CreateJobRequest,
     Jobs,
     SqliteJobRecordStore,
+    copy_job_record,
 )
 from cueweaver.application.term_maps import TermMapDetail
 from cueweaver.product import create_product_app
@@ -113,7 +115,7 @@ class FalsyRecordStore:
 
     def write(self, job_id: str, record: dict[str, object]) -> None:
         self.calls.append("write")
-        self.records[job_id] = json.loads(json.dumps(record))
+        self.records[job_id] = deepcopy(record)
 
     def remove(self, job_id: str) -> None:
         self.calls.append("remove")
@@ -163,6 +165,33 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
             "output_path": "Movie.zh-Hans.srt",
             "source_format": "srt",
         },
+    }
+
+
+def test_copy_job_record_isolates_nested_values():
+    source = {
+        "request": {"term_map": {"content": {"source": "target"}}},
+        "status_history": [{"status": "Queued"}],
+    }
+
+    copied = copy_job_record(source)
+
+    assert copied == source
+    assert isinstance(copied, dict)
+    copied_request = copied["request"]
+    copied_history = copied["status_history"]
+    assert isinstance(copied_request, dict)
+    assert isinstance(copied_history, list)
+    copied_term_map = copied_request["term_map"]
+    assert isinstance(copied_term_map, dict)
+    copied_content = copied_term_map["content"]
+    assert isinstance(copied_content, dict)
+    copied_content["source"] = "changed"
+    copied_history.append({"status": "Completed"})
+
+    assert source == {
+        "request": {"term_map": {"content": {"source": "target"}}},
+        "status_history": [{"status": "Queued"}],
     }
 
 
@@ -1127,7 +1156,7 @@ def test_failed_external_job_retries_in_place_and_reuses_work_directory(
     work_directory = work_root / "jobs" / str(queued["id"])
     checkpoint_marker = work_directory / "checkpoint-marker"
     checkpoint_marker.write_text("keep", encoding="utf-8")
-    original_request = json.loads(json.dumps(failed["request"]))
+    original_request = deepcopy(failed["request"])
 
     translator.error = None
     retried = jobs.retry(str(queued["id"]))
