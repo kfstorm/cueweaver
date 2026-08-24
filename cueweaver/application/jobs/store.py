@@ -11,7 +11,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from ..database import DatabaseOpenError, DatabasePathError, SqliteDatabase
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from ..database import (
+    AppMetadataRow,
+    DatabaseOpenError,
+    DatabasePathError,
+    JobRow,
+    SqliteDatabase,
+)
 from ..errors import ServiceError
 from .model import JobRecord, migrate_record, valid_job_id, valid_record
 
@@ -147,17 +157,6 @@ class FileJobRecordStore:
         _ensure_jobs_root(self._jobs_root)
 
 
-_UPSERT_JOB_SQL = """
-INSERT INTO jobs (
-    id, record_json, created_at, queue_sequence
-) VALUES (?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-    record_json = excluded.record_json,
-    created_at = excluded.created_at,
-    queue_sequence = excluded.queue_sequence
-"""
-
-
 class SqliteJobRecordStore:
     """Persist Job records in SQLite while importing the legacy JSON layout."""
 
@@ -170,20 +169,21 @@ class SqliteJobRecordStore:
     def load(self) -> list[JobRecord]:
         self._ensure_migrated()
         try:
-            with self._database.connection() as connection:
-                rows = connection.execute(
-                    "SELECT id, record_json FROM jobs "
-                    "ORDER BY queue_sequence, created_at, id"
-                ).fetchall()
-        except sqlite3.Error as error:
+            with self._database.session() as session:
+                rows = session.scalars(
+                    select(JobRow).order_by(
+                        JobRow.queue_sequence, JobRow.created_at, JobRow.id
+                    )
+                ).all()
+        except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job records cannot be loaded"
+                "database_unavailable", "Job records cannot be loaded"
             ) from error
         records: list[JobRecord] = []
         migrated_records: list[JobRecord] = []
         for row in rows:
             try:
-                record = json.loads(row[1])
+                record = json.loads(row.record_json)
             except (TypeError, ValueError, json.JSONDecodeError) as error:
                 raise ServiceError(
                     "job_store_corrupt", "Job database contains invalid record data"
@@ -197,7 +197,7 @@ class SqliteJobRecordStore:
                 raise ServiceError(
                     "job_store_corrupt", "Job database contains an invalid record"
                 )
-            if migrated.get("id") != row[0]:
+            if migrated.get("id") != row.id:
                 raise ServiceError(
                     "job_store_corrupt", "Job database contains a mismatched record"
                 )
@@ -221,13 +221,14 @@ class SqliteJobRecordStore:
         _require_valid_job_id(job_id)
         self._ensure_migrated()
         try:
-            with self._database.connection() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-                connection.commit()
-        except sqlite3.Error as error:
+            with self._database.session() as session:
+                row = session.get(JobRow, job_id)
+                if row is not None:
+                    session.delete(row)
+                session.commit()
+        except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job record could not be deleted"
+                "database_unavailable", "Job record could not be deleted"
             ) from error
 
     def _ensure_jobs_root(self) -> None:
@@ -235,23 +236,20 @@ class SqliteJobRecordStore:
 
     def _migration_complete(self) -> bool:
         try:
-            with self._database.connection() as connection:
-                row = connection.execute(
-                    "SELECT value FROM app_metadata "
-                    "WHERE key = 'jobs.legacy_json_import_complete'"
-                ).fetchone()
-            return row is not None and row[0] == "1"
+            with self._database.session() as session:
+                row = session.get(AppMetadataRow, _JOB_IMPORT_MARKER)
+            return row is not None and row.value == "1"
         except DatabasePathError as error:
             raise ServiceError(
                 "invalid_work_directory", "Job Work root cannot be created"
             ) from error
         except DatabaseOpenError as error:
             raise ServiceError(
-                "job_store_unavailable", "Job database cannot be opened"
+                "database_unavailable", "Job database cannot be opened"
             ) from error
-        except sqlite3.Error as error:
+        except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job migration state could not be read"
+                "database_unavailable", "Job migration state could not be read"
             ) from error
 
     def _ensure_migrated(self) -> None:
@@ -269,44 +267,27 @@ class SqliteJobRecordStore:
             else []
         )
         try:
-            with self._database.connection() as connection:
-                connection.execute("BEGIN IMMEDIATE")
+            with self._database.session() as session:
                 for record in legacy_records:
-                    job_id, raw_record, created_at, sequence = self._prepare_record(
-                        record
-                    )
-                    connection.execute(
-                        _UPSERT_JOB_SQL,
-                        (job_id, raw_record, created_at, sequence),
-                    )
-                connection.execute(
-                    """
-                    INSERT INTO app_metadata (key, value)
-                    VALUES ('jobs.legacy_json_import_complete', '1')
-                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                    """
-                )
-                connection.commit()
-        except sqlite3.Error as error:
+                    _upsert_row(session, record)
+                session.merge(AppMetadataRow(key=_JOB_IMPORT_MARKER, value="1"))
+                session.commit()
+        except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Legacy Job records could not be imported"
+                "database_unavailable", "Legacy Job records could not be imported"
             ) from error
         self._retire_legacy_snapshots()
         self._migration_ready = True
 
     def _upsert(self, record: JobRecord) -> None:
-        job_id, raw_record, created_at, sequence = self._prepare_record(record)
+        self._prepare_record(record)
         try:
-            with self._database.connection() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    _UPSERT_JOB_SQL,
-                    (job_id, raw_record, created_at, sequence),
-                )
-                connection.commit()
-        except sqlite3.Error as error:
+            with self._database.session() as session:
+                _upsert_row(session, record)
+                session.commit()
+        except (sqlite3.Error, SQLAlchemyError) as error:
             raise ServiceError(
-                "job_store_unavailable", "Job record could not be persisted"
+                "database_unavailable", "Job record could not be persisted"
             ) from error
 
     @staticmethod
@@ -380,6 +361,22 @@ def _restore_record(destination: Path, previous: bytes | None) -> None:
 def _require_valid_job_id(job_id: str) -> None:
     if not valid_job_id(job_id):
         raise ServiceError("invalid_job_id", "Job ID is invalid")
+
+
+def _upsert_row(session: Session, record: JobRecord) -> None:
+    job_id, raw_record, created_at, sequence = SqliteJobRecordStore._prepare_record(
+        record
+    )
+    row = session.get(JobRow, job_id)
+    if row is None:
+        row = JobRow(id=job_id)
+        session.add(row)
+    row.record_json = raw_record
+    row.created_at = created_at
+    row.queue_sequence = sequence
+
+
+_JOB_IMPORT_MARKER = "jobs.legacy_json_import_complete"
 
 
 def _ensure_jobs_root(jobs_root: Path) -> None:

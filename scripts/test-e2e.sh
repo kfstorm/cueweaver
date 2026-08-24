@@ -60,7 +60,7 @@ for _attempt in {1..30}; do
     _corrupt_status=$?
     set -e
     if [[ $_corrupt_status -eq 0 || $_corrupt_status -eq 124 ]] ||
-      ! grep --quiet "Job database cannot be opened" "$CORRUPT_LOG"; then
+      ! grep --quiet "Application database cannot be opened" "$CORRUPT_LOG"; then
       cat "$CORRUPT_LOG" >&2
       printf '%s\n' 'Corrupt SQLite database unexpectedly allowed startup' >&2
       exit 1

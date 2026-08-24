@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cueweaver.application import CueWeaverApplication
+from cueweaver.application.errors import ServiceError
 from cueweaver.product import (
     create_development_app_from_env,
     create_product_app,
@@ -122,6 +123,26 @@ def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
         work_root / ".cueweaver.lease",
         work_root / "cueweaver.sqlite3",
     }
+
+
+def test_product_startup_reports_corrupt_database_at_the_application_boundary(
+    tmp_path: Path,
+):
+    media_root, work_root = configured_roots(tmp_path)
+    work_root.mkdir()
+    (work_root / "cueweaver.sqlite3").write_bytes(b"not a sqlite database")
+
+    with pytest.raises(
+        ServiceError, match="Application database cannot be opened"
+    ) as raised:
+        create_product_app(
+            media_root,
+            work_root,
+            TranslatorFixture(),
+            static_root=static_fixture(tmp_path),
+        )
+
+    assert raised.value.error_code == "database_unavailable"
 
 
 @pytest.mark.parametrize("operation", ["read", "write", "mkdir", "replace"])

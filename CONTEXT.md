@@ -49,9 +49,10 @@ The explicit per-request directory used for PySubtrans translation state.
 _Avoid_: job workspace
 
 **Work root**:
-The configured writable root owned by CueWeaver. It contains the observable
-`jobs/` and `term-maps/` directories; each Job owns one `jobs/<job-id>/` Work
-directory, including its assigned `translation/` directory.
+The configured writable root owned by CueWeaver. It contains the SQLite
+database and the observable `jobs/` directory; each Job owns one
+`jobs/<job-id>/` Work directory, including its assigned `translation/`
+directory. A legacy `term-maps/` directory may remain during JSON import.
 _Avoid_: temporary root
 
 **Job**:
@@ -62,12 +63,14 @@ _Avoid_: request, task
 **Job persistence**:
 The application composition owns the SQLite database at
 `<work-root>/cueweaver.sqlite3` and the Work-root lease at
-`<work-root>/.cueweaver.lease`. The database bootstrap and connection lifecycle
-are shared application infrastructure; the current Jobs-only schema is still
-the authoritative Job record store. Legacy JSON records are imported once
-during startup and then their snapshots are retired. Queued Jobs are restored
-in queue order; Jobs already in Extracting or Translating are marked
+`<work-root>/.cueweaver.lease`. SQLAlchemy ORM models and versioned Alembic
+migrations define the database schema. Jobs, Term maps, directory bindings, and
+application metadata are database records; the nested Job record remains a
+validated JSON payload for compatibility. Legacy JSON records are imported
+once during startup and then their snapshots are retired. Queued Jobs are
+restored in queue order; Jobs already in Extracting or Translating are marked
 Interrupted. Subtitle output is published through a same-directory temporary
 file and atomic rename/link. A completed Job is persisted before best-effort
 Work-directory cleanup; cleanup failure leaves the Job Completed and logs an
-orphaned Work directory for later removal.
+orphaned Work directory for later removal. Job Work directories and
+PySubtrans checkpoint files remain filesystem state rather than ORM data.
