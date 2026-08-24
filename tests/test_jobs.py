@@ -113,8 +113,10 @@ class FalsyRecordStore:
         self.calls.append("load")
         return list(self.records.values())
 
-    def write(self, job_id: str, record: dict[str, object]) -> None:
+    def write(self, record: dict[str, object]) -> None:
         self.calls.append("write")
+        job_id = record["id"]
+        assert isinstance(job_id, str)
         self.records[job_id] = deepcopy(record)
 
     def remove(self, job_id: str) -> None:
@@ -201,7 +203,7 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
     record = persisted_job_record("sqlite-job")
 
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("sqlite-job", record)
+    store.write(record)
 
     assert (tmp_path / "cueweaver.sqlite3").is_file()
     loaded = store.load()
@@ -217,7 +219,7 @@ def test_sqlite_record_store_persists_records_and_uses_a_transactional_database(
 
 def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("corrupt-record", persisted_job_record("corrupt-record"))
+    store.write(persisted_job_record("corrupt-record"))
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute(
             "UPDATE jobs SET record_json = ? WHERE id = ?",
@@ -233,7 +235,7 @@ def test_sqlite_invalid_record_data_is_reported_as_corruption(tmp_path: Path):
 
 def test_sqlite_record_store_rejects_a_row_id_mismatch(tmp_path: Path):
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("row-id", persisted_job_record("row-id"))
+    store.write(persisted_job_record("row-id"))
     mismatched = persisted_job_record("record-id")
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute(
@@ -260,7 +262,7 @@ def test_sqlite_operation_errors_keep_their_operation_context(
     tmp_path: Path, operation: str, message: str
 ):
     store = SqliteJobRecordStore(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
-    store.write("operation-error", persisted_job_record("operation-error"))
+    store.write(persisted_job_record("operation-error"))
     with sqlite3.connect(tmp_path / "cueweaver.sqlite3") as connection:
         connection.execute("DROP TABLE jobs")
 
@@ -268,7 +270,7 @@ def test_sqlite_operation_errors_keep_their_operation_context(
         if operation == "load":
             store.load()
         elif operation == "write":
-            store.write("operation-error", persisted_job_record("operation-error"))
+            store.write(persisted_job_record("operation-error"))
         else:
             store.remove("operation-error")
 
@@ -876,11 +878,7 @@ def sqlite_job_record(work_root: Path, job_id: str) -> dict[str, object]:
 
 
 def persist_job_record(work_root: Path, record: dict[str, object]) -> None:
-    job_id = record.get("id")
-    assert isinstance(job_id, str)
-    SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3")).write(
-        job_id, record
-    )
+    SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3")).write(record)
 
 
 def wait_for_status(

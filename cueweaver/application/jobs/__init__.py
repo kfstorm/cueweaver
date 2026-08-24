@@ -10,7 +10,6 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -576,14 +575,7 @@ class Jobs:
                 path=f"jobs/{job_id}",
             ) from error
 
-        try:
-            self._remove_record(job_id)
-        except OSError as error:
-            raise ServiceError(
-                "job_record_delete_failed",
-                "Job history record could not be deleted",
-                path=f"jobs/{job_id}.json",
-            ) from error
+        self._remove_record(job_id)
         with self._lock:
             self._records.pop(job_id, None)
 
@@ -1146,8 +1138,14 @@ class Jobs:
     def _finish_interrupted(self, job_id: str) -> None:
         with self._lock:
             interrupted = _interrupted_record(self._records[job_id])
-            with suppress(OSError):
+            try:
                 self._write_record(job_id, interrupted)
+            except (OSError, ServiceError) as error:
+                logger.warning(
+                    "Could not persist interrupted Job %s during shutdown: %s",
+                    job_id,
+                    error,
+                )
 
     def _mark_failed_after_worker_error(self, job_id: str, error: Exception) -> None:
         with self._lifecycle_lock:
@@ -1177,7 +1175,7 @@ class Jobs:
     def _write_record(self, job_id: str, record: dict[str, object]) -> None:
         persisted = copy_job_record(record)
         persisted["schema_version"] = CURRENT_JOB_SCHEMA_VERSION
-        self._record_store.write(job_id, persisted)
+        self._record_store.write(persisted)
         self._records[job_id] = persisted
 
     def _check_jobs_root(self) -> None:
