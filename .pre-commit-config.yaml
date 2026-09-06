@@ -24,15 +24,7 @@ repos:
         name: Backend lint and checks
         entry: scripts/lint-backend.sh --check
         language: system
-        files: ^(cueweaver/|tests/|pyproject\.toml$|uv\.lock$|vulture_whitelist\.py$|scripts/lint-backend\.sh$)
-        pass_filenames: false
-
-      - id: markdown-lint
-        name: Markdown lint
-        entry: uv run pymarkdown -d MD013,MD036 scan -r AGENTS.md CONTEXT.md README.md docs
-        language: system
-        types: [markdown]
-        files: ^(AGENTS\.md|CONTEXT\.md|README\.md|docs/)
+        files: ^(cueweaver/|tests/|AGENTS\.md|CONTEXT\.md|README\.md|docs/|pyproject\.toml$|uv\.lock$|vulture_whitelist\.py$|scripts/lint-backend\.sh$)
         pass_filenames: false
 
       - id: unit-tests

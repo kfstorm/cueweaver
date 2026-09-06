@@ -104,3 +104,9 @@ line-ending = "lf"
 
 [tool.vulture]
 paths = ["cueweaver", "tests", "vulture_whitelist.py"]
+
+[tool.pymarkdown.plugins.md013]
+enabled = false
+
+[tool.pymarkdown.plugins.md036]
+enabled = false
