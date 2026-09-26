@@ -5,6 +5,7 @@ import threading
 import time
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -13,12 +14,16 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from cueweaver.adapters.output import AtomicOutputPublisher
-from cueweaver.application.database import SqliteDatabase
+from cueweaver.application.database import (
+    ModelProfileRow,
+    ModelProfileSettingRow,
+    SqliteDatabase,
+)
 from cueweaver.application.directory_term_maps import DirectoryTermMaps
 from cueweaver.application.errors import ServiceError
 from cueweaver.application.extraction import Extraction
+from cueweaver.application.jobs import CreateJobRequest as ActualCreateJobRequest
 from cueweaver.application.jobs import (
-    CreateJobRequest,
     Jobs,
     SqliteJobRecordStore,
     copy_job_record,
@@ -27,6 +32,40 @@ from cueweaver.application.term_maps import TermMapDetail
 from cueweaver.product import create_product_app
 
 SRT = b"1\n00:00:00,000 --> 00:00:01,000\nTranslated\n"
+PROFILE_ID = "00000000000000000000000000000001"
+
+
+@dataclass(frozen=True)
+class CreateJobRequest(ActualCreateJobRequest):
+    model_profile_id: str = PROFILE_ID
+
+
+def add_test_profile(database: SqliteDatabase) -> None:
+    with database.write_transaction() as session:
+        if session.get(ModelProfileRow, PROFILE_ID) is None:
+            session.add(
+                ModelProfileRow(
+                    id=PROFILE_ID,
+                    name="Test profile",
+                    parent_id=None,
+                    selectable=True,
+                    created_at="2026-08-13T12:00:00Z",
+                    updated_at="2026-08-13T12:00:00Z",
+                )
+            )
+            session.add(
+                ModelProfileSettingRow(
+                    profile_id=PROFILE_ID,
+                    key="provider",
+                    kind="literal",
+                    value="OpenAI",
+                )
+            )
+
+
+@pytest.fixture(autouse=True)
+def profile_for_direct_store(tmp_path: Path) -> None:
+    add_test_profile(SqliteDatabase(tmp_path / "cueweaver.sqlite3"))
 
 
 class FakeTranslator:
@@ -133,6 +172,7 @@ def make_roots(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     subtitle = media_root / "Movie.en.srt"
     media.write_bytes(b"media")
     subtitle.write_bytes(SRT)
+    add_test_profile(SqliteDatabase(tmp_path / "work" / "cueweaver.sqlite3"))
     return media_root, tmp_path / "work", media, subtitle
 
 
@@ -181,6 +221,7 @@ def persisted_job_record(job_id: str, status: str = "Failed") -> dict[str, objec
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh-Hans",
+            "model_profile_id": PROFILE_ID,
             "term_map_mode": "none",
             "term_map": None,
             "dynamic_terminology_enabled": True,
@@ -508,6 +549,15 @@ _clients: dict[Path, TestClient] = {}
 _clients_lock = threading.Lock()
 
 
+class ProfiledTestClient(TestClient):
+    def post(self, url, *, json=None, **kwargs):
+        # Older Job workflow cases exercise other fields; supply their shared
+        # selectable fixture explicitly on the wire.
+        if url in {"/api/jobs", "/api/jobs/batch"} and isinstance(json, dict):
+            json = {"model_profile_id": PROFILE_ID, **json}
+        return super().post(url, json=json, **kwargs)
+
+
 def make_client(
     media_root: Path, work_root: Path, translator: FakeTranslator
 ) -> TestClient:
@@ -519,7 +569,7 @@ def make_client(
         if previous is not None:
             previous.app.state.application.close()
             previous.close()
-        client = TestClient(
+        client = ProfiledTestClient(
             create_product_app(
                 media_root,
                 work_root,
@@ -538,6 +588,7 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": target,
+            "model_profile_id": PROFILE_ID,
             "term_map_mode": "follow",
             "term_map_id": None,
             "output_conflict_policy": "append-number",
@@ -557,6 +608,7 @@ def job_body(**overrides: object) -> dict[str, object]:
         "media_path": "Movie.mkv",
         "subtitle_path": "Movie.en.srt",
         "target_language_code": "zh-Hans",
+        "model_profile_id": PROFILE_ID,
         "term_map_mode": "follow",
         "term_map_id": None,
         **overrides,
@@ -574,6 +626,7 @@ def post_batch(
         json={
             "items": items,
             "target_language_code": target_language,
+            "model_profile_id": PROFILE_ID,
             "term_map_mode": "none",
         },
     )
@@ -1169,7 +1222,7 @@ def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
     assert store.calls[0] == "load"
     assert "write" in store.calls
     assert store.calls[-1] == "remove"
-    assert not (work_root / "cueweaver.sqlite3").exists()
+    assert (work_root / "cueweaver.sqlite3").exists()
     jobs.close()
 
 
@@ -1186,6 +1239,7 @@ def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: 
             "media_path": "Movie.mkv",
             "subtitle_path": "Movie.en.srt",
             "target_language_code": "zh-Hans",
+            "model_profile_id": PROFILE_ID,
             "term_map_mode": "follow",
             "term_map": None,
             "dynamic_terminology_enabled": True,
@@ -2975,13 +3029,14 @@ def test_clear_completed_is_deterministic_and_retains_partial_failures(
     ("translator", "body", "expected_code"),
     [
         (
-            FakeTranslator(available=False),
+            FakeTranslator(),
             {
                 "media_path": "Movie.mkv",
                 "subtitle_path": "Movie.en.srt",
                 "target_language_code": "zh",
+                "model_profile_id": "missing",
             },
-            "provider_unavailable",
+            "model_profile_not_found",
         ),
         (
             FakeTranslator(),

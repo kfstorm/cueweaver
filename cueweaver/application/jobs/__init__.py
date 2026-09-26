@@ -24,6 +24,7 @@ from ..directory_term_maps import DirectoryTermMaps, DirectoryTermMapState
 from ..errors import ServiceError, project_service_error
 from ..extraction import Extraction
 from ..media import require_readable_media
+from ..model_profiles import ModelProfiles
 from ..term_maps import TermMapDetail
 from ..translation import Translator
 from .execution import (
@@ -74,6 +75,7 @@ class CreateJobRequest:
     subtitle_path: str | None
     target_language_code: str
     term_map_mode: Literal["follow", "selected", "none"]
+    model_profile_id: str
     term_map_id: str | None = None
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
@@ -99,10 +101,14 @@ class Jobs:
         extraction: Extraction | None = None,
         directory_term_maps: DirectoryTermMaps | None = None,
         *,
+        model_profiles: ModelProfiles | None = None,
         record_store: JobRecordStore | None = None,
         database: SqliteDatabase | None = None,
     ) -> None:
         self._translator = translator
+        self._model_profiles = model_profiles or ModelProfiles(
+            database or SqliteDatabase(work_root / "cueweaver.sqlite3")
+        )
         self._term_maps = term_maps
         self._directory_term_maps = directory_term_maps
         self._extraction = extraction
@@ -150,21 +156,18 @@ class Jobs:
             if self._closed.is_set():
                 raise ServiceError("worker_unavailable", "Job worker is shutting down")
             media, subtitle, output, source_format = self._validate(request)
+            self._model_profiles.require_selectable(request.model_profile_id)
             term_map = self._resolve_term_map(request, media)
             if request.output_conflict_policy == "skip" and output.exists():
                 return _skipped_result(media, output, self._media_root)
             _require_writable_directory(output.parent)
-            if not self._translator.available:
-                raise ServiceError(
-                    "provider_unavailable",
-                    "Translation provider is unavailable; configure a provider and restart CueWeaver",
-                )
             self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
             job_request: dict[str, object] = {
                 "media_path": str(media.relative_to(self._media_root)),
                 "target_language_code": request.target_language_code,
+                "model_profile_id": request.model_profile_id,
                 "term_map_mode": request.term_map_mode,
                 "term_map": term_map,
                 "dynamic_terminology_enabled": request.dynamic_terminology_enabled,
@@ -282,11 +285,6 @@ class Jobs:
                     )
             if self._closed.is_set():
                 raise ServiceError("worker_unavailable", "Job worker is shutting down")
-            if not self._translator.available:
-                raise ServiceError(
-                    "provider_unavailable",
-                    "Translation provider is unavailable; configure a provider and restart CueWeaver",
-                )
             try:
                 self._job_work_directory(job_id)
                 if "stream_index" in request:
@@ -714,6 +712,15 @@ class Jobs:
 
     def _validate_shared_options(self, request: CreateJobRequest) -> None:
         if (
+            not isinstance(request.model_profile_id, str)
+            or not request.model_profile_id
+        ):
+            raise ServiceError(
+                "invalid_model_profile",
+                "A Model Profile is required",
+                field="model_profile_id",
+            )
+        if (
             not request.target_language_code.strip()
             or "\\" in request.target_language_code
             or any(
@@ -887,6 +894,7 @@ class Jobs:
         request, embedded, work_directory, record = prepared
         outcome: JobExecutionOutcome
         try:
+            settings = self._model_profiles.resolve(str(request["model_profile_id"]))
             work_directory = self._job_work_directory(job_id)
 
             subtitle_path: Path | None = None
@@ -925,6 +933,7 @@ class Jobs:
                 JobExecutionInput(
                     subtitle_path=subtitle_path,
                     target_language_code=str(request["target_language_code"]),
+                    settings=settings,
                     output_path=self._media_root / str(request["output_path"]),
                     work_directory=work_directory,
                     translation_directory=self._translation_directory(job_id),

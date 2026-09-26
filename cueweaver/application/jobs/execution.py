@@ -47,6 +47,7 @@ class JobExecutionInput:
     overwrite: bool = False
     skip_if_exists: bool = False
     embedded: EmbeddedExecutionInput | None = None
+    settings: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,7 @@ class JobExecution:
             TranslateRequest(
                 subtitle_path=subtitle_path,
                 target_language_code=execution_input.target_language_code,
+                settings=execution_input.settings,
                 output_path=execution_input.output_path,
                 work_directory=(
                     execution_input.translation_directory

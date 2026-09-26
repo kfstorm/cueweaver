@@ -157,6 +157,7 @@ def test_http_queues_ordered_batch_results_with_mixed_item_errors():
                 {"media_path": "two.mkv", "subtitle_path": "two.srt"},
             ],
             "target_language_code": "zh-Hans",
+            "model_profile_id": "profile-1",
             "term_map_mode": "none",
         },
     )
@@ -215,6 +216,7 @@ def test_http_projects_each_job_detail_term_map_policy(
                     "media_path": "Movie.mkv",
                     "subtitle_path": "Movie.en.srt",
                     "target_language_code": "zh-Hans",
+                    "model_profile_id": "profile-1",
                     "term_map_mode": term_map_mode,
                     "term_map": term_map,
                     "output_path": "Movie.zh-Hans.srt",
@@ -242,6 +244,7 @@ def test_http_batch_preflight_rejects_invalid_term_map_without_calling_applicati
         json={
             "items": [{"media_path": "one.mkv", "subtitle_path": "one.srt"}],
             "target_language_code": "zh-Hans",
+            "model_profile_id": "profile-1",
             "term_map_mode": "none",
             "term_map_id": "map-1",
         },
@@ -263,6 +266,7 @@ def test_http_batch_surfaces_term_map_preflight_error_as_top_level_error():
         json={
             "items": [{"media_path": "one.mkv", "subtitle_path": "one.srt"}],
             "target_language_code": "zh-Hans",
+            "model_profile_id": "profile-1",
             "term_map_mode": "selected",
             "term_map_id": "missing",
         },
@@ -288,6 +292,7 @@ def test_http_batch_unexpected_error_uses_top_level_internal_error_envelope():
         json={
             "items": [{"media_path": "one.mkv", "subtitle_path": "one.srt"}],
             "target_language_code": "zh-Hans",
+            "model_profile_id": "profile-1",
             "term_map_mode": "none",
         },
     )

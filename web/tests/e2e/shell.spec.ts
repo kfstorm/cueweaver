@@ -7,7 +7,23 @@ const routes = [
   ["/translate", "Translate"],
   ["/jobs", "Jobs"],
   ["/term-maps", "Term maps"],
+  ["/model-profiles", "Model Profiles"],
 ] as const;
+
+let modelProfileId: string;
+
+test.beforeAll(async ({ request }) => {
+  const response = await request.post("/api/model-profiles", {
+    data: {
+      name: "E2E profile",
+      parent_id: null,
+      selectable: true,
+      settings: [{ key: "provider", kind: "literal", value: "OpenAI" }],
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  modelProfileId = (await response.json()).id as string;
+});
 
 async function expectResponsiveShell(page: Page, mobile: boolean) {
   for (const [path, title] of routes) {
@@ -46,8 +62,7 @@ async function stubProductStatus(page: Page, providerReady = true) {
           ? { ready: true }
           : {
               ready: false,
-              message:
-                "Set PROVIDER and the matching provider environment variables, then restart CueWeaver.",
+              message: "Create a selectable Model Profile to translate.",
             },
         worker: { ready: true, mode: "single" },
       }),
@@ -346,6 +361,9 @@ async function startRealTranslation(
 }
 
 async function fillCustomTargetLanguage(page: Page, language: string) {
+  await page
+    .getByRole("combobox", { name: "Model Profile" })
+    .selectOption(modelProfileId);
   await page.getByLabel("Common target language").selectOption("custom");
   await page.getByLabel("Target language code").fill(language);
 }
@@ -377,7 +395,7 @@ test("theme switching stays separate from mobile navigation", async ({ page }) =
   await expect(page.locator(".page-theme-toggle")).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link"),
-  ).toHaveCount(3);
+  ).toHaveCount(4);
   await page.locator(".page-theme-toggle").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
@@ -1183,8 +1201,8 @@ test("unavailable provider is actionable and cannot submit", async ({ page }) =>
   await page.goto("/translate");
 
   await expect(
-    page.getByRole("status").filter({ hasText: "Set PROVIDER" }),
-  ).toContainText("Set PROVIDER and the matching provider environment variables");
+    page.getByRole("status").filter({ hasText: "Create a selectable Model Profile" }),
+  ).toContainText("Create a selectable Model Profile");
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });
 
@@ -1538,6 +1556,7 @@ test.describe("subtitle submission", () => {
         expect(await request.postDataJSON()).toEqual({
           ...source.request,
           target_language_code: "zh-Hans",
+          model_profile_id: modelProfileId,
           output_suffix: "zh-Hans",
           output_conflict_policy: "skip",
           term_map_mode: "follow",
@@ -1674,6 +1693,7 @@ test.describe("real translation workflow", () => {
     const create = (target_language_code: string) =>
       page.request.post("/api/jobs", {
         data: {
+          model_profile_id: modelProfileId,
           media_path: "Example.mkv",
           subtitle_path: "Example.en.srt",
           target_language_code,
@@ -1730,6 +1750,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
 
   const snapshotBlocker = await page.request.post("/api/jobs", {
     data: {
+      model_profile_id: modelProfileId,
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-snapshot-blocker",
@@ -1751,6 +1772,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
 
   const external = await page.request.post("/api/jobs", {
     data: {
+      model_profile_id: modelProfileId,
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-term-map",
@@ -1786,6 +1808,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
 
   const embedded = await page.request.post("/api/jobs", {
     data: {
+      model_profile_id: modelProfileId,
       media_path: "Example.mkv",
       stream_index: 1,
       source_format: "srt",
@@ -1810,6 +1833,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
     const request =
       targetLanguage === "e2e-retry-external"
         ? {
+            model_profile_id: modelProfileId,
             media_path: "Example.mkv",
             subtitle_path: "Example.en.srt",
             target_language_code: targetLanguage,
@@ -1817,6 +1841,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
             term_map_id: null,
           }
         : {
+            model_profile_id: modelProfileId,
             media_path: "Example.mkv",
             stream_index: 1,
             source_format: "srt",
@@ -1835,6 +1860,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
   }
 
   const numberedRequest = {
+    model_profile_id: modelProfileId,
     media_path: "Example.mkv",
     subtitle_path: "Example.en.srt",
     target_language_code: "e2e-number-one",
@@ -1857,6 +1883,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
   expect(secondNumberedJob.request.output_path).toBe("Example.release-number.2.srt");
 
   const overwriteRequest = {
+    model_profile_id: modelProfileId,
     media_path: "Example.mkv",
     subtitle_path: "Example.en.srt",
     output_suffix: "release-overwrite",
@@ -1878,6 +1905,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
 
   const permanentFailure = await page.request.post("/api/jobs", {
     data: {
+      model_profile_id: modelProfileId,
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-fail-permanent",
@@ -1893,6 +1921,7 @@ test("production release matrix covers durable Job behavior", async ({ page }) =
 
   const restartJob = await page.request.post("/api/jobs", {
     data: {
+      model_profile_id: modelProfileId,
       media_path: "Example.mkv",
       subtitle_path: "Example.en.srt",
       target_language_code: "e2e-interrupted-retry",

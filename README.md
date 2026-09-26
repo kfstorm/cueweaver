@@ -16,7 +16,7 @@ Translate subtitles from a local media library and keep every translation in a d
 
 - Docker with permission to build and run containers.
 - A media directory that the container can read and write when it publishes translated subtitles.
-- A supported translation provider and its credentials supplied through environment variables.
+- A supported translation provider and its credentials, configured in a Model Profile after startup.
 
 ### Start CueWeaver
 
@@ -24,15 +24,9 @@ Run these commands from the project directory:
 
 ```bash
 mkdir -p media
-read -r -s -p "DeepSeek API key: " DEEPSEEK_API_KEY
-printf '\n'
 docker build -t cueweaver .
 docker run --rm \
   --publish 127.0.0.1:8000:8000 \
-  --env PROVIDER=DeepSeek \
-  --env DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
-  --env DEEPSEEK_API_BASE=https://api.deepseek.com \
-  --env DEEPSEEK_MODEL=deepseek-chat \
   --env CUEWEAVER_MEDIA_ROOT=/media \
   --env CUEWEAVER_WORK_ROOT=/work \
   --volume "$PWD/media:/media" \
@@ -42,16 +36,14 @@ docker run --rm \
 
 Open [http://localhost:8000](http://localhost:8000) in your browser.
 
+Open **Model Profiles**, create a selectable profile, and add literal settings such as `provider` = `DeepSeek`, `model` = `deepseek-chat`, and `api_key` = your key. Select that profile on **Translate** before creating a Job.
+
 The `media` directory is the library shown in CueWeaver. Replace it with an existing directory if your media is stored elsewhere. Keep the `cueweaver-work` volume: it contains job history and in-progress translation state.
 
 ## Configuration
 
 | Variable | Value | Required for |
 | --- | --- | --- |
-| `PROVIDER` | `DeepSeek` in the startup example | Translation |
-| `DEEPSEEK_API_KEY` | Your DeepSeek API key | DeepSeek translation |
-| `DEEPSEEK_API_BASE` | `https://api.deepseek.com` | Optional |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | Optional |
 | `CUEWEAVER_MEDIA_ROOT` | Absolute path inside the container for the media library | Startup |
 | `CUEWEAVER_WORK_ROOT` | Absolute, writable path inside the container for job data | Startup |
 
@@ -59,8 +51,8 @@ The selected media directory must be writable so CueWeaver can save translated s
 
 Application data is stored in the SQLite database at `cueweaver.sqlite3` in the
 Work root. The database contains relational Job lifecycle/request fields,
-status history, immutable Job Term map snapshots, Term map metadata and ordered
-entries, and directory bindings. Schema upgrades run automatically through the
+status history, immutable Job Term map snapshots, Model Profiles and their settings,
+Term map metadata and ordered entries, and directory bindings. Schema upgrades run automatically through the
 versioned migrations shipped with CueWeaver. The Work root also contains
 `.cueweaver.lease`, which prevents
 multiple CueWeaver processes from using the same Work root. Do not remove the
@@ -76,11 +68,23 @@ operating system releases the lease after a process crash; do not delete
 `.cueweaver.lease` manually. If SQLite cannot be opened, CueWeaver refuses startup;
 preserve the entire Work volume before restoring or inspecting a backup.
 
-## Translation Provider Configuration
+## Model Profiles
+
+Create Model Profiles on the **Model Profiles** page. A selectable profile needs a `provider` literal matching a locally supported PySubtrans provider; a model is optional. Base profiles cannot be selected for new Jobs and may be incomplete. Use **Create derived** to inherit settings from one parent. Settings merge by top-level key: a local literal replaces its parent's value, including a nested JSON object as a whole. **Remove local** restores an inherited value; **Unset** removes it from the effective profile without suppressing PySubtrans defaults or environment fallbacks.
+
+Literal values retain their types: string, integer, number, boolean, string list, or nested JSON. For example, a base profile can define `provider` = `OpenRouter` and `api_key` = your key, while a selectable child defines `model` = `deepseek/deepseek-v3.2` and `max_threads` = `2` (integer). CueWeaver owns `target_language`, `prompt`, subtitle processing, terminology, error behavior, and project checkpoint settings; these cannot be profile entries.
+
+Anyone with access to the CueWeaver UI, API, or database can read Model Profile values, including API keys. Values are stored and shown like ordinary settings. Limit access to the deployment accordingly.
+
+Each Job stores its Model Profile ID. At the start of each attempt, CueWeaver resolves the current profile and holds those settings for that attempt. Editing a profile or ancestor affects queued Jobs and future retries, including retries of an existing PySubtrans project; it does not change an active attempt. Making a profile non-selectable prevents new Jobs from using it but does not block Jobs already referencing it. Profiles referenced by a Job or child cannot be deleted.
+
+PySubtrans can still use its own environment-variable fallbacks. Configure provider, model, and runtime settings through Model Profiles to keep the effective configuration clear; combining them with environment variables can make it harder to see which values are used.
+
+## PySubtrans environment-variable fallback reference
 
 CueWeaver supports these providers in the built-in image:
 
-| Provider | `PROVIDER` value | Credentials |
+| Provider | PySubtrans `PROVIDER` fallback | Credentials fallback |
 | --- | --- | --- |
 | DeepSeek | `DeepSeek` | `DEEPSEEK_API_KEY` |
 | OpenRouter | `OpenRouter` | `OPENROUTER_API_KEY` |
@@ -92,17 +96,17 @@ CueWeaver supports these providers in the built-in image:
 | Mistral | `Mistral` | `MISTRAL_API_KEY` |
 | Amazon Bedrock | `Bedrock` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_MODEL` |
 
-Set `PROVIDER` and the matching provider variables before starting the container. Restart CueWeaver after changing them. Credentials cannot be entered in the Web interface.
+These environment variables are optional PySubtrans fallbacks. Model Profile values can be entered and edited in the Web interface.
 
-If no provider is configured, CueWeaver still starts so you can browse media, manage term maps, and view job history. New translations remain unavailable until `PROVIDER` and the matching credentials are configured.
+If no selectable Model Profile exists, CueWeaver still starts so you can browse Media, manage Term maps, and view Job history. New translations require a selectable Model Profile.
 
-The provider status performs a local preflight only. It confirms that the provider is bundled and its required variables are non-empty; it does not call the provider API or verify credentials, account access, region availability, or model access.
+Profile validation checks the local provider registry only; it does not call the provider API or verify credentials, account access, region availability, or model access.
 
 The defaults below match the provider integration bundled with CueWeaver.
 
 ### DeepSeek
 
-The startup command above is a complete DeepSeek configuration. These optional settings let you adjust it:
+PySubtrans can read the following DeepSeek environment variables as fallbacks:
 
 | Variable | Default | Type | Purpose and notes |
 | --- | --- | --- | --- |
@@ -177,7 +181,7 @@ Set `PROVIDER=Gemini` and configure Google AI:
 | `GEMINI_RATE_LIMIT` | `60.0` | float | Maximum API requests per minute. |
 | `GEMINI_PROXY` | None | string | Optional proxy URL. |
 
-Gemini model discovery and credential validation happen only when a translation request is made; the startup preflight does not call Google APIs.
+Credential validation happens when a translation request is made. Saving a Model Profile does not call Google APIs or discover models.
 
 ### Anthropic Claude
 
@@ -255,12 +259,12 @@ Most users can leave the advanced settings at their defaults.
 
 ### Provider Troubleshooting
 
-- If the CueWeaver Web interface says that the translation provider is unavailable, use the message shown in the status panel to identify the missing variable. Provider names are case-sensitive and must exactly match the table above.
+- If translation is unavailable, create a selectable Model Profile with a provider name matching the local registry (case-sensitive).
 - If translation cannot start, check the provider's API key, endpoint, model, region, and account permissions.
 - For a `Custom Server` 404, check `CUSTOM_SERVER_ADDRESS` and `CUSTOM_ENDPOINT`.
 - For a `Custom Server` timeout or connection error, verify that the remote server accepts connections from the container and that its firewall allows the request.
 - Set `CUSTOM_SUPPORTS_CONVERSATION=false` when the remote service uses a completion endpoint rather than a chat endpoint. Set `CUSTOM_SUPPORTS_SYSTEM_MESSAGES=false` when it does not support system messages.
-- If a request is rejected for authentication, check the provider's API key and restart the container.
+- If a request is rejected for authentication, check the profile's API key or any PySubtrans fallback environment variable.
 - Changing any provider environment variable requires a container restart. The Work volume can be kept across restarts; it contains job history and resumable translation state.
 - Queued Jobs are restored in queue order after a restart. Jobs that were already extracting or translating are marked interrupted and can be retried from the Jobs page. Completed Jobs are persisted before best-effort Work-directory cleanup; cleanup failures leave them completed.
 
@@ -269,7 +273,7 @@ Most users can leave the advanced settings at their defaults.
 1. Put media and subtitle files in the mounted media directory.
 2. Open **Translate** and browse to a media file.
 3. Select an available subtitle. CueWeaver supports `.srt`, `.ass`, and `.vtt` files, plus text subtitles embedded in media containers.
-4. Choose the target language and, if needed, select a saved term map.
+4. Select a Model Profile, choose the target language and, if needed, select a saved Term map.
 5. Choose how to handle an existing output, then start the translation.
 6. Follow progress and results from **Jobs**.
 

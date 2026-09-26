@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Mapping
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,24 +12,11 @@ from .product import create_product_app_from_env
 
 
 class _FakeTranslator:
-    available = True
-
     def __init__(self) -> None:
         self._attempts: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def translate(  # noqa: PLR0913
-        self,
-        source: Path,
-        target_language: str,
-        *,
-        user_overrides: Mapping[str, str] | None = None,
-        work_directory: Path,
-        dynamic_terminology_enabled: bool = True,
-        subtitle_terminology_filter_enabled: bool = True,
-    ) -> bytes:
-        del user_overrides, work_directory, dynamic_terminology_enabled
-        del subtitle_terminology_filter_enabled
+    def translate(self, source: Path, target_language: str, **_kwargs: object) -> bytes:
         if not source.is_file():
             raise RuntimeError("deterministic fake source is missing")
         with self._lock:

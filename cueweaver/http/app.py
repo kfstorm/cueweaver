@@ -13,15 +13,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..application.directory_term_maps import DirectoryTermMaps
 from ..application.errors import ServiceError, project_service_error
+from ..application.model_profiles import ModelProfiles
 from ..application.term_maps import TermMaps
 from .browse import BrowseOperation, register_browse
 from .jobs import JobsOperation, register_jobs
 from .media_discover import DiscoveryOperation, register_media_discover
+from .model_profiles import register_model_profiles
 from .term_maps import register_term_maps
 
 BUSINESS_ROUTES = frozenset(
     {
         "/api/term-maps",
+        "/api/model-profiles",
         "/api/term-maps/directory",
         "/api/media/browse",
         "/api/media/discover",
@@ -39,6 +42,9 @@ class Application(Protocol):
 
     @property
     def term_maps(self) -> TermMaps: ...
+
+    @property
+    def model_profiles(self) -> ModelProfiles: ...
 
     @property
     def directory_term_maps(self) -> DirectoryTermMaps: ...
@@ -70,6 +76,12 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
             and bool(term_map_path)
             and "/" not in term_map_path
         )
+        profile_path = request.url.path.removeprefix("/api/model-profiles/")
+        is_profile_mutation = (
+            request.method in {"PUT", "DELETE"}
+            and bool(profile_path)
+            and "/" not in profile_path
+        )
         if (
             request.method == "POST"
             and bool(term_map_path)
@@ -80,7 +92,9 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
                 content={"error_code": "not_found", "message": "Resource not found"},
             )
         if request.method in {"POST", "PATCH", "PUT", "DELETE"} and (
-            request.url.path in BUSINESS_ROUTES or is_term_map_mutation
+            request.url.path in BUSINESS_ROUTES
+            or is_term_map_mutation
+            or is_profile_mutation
         ):
             content_type = request.headers.get("content-type", "")
             if (
@@ -93,6 +107,8 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
         return await call_next(request)
 
     register_term_maps(app, application)
+    if getattr(application, "model_profiles", None) is not None:
+        register_model_profiles(app, application)
     if getattr(application, "browsing", None) is not None:
         register_browse(app, application)
     if media_root is not None:

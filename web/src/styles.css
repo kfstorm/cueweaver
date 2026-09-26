@@ -1,5 +1,69 @@
 @import "tailwindcss";
 
+.profile-list,
+.profile-form {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+.profile-form {
+  max-width: 720px;
+}
+.profile-form > label,
+.profile-editor > label,
+.profile-add > label {
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--font-label);
+  line-height: 1.5;
+}
+
+.profile-form > label.checkbox-field {
+  display: flex;
+  align-items: center;
+}
+.profile-row,
+.profile-setting {
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-3) 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.profile-row > div:first-child {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.profile-actions,
+.profile-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+.profile-setting > div:first-child {
+  flex: 1 1 180px;
+}
+.profile-value {
+  overflow-wrap: anywhere;
+  flex: 1 1 160px;
+}
+.profile-editor {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(180px, 2fr);
+  gap: var(--space-3);
+  width: 100%;
+}
+.profile-editor textarea {
+  min-height: 76px;
+}
+@media (max-width: 767px) {
+  .profile-editor {
+    grid-template-columns: 1fr;
+  }
+}
+
 :root {
   color: var(--text);
   background: var(--canvas);
@@ -2356,7 +2420,7 @@ summary:focus-visible {
     inset: auto 0 0;
     z-index: 10;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     border-top: 1px solid var(--border);
     background: color-mix(in srgb, var(--canvas) 96%, transparent);
     padding: 6px max(8px, env(safe-area-inset-right))

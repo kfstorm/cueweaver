@@ -208,6 +208,7 @@ def _record_from_row(
     request: dict[str, object] = {
         "media_path": row.media_path,
         "target_language_code": row.target_language_code,
+        "model_profile_id": row.model_profile_id,
         "term_map_mode": row.term_map_mode,
         "term_map": term_map,
         "dynamic_terminology_enabled": bool(row.dynamic_terminology_enabled),
@@ -277,6 +278,7 @@ def _set_request_fields(row: JobRow, request: dict[str, object]) -> object:
     row.subtitle_path = _optional_str(request.get("subtitle_path"))
     row.stream_index = _optional_int(request.get("stream_index"))
     row.target_language_code = str(request["target_language_code"])
+    row.model_profile_id = str(request["model_profile_id"])
     row.term_map_mode = str(request["term_map_mode"])
     term_map = request.get("term_map")
     row.output_path = str(request["output_path"])

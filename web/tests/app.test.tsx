@@ -281,8 +281,7 @@ function statusResponse(
       ? { ready: true }
       : {
           ready: false,
-          message:
-            "Set PROVIDER and the matching provider environment variables, then restart CueWeaver.",
+          message: "Create a selectable Model Profile to translate.",
         },
     worker: { ready: true, mode: "single" },
   });
@@ -293,6 +292,25 @@ function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  queryClient.setQueryData(
+    ["model-profiles"],
+    [
+      {
+        id: "profile-1",
+        name: "Test profile",
+        parent_id: null,
+        selectable: true,
+        settings: [],
+        effective_settings: [
+          {
+            key: "provider",
+            value: "OpenAI",
+            source: { id: "profile-1", name: "Test profile" },
+          },
+        ],
+      },
+    ],
+  );
   const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
@@ -499,6 +517,8 @@ async function selectExternalSubtitleWithLanguage(language = "zh-Hans") {
 }
 
 async function enterCustomTargetLanguage(language: string) {
+  const profileSelect = await screen.findByRole("combobox", { name: "Model Profile" });
+  fireEvent.change(profileSelect, { target: { value: "profile-1" } });
   fireEvent.change(screen.getByLabelText("Common target language"), {
     target: { value: "custom" },
   });
@@ -556,6 +576,7 @@ async function expectQueuedJob(source: Record<string, unknown>) {
         body: JSON.stringify({
           ...source,
           target_language_code: "zh-Hans",
+          model_profile_id: "profile-1",
           output_suffix: "zh-Hans",
           output_conflict_policy: "skip",
           term_map_mode: "follow",
@@ -583,6 +604,7 @@ async function expectQueuedJobRequest(
           media_path: "Movie.mkv",
           subtitle_path: "Movie.en.srt",
           target_language_code: targetLanguage,
+          model_profile_id: "profile-1",
           output_suffix: targetLanguage,
           output_conflict_policy: "skip",
           term_map_mode: termMapId === null ? "follow" : "selected",
@@ -970,7 +992,7 @@ describe("product shell", () => {
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Set PROVIDER and the matching provider environment variables",
+        "Create a selectable Model Profile",
       ),
     );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
@@ -3169,6 +3191,7 @@ describe("product shell", () => {
               { media_path: "Second.mkv", subtitle_path: "Second.en.srt" },
             ],
             target_language_code: "zh-Hans",
+            model_profile_id: "profile-1",
             output_suffix: "zh-Hans",
             output_conflict_policy: "skip",
             term_map_mode: "follow",
@@ -3338,6 +3361,7 @@ describe("product shell", () => {
             media_path: "Movie.mkv",
             subtitle_path: "Movie.en.srt",
             target_language_code: "zh-Hans",
+            model_profile_id: "profile-1",
             output_suffix: "zh-Hans",
             output_conflict_policy: "skip",
             term_map_mode: "follow",
@@ -3376,6 +3400,9 @@ describe("product shell", () => {
     ).toBeInTheDocument();
 
     fireEvent.change(commonLanguage, { target: { value: "zh-Hans" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Model Profile" }), {
+      target: { value: "profile-1" },
+    });
 
     expect(screen.queryByLabelText("Target language code")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("zh-Hans");
@@ -4055,6 +4082,7 @@ describe("product shell", () => {
           media_path: "Movie.mkv",
           subtitle_path: "Movie.en.srt",
           target_language_code: "x-custom",
+          model_profile_id: "profile-1",
           output_suffix: "x-custom",
           output_conflict_policy: "skip",
           term_map_mode: "follow",
@@ -4075,21 +4103,17 @@ describe("product shell", () => {
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
     expect(
-      screen.getByText(
-        "Translation is unavailable until the provider is configured and CueWeaver is restarted.",
-      ),
+      screen.getByText("Next: choose a selectable Model Profile."),
     ).toBeInTheDocument();
   });
 
-  it("preserves skip submission when the provider is unavailable", async () => {
+  it("requires a selectable Model Profile even with skip output policy", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
     await enterCustomTargetLanguage("zh-Hans");
 
-    expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Start translation" }));
-    await expectQueuedJob({ media_path: "Movie.mkv", subtitle_path: "Movie.en.srt" });
+    expectJobSubmissionBlocked();
   });
 
   it("keeps the real filename in the accessible Media name", async () => {
