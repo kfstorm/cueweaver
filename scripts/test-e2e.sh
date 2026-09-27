@@ -45,7 +45,7 @@ docker run --detach --name "$CONTAINER" \
   --host 0.0.0.0 --port 8000 >/dev/null
 
 for _attempt in {1..30}; do
-  if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
+  if curl --fail --silent http://127.0.0.1:8765/api/model-profiles >/dev/null; then
     CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
       pnpm --dir web test:e2e
     set +e
@@ -70,7 +70,7 @@ for _attempt in {1..30}; do
     docker kill --signal KILL "$CONTAINER" >/dev/null
     docker start "$CONTAINER" >/dev/null
     for _restart_attempt in {1..30}; do
-      if curl --fail --silent http://127.0.0.1:8765/api/status >/dev/null; then
+      if curl --fail --silent http://127.0.0.1:8765/api/model-profiles >/dev/null; then
         CUEWEAVER_E2E_BASE_URL=http://127.0.0.1:8765 \
           CUEWEAVER_E2E_PHASE=restart \
           pnpm --dir web exec playwright test --grep "production restart recovers"

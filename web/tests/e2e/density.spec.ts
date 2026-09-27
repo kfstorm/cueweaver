@@ -7,20 +7,6 @@ const viewports = [
   { name: "mobile", width: 390, height: 844 },
 ] as const;
 
-async function stubStatus(page: Page) {
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        api: { ready: true },
-        roots: { ready: true },
-        translation_provider: { ready: true },
-        worker: { ready: true, mode: "single" },
-      }),
-    }),
-  );
-}
-
 async function stubMedia(page: Page) {
   await page.route("**/api/media/browse", (route) =>
     route.fulfill({
@@ -80,7 +66,6 @@ for (const viewport of viewports) {
     page,
   }) => {
     await page.setViewportSize(viewport);
-    await stubStatus(page);
     await stubMedia(page);
     await page.goto("/translate");
     await expect(
@@ -163,7 +148,6 @@ for (const viewport of viewports) {
     page,
   }) => {
     await page.setViewportSize(viewport);
-    await stubStatus(page);
     await stubJobs(page);
     await page.goto("/jobs");
     await expect(page.locator("#history-jobs-title")).toBeVisible();
@@ -183,7 +167,7 @@ for (const viewport of viewports) {
     ).toBe("0px");
 
     await stubTermMaps(page);
-    await page.goto("/term-maps");
+    await page.goto("/settings/term-maps");
     await expect(page.locator(".term-map-item")).toBeVisible();
 
     const termMapGap = await page.locator(".term-map-item").evaluate((item) => {
@@ -203,7 +187,6 @@ for (const viewport of viewports) {
     page,
   }) => {
     await page.setViewportSize(viewport);
-    await stubStatus(page);
     const longJobId = `density-${"x".repeat(80)}`;
     await stubJobs(page, [jobRecord("density-job")], jobRecord(longJobId));
     await page.goto("/jobs");
@@ -277,7 +260,6 @@ for (const viewport of viewports) {
     page,
   }) => {
     await page.setViewportSize(viewport);
-    await stubStatus(page);
     await stubJobs(page, []);
     await page.goto("/jobs");
     await expect(
@@ -290,7 +272,7 @@ for (const viewport of viewports) {
     ).toBe("88px");
 
     await stubTermMaps(page, []);
-    await page.goto("/term-maps");
+    await page.goto("/settings/term-maps");
     await expect(
       page.getByRole("heading", { name: "No Term maps yet", exact: true }),
     ).toBeVisible();

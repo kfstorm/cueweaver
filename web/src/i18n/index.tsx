@@ -45,20 +45,35 @@ export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
 const ENGLISH = {
   "language.label": "Language",
   "language.change": "Change interface language",
+  "language.interfaceDetail":
+    "This changes the CueWeaver interface language, not the translation target language.",
   "navigation.primary": "Primary navigation",
   "navigation.mobile": "Mobile navigation",
   "navigation.translate": "Translate",
   "navigation.jobs": "Jobs",
-  "navigation.termMaps": "Term maps",
-  "navigation.modelProfiles": "Model Profiles",
+  "navigation.settings": "Settings",
+  "settings.navigation": "Settings sections",
+  "settings.general": "General",
+  "settings.modelProfiles": "Model Profiles",
+  "settings.termMaps": "Term maps",
+  "settings.manage": "Manage",
+  "settings.manageModelProfiles": "Manage Model Profiles",
+  "settings.manageTermMaps": "Manage Term Maps",
+  "settings.generalDetail": "Set your appearance and CueWeaver interface language.",
+  "settings.appearance": "Appearance",
+  "settings.theme": "Theme",
+  "settings.themeHelp":
+    "Choose how CueWeaver appears. System follows your device appearance.",
   "modelProfiles.title": "Model Profile",
   "modelProfiles.choose": "Choose a Model Profile",
-  "modelProfiles.createFirst":
-    "Create a selectable Model Profile to start translating.",
   "modelProfiles.managementDetail":
     "Manage reusable translation settings and inheritance.",
   "modelProfiles.create": "Create Model Profile",
   "modelProfiles.loading": "Loading Model Profiles…",
+  "modelProfiles.loadFailed": "Model Profiles could not be loaded.",
+  "modelProfiles.noSelectableProfiles": "No selectable Model Profile",
+  "modelProfiles.noSelectableProfilesDetail":
+    "There are no selectable Model Profiles available. Use Manage to create or enable one.",
   "modelProfiles.empty": "No Model Profiles yet. Create one to enable translations.",
   "modelProfiles.selectable": "Selectable",
   "modelProfiles.base": "Base profile",
@@ -93,23 +108,9 @@ const ENGLISH = {
   "modelProfiles.true": "True",
   "modelProfiles.false": "False",
   "modelProfiles.invalidValue": "Invalid {type} value for {key}",
-  "theme.darkMode": "Dark mode",
-  "theme.on": "On",
-  "theme.off": "Off",
-  "runtime.checking": "Checking runtime",
-  "runtime.provider": "Model Profile needed",
-  "runtime.ready": "Runtime ready",
-  "runtime.unavailable": "Runtime unavailable",
-  "runtime.unreachableTitle": "CueWeaver is not reachable",
-  "runtime.tryAgain": "Try again",
-  "runtime.unreachableDetail":
-    "The app could not check whether translation is available. Try again before starting a Job.",
-  "runtime.attentionTitle": "CueWeaver needs attention",
-  "runtime.attentionDetail":
-    "The Media or Work directory is unavailable. Check the configured mounts and permissions before starting a translation. You can still manage saved Term maps and review existing Jobs.",
-  "runtime.providerNotConfiguredTitle": "Translation is not configured",
-  "runtime.providerNotConfiguredDetail":
-    "Create a selectable Model Profile with a provider. You can still browse Media and manage Term maps.",
+  "theme.system": "System",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
   "jobs.notifications": "Job notifications",
   "jobs.dismissNotification": "Dismiss notification",
   "jobs.notificationCompleted": "{media} translation completed.",
@@ -152,7 +153,7 @@ const ENGLISH = {
   "translate.directoryDefaultScopeHelp":
     "This Term map is offered automatically for Media in this directory and its child directories. A translation can still choose another Term map or use none.",
   "translate.noTermMapsHelp":
-    "No saved Term maps. You can continue without one or create a Term map first.",
+    "No saved Term maps. You can continue without a Term map.",
   "translate.multipleSubtitlesHelp":
     "More than one subtitle is available. Choose the source you want to translate.",
   "translate.noSubtitlesHelp":
@@ -163,9 +164,6 @@ const ENGLISH = {
   "translate.clearFilter": "Clear filter",
   "translate.emptyDirectoryHelp":
     "This directory contains no supported Media items or subdirectories. CueWeaver reads Media from the configured Media root.",
-  "translate.nextChecking": "Checking whether CueWeaver is ready.",
-  "translate.nextRuntimeError": "CueWeaver status could not be checked. Try again.",
-  "translate.nextConfigureRoots": "Check the Media and Work directory configuration.",
   "translate.nextChooseMedia": "Next: choose a Media item.",
   "translate.nextChooseMediaBatch": "Next: choose one or more Media items.",
   "translate.nextChooseSubtitleForMedia_one":
@@ -174,9 +172,9 @@ const ENGLISH = {
     "Next: choose a subtitle for {count} selected Media.",
   "translate.nextChooseSubtitle": "Next: choose one subtitle source.",
   "translate.nextChooseLanguage": "Next: choose a target language.",
-  "translate.nextProviderUnavailable": "Next: choose a selectable Model Profile.",
-  "translate.nextReady_one": "Ready. Starting will create {count} background {unit}.",
-  "translate.nextReady_other": "Ready. Starting will create {count} background {unit}.",
+  "translate.nextChooseModelProfile": "Next: choose a Model Profile.",
+  "translate.nextReady_one": "Starting will create {count} background {unit}.",
+  "translate.nextReady_other": "Starting will create {count} background {unit}.",
   "translate.chooseMedia": "Choose media",
   "translate.chooseMediaDetail": "Select a Media and discover its subtitles.",
   "translate.batchMode": "Batch mode",
@@ -239,9 +237,6 @@ const ENGLISH = {
   "translate.unavailableSubtitle": "Unavailable subtitle",
   "translate.notSelectable": "Not selectable",
   "translate.metadataUnavailable": "Metadata unavailable",
-  "translate.providerReady": "Translation provider ready",
-  "translate.providerUnavailable":
-    "Translation is unavailable until the provider is configured.",
   "translate.queued": "Translation queued",
   "translate.queuedEyebrow": "Queued Job",
   "translate.queuedDetail": "The translation is ready to run in the queue.",
@@ -473,7 +468,6 @@ const ENGLISH = {
   "jobs.termMap.follow": "Follow directory default",
   "jobs.termMap.none": "Explicitly disabled",
   "jobs.termMap.selected": "Explicit Term map",
-  "termMaps.title": "Term maps",
   "termMaps.detail":
     "Keep reusable terminology precise and available across translations.",
   "termMaps.saved": "Saved Term maps",
@@ -552,7 +546,6 @@ const ENGLISH = {
   "termMaps.noMapsDetail": "Upload a JSON Term map to reuse terminology across Jobs.",
   "termMaps.deleteConfirmation":
     "Delete this Term map? Jobs that already reference it will keep their recorded configuration.",
-  "errors.statusUnavailable": "CueWeaver status is unavailable.",
   "errors.mediaDirectory": "This Media directory could not be loaded.",
   "errors.subtitleDiscovery": "Subtitles could not be discovered.",
   "errors.jobs": "Jobs could not be loaded.",

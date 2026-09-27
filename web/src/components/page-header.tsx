@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import { ThemeToggle } from "../theme-toggle";
-
 export function PageHeader({
   title,
   detail,
@@ -17,10 +15,7 @@ export function PageHeader({
         <h1>{title}</h1>
         <p>{detail}</p>
       </div>
-      <div className="page-header-actions">
-        {children}
-        <ThemeToggle className="page-theme-toggle" />
-      </div>
+      {children && <div className="page-header-actions">{children}</div>}
     </header>
   );
 }

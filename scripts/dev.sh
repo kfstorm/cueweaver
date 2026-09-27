@@ -24,7 +24,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 if ! command -v curl >/dev/null 2>&1; then
-  printf '%s\n' "curl is required to check API readiness" >&2
+  printf '%s\n' "curl is required to check API availability" >&2
   exit 1
 fi
 if [[ ! -d web/node_modules ]]; then
@@ -77,7 +77,7 @@ api_pid=$!
 
 ready=false
 for _attempt in {1..30}; do
-  if curl --fail --silent "http://127.0.0.1:${API_PORT}/api/status" >/dev/null; then
+  if curl --fail --silent "http://127.0.0.1:${API_PORT}/api/model-profiles" >/dev/null; then
     ready=true
     break
   fi

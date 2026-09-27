@@ -73,21 +73,6 @@ def _create_api_app(
     app = create_app(application, media_root)
     app.add_exception_handler(404, api_not_found_handler)
 
-    @app.get("/api/status")
-    def product_status() -> dict[str, object]:
-        provider_ready = any(
-            profile["selectable"] for profile in application.model_profiles.list()
-        )
-        provider: dict[str, object] = {"ready": provider_ready}
-        if not provider_ready:
-            provider["message"] = "Create a selectable Model Profile to translate."
-        return {
-            "api": {"ready": True},
-            "roots": {"ready": _roots_ready(media_root, work_root)},
-            "translation_provider": provider,
-            "worker": {"ready": True, "mode": "single"},
-        }
-
     return app
 
 
@@ -157,23 +142,6 @@ def _validate_media_root(media_root: Path) -> None:
             pass
     except OSError as error:
         raise ValueError("Media root must be a readable directory") from error
-
-
-def _roots_ready(media_root: Path, work_root: Path) -> bool:
-    return _directory_ready(media_root, os.R_OK) and _directory_ready(
-        work_root, os.R_OK | os.W_OK
-    )
-
-
-def _directory_ready(path: Path, access: int) -> bool:
-    try:
-        if not path.is_dir() or not os.access(path, access | os.X_OK):
-            return False
-        with os.scandir(path):
-            pass
-    except OSError:
-        return False
-    return True
 
 
 def _validate_static_root(static_root: Path) -> Path:

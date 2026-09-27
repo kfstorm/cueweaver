@@ -31,7 +31,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderProfiles(initialEntry = "/model-profiles") {
+function renderProfiles(initialEntry = "/settings/model-profiles") {
   render(
     <I18nProvider>
       <ThemeProvider>
@@ -40,9 +40,9 @@ function renderProfiles(initialEntry = "/model-profiles") {
         >
           <MemoryRouter initialEntries={[initialEntry]}>
             <Routes>
-              <Route path="/model-profiles" element={<ModelProfilesPage />} />
+              <Route path="/settings/model-profiles" element={<ModelProfilesPage />} />
               <Route
-                path="/model-profiles/:profileId"
+                path="/settings/model-profiles/:profileId"
                 element={<ModelProfileEditor />}
               />
             </Routes>
@@ -111,7 +111,7 @@ async function openEditableProfile() {
         : { model_profiles: [editable] },
   }));
   vi.stubGlobal("fetch", fetchMock);
-  renderProfiles(`/model-profiles/${editable.id}`);
+  renderProfiles(`/settings/model-profiles/${editable.id}`);
   const values = await screen.findAllByRole("textbox", { name: "Value" });
   return {
     fetchMock,

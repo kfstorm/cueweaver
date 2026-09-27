@@ -14,13 +14,6 @@ from cueweaver.work import WorkRootLease
 
 
 class TranslatorFixture:
-    def __init__(
-        self, *, available: bool = True, availability_message: str | None = None
-    ) -> None:
-        self.available = available
-        self.availability_message = availability_message
-        self.secret = "provider-secret-sentinel"
-
     def translate(self, *_args, **_kwargs) -> bytes:
         return b"1\n00:00:00,000 --> 00:00:01,000\nTranslated\n"
 
@@ -210,102 +203,21 @@ def test_product_startup_rejects_a_work_root_that_is_not_a_directory(
         )
 
 
-def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Path):
-    media_root, work_root = configured_roots(tmp_path)
-    translator = TranslatorFixture()
-    client = TestClient(
-        create_product_app(
-            media_root,
-            work_root,
-            translator,
-            static_root=static_fixture(tmp_path),
-        )
-    )
-
-    created = client.post(
-        "/api/model-profiles",
-        json={
-            "name": "Test provider",
-            "parent_id": None,
-            "selectable": True,
-            "settings": [
-                {"key": "provider", "kind": "literal", "value": "OpenAI"},
-                {"key": "api_key", "kind": "literal", "value": "synthetic-key"},
-            ],
-        },
-    )
-    assert created.status_code == 200
-    response = client.get("/api/status")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "api": {"ready": True},
-        "roots": {"ready": True},
-        "translation_provider": {"ready": True},
-        "worker": {"ready": True, "mode": "single"},
-    }
-    serialized = response.text
-    assert str(media_root) not in serialized
-    assert str(work_root) not in serialized
-    assert translator.secret not in serialized
-    assert "synthetic-key" not in serialized
-
-
-@pytest.mark.parametrize("root_name", ["media", "work"])
-def test_product_status_rechecks_root_health_after_startup(
-    tmp_path: Path, root_name: str
-):
-    media_root, work_root = configured_roots(tmp_path)
-    client = TestClient(
-        create_product_app(
-            media_root,
-            work_root,
-            TranslatorFixture(),
-            static_root=static_fixture(tmp_path),
-        )
-    )
-
-    root = media_root if root_name == "media" else work_root
-    if root_name == "work":
-        root.rename(root.with_name("work-moved"))
-    else:
-        root.rmdir()
-
-    response = client.get("/api/status")
-
-    assert response.status_code == 200
-    assert response.json()["roots"] == {"ready": False}
-
-
-def test_no_model_profile_keeps_product_available_with_actionable_status(
-    tmp_path: Path,
-):
-    client = TestClient(product_app(tmp_path))
-
-    response = client.get("/api/status")
-
-    assert response.status_code == 200
-    assert response.json()["translation_provider"] == {
-        "ready": False,
-        "message": "Create a selectable Model Profile to translate.",
-    }
-    assert response.json()["api"] == {"ready": True}
-
-
-def test_base_profile_does_not_report_translation_ready(tmp_path: Path):
-    client = TestClient(product_app(tmp_path))
-    client.post(
-        "/api/model-profiles",
-        json={"name": "Base", "parent_id": None, "selectable": False, "settings": []},
-    )
-
-    assert client.get("/api/status").json()["translation_provider"] == {
-        "ready": False,
-        "message": "Create a selectable Model Profile to translate.",
-    }
-
-
-@pytest.mark.parametrize("path", ["/", "/translate", "/jobs", "/term-maps"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/translate",
+        "/jobs",
+        "/settings",
+        "/settings/general",
+        "/settings/model-profiles",
+        "/settings/model-profiles/new",
+        "/settings/term-maps",
+        "/term-maps",
+        "/model-profiles",
+    ],
+)
 def test_product_serves_client_routes_from_the_spa(tmp_path: Path, path: str):
     response = TestClient(product_app(tmp_path)).get(path)
 
@@ -314,7 +226,7 @@ def test_product_serves_client_routes_from_the_spa(tmp_path: Path, path: str):
     assert '<div id="root"></div>' in response.text
 
 
-@pytest.mark.parametrize("path", ["/api", "/api/unknown"])
+@pytest.mark.parametrize("path", ["/api", "/api/unknown", "/api/status"])
 def test_product_does_not_fallback_api_paths_to_spa(tmp_path: Path, path: str):
     response = TestClient(product_app(tmp_path)).get(path)
 
@@ -325,16 +237,14 @@ def test_product_does_not_fallback_api_paths_to_spa(tmp_path: Path, path: str):
     }
 
 
-@pytest.mark.parametrize("path", ["/api", "/api/unknown"])
+@pytest.mark.parametrize("path", ["/api", "/api/unknown", "/api/status"])
 def test_product_rejects_unknown_api_head_paths(tmp_path: Path, path: str):
     response = TestClient(product_app(tmp_path)).head(path)
 
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize(
-    ("method", "path"), [("GET", "/api/media/browse"), ("POST", "/api/status")]
-)
+@pytest.mark.parametrize(("method", "path"), [("GET", "/api/media/browse")])
 def test_product_preserves_method_mismatch_for_known_api_paths(
     tmp_path: Path, method: str, path: str
 ):
@@ -356,7 +266,7 @@ def test_development_factory_does_not_require_static_assets(
 
     client = TestClient(create_development_app_from_env(translator=TranslatorFixture()))
 
-    response = client.get("/api/status")
+    response = client.get("/api/model-profiles")
 
     assert response.status_code == 200
 
@@ -414,26 +324,6 @@ def test_development_app_removes_explicit_path_business_routes(
         "error_code": "not_found",
         "message": "Resource not found",
     }
-
-
-def test_environment_factory_preserves_a_falsy_injected_translator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    class FalsyTranslator(TranslatorFixture):
-        def __bool__(self) -> bool:
-            return False
-
-    media_root, work_root = configured_roots(tmp_path)
-    monkeypatch.setenv("CUEWEAVER_MEDIA_ROOT", str(media_root))
-    monkeypatch.setenv("CUEWEAVER_WORK_ROOT", str(work_root))
-    response = TestClient(
-        create_product_app_from_env(
-            translator=FalsyTranslator(available=False),
-            static_root=static_fixture(tmp_path),
-        )
-    ).get("/api/status")
-
-    assert response.json()["translation_provider"]["ready"] is False
 
 
 def test_product_browse_api_returns_relative_entries_and_rejects_traversal(

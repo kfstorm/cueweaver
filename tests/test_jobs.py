@@ -1250,7 +1250,6 @@ def test_job_returns_queued_keeps_api_responsive_and_persists_success(tmp_path: 
             "source_format": "srt",
         }
         assert queued["queue_position"] == 1
-        assert client.get("/api/status").status_code == 200
         assert client.get(f"/api/jobs/{queued['id']}").json()["status"] in {
             "Queued",
             "Translating",
@@ -2601,7 +2600,6 @@ def test_jobs_run_serially_and_forward_immutable_terminology_configuration(
         assert third["queue_position"] == 2
         assert first["request"]["dynamic_terminology_enabled"] is False
         assert first["request"]["subtitle_terminology_filter_enabled"] is False
-        assert client.get("/api/status").status_code == 200
         assert client.get("/api/jobs").status_code == 200
 
         release.set()
