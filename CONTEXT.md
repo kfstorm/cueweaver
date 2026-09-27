@@ -63,7 +63,8 @@ _Avoid_: request, task
 **Model Profile**:
 An inheritable set of PySubtrans settings. A Job stores its selected Model
 Profile ID and resolves the current settings when each translation attempt
-starts. A base profile cannot be selected for a new Job.
+starts. A non-selectable Model Profile may be used as an incomplete base for
+inheritance; selectable only controls selection for new Jobs.
 
 **Job persistence**:
 The application composition owns the SQLite database at
