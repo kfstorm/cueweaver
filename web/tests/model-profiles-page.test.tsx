@@ -135,6 +135,16 @@ function existingIntegerProviderProfile(): ModelProfile {
   );
 }
 
+function existingCustomStringProviderProfile(): ModelProfile {
+  const source = { id: "base", name: "base" };
+  return profile(
+    "base",
+    null,
+    [{ key: "provider", kind: "literal", value: "OldCustomProvider" }],
+    [{ key: "provider", value: "OldCustomProvider", source }],
+  );
+}
+
 const inheritedOpenAiProvider = {
   key: "provider",
   value: "OpenAI",
@@ -481,18 +491,52 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "provider", 123);
   });
 
-  it("uses the provider dropdown after explicitly converting a legacy provider", async () => {
+  it("requires a registered provider after explicitly converting a legacy provider", async () => {
     const current = existingIntegerProviderProfile();
     const { saves } = renderEditor("/model-profiles/base", [current]);
     const row = await settingRow("provider");
+    const save = screen.getByRole("button", { name: "Save Model Profile" });
+
+    expect(save).toBeEnabled();
+    expect(within(row).getByLabelText("Value type")).toHaveValue("integer");
+
     fireEvent.change(within(row).getByLabelText("Value type"), {
       target: { value: "string" },
     });
     const provider = within(row).getByRole("combobox", { name: "Provider" });
-    fireEvent.change(provider, { target: { value: "OpenAI" } });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+    expect(provider).toHaveValue("");
+    expect(save).toBeDisabled();
+    expect(provider.querySelector('option[value=""]')).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    fireEvent.change(provider, { target: { value: "OpenAI" } });
+    expect(save).toBeEnabled();
+
+    fireEvent.click(save);
+    await expectSavedLiteralSetting(saves, "provider", "OpenAI");
+    expect(saves[0].body.settings).toContainEqual({
+      key: "provider",
+      kind: "literal",
+      value: "OpenAI",
+    });
+  });
+
+  it("requires a registered provider after adding a new provider setting", async () => {
+    const { saves } = renderEditor("/model-profiles/new");
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Synthetic profile" },
+    });
+    await addSetting("provider");
+
+    const row = await settingRow("provider");
+    const provider = within(row).getByRole("combobox", { name: "Provider" });
+    const save = screen.getByRole("button", { name: "Save Model Profile" });
+    expect(provider).toHaveValue("");
+    expect(provider.querySelector('option[value=""]')).toBeDisabled();
+    expect(save).toBeDisabled();
+
+    fireEvent.change(provider, { target: { value: "OpenAI" } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
     await expectSavedLiteralSetting(saves, "provider", "OpenAI");
   });
 
@@ -591,7 +635,7 @@ describe("Model Profile setting references", () => {
       target: { value: "OpenAI" },
     });
     await addSetting("temperature");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
 
     resolveReference(REFERENCE);
 
@@ -605,6 +649,21 @@ describe("Model Profile setting references", () => {
       target: { value: "0.5" },
     });
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+  });
+
+  it("allows an untouched legacy provider string outside the current registry", async () => {
+    const current = existingCustomStringProviderProfile();
+    const { saves } = renderEditor("/model-profiles/base", [current]);
+    const row = await settingRow("provider");
+
+    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
+    expect(within(row).getByRole("combobox", { name: "Provider" })).toHaveValue(
+      "OldCustomProvider",
+    );
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "provider", "OldCustomProvider");
   });
 
   it("keeps a provider-specific key custom after switching to another provider", async () => {

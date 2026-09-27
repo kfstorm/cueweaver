@@ -302,24 +302,29 @@ function ProfileForm({
       key === "provider"
         ? PROVIDER_REFERENCE
         : providerSettings.find((item) => item.key === key);
-    if (
+    const matchesControlledValue =
       setting?.kind === "literal" &&
       settingReference &&
-      !matchesSettingReference(setting.value, settingReference)
-    ) {
-      validationErrors.set(
-        key,
-        settingReference.choices?.length &&
-          matchesSettingReferenceType(setting.value, settingReference)
-          ? t("modelProfiles.selectSuggestedValue", { key })
-          : t("modelProfiles.invalidValue", {
-              type:
-                referenceTypeLabel(settingReference.type) ??
-                settingReference.type ??
-                "string",
-              key,
-            }),
-      );
+      (key === "provider"
+        ? typeof setting.value === "string" &&
+          setting.value.length > 0 &&
+          providerNames.includes(setting.value)
+        : matchesSettingReference(setting.value, settingReference));
+    if (setting?.kind === "literal" && settingReference && !matchesControlledValue) {
+      const message =
+        key === "provider"
+          ? t("modelProfiles.chooseProvider")
+          : settingReference.choices?.length &&
+              matchesSettingReferenceType(setting.value, settingReference)
+            ? t("modelProfiles.selectSuggestedValue", { key })
+            : t("modelProfiles.invalidValue", {
+                type:
+                  referenceTypeLabel(settingReference.type) ??
+                  settingReference.type ??
+                  "string",
+                key,
+              });
+      validationErrors.set(key, message);
     }
   }
   const change = (entry: ProfileSetting) => {
@@ -349,9 +354,12 @@ function ProfileForm({
     const key = newKey.trim();
     if (!key || keys.includes(key)) return;
     change({ key, kind: "literal", value: "" });
-    if (providerSettings.some((item) => item.key === key)) {
+    if (key === "provider" || providerSettings.some((item) => item.key === key)) {
       setReferenceControlledProviders((previous) =>
-        new Map(previous).set(key, effectiveProvider ?? null),
+        new Map(previous).set(
+          key,
+          key === "provider" ? null : (effectiveProvider ?? null),
+        ),
       );
     } else if (referencePending && effectiveProvider) {
       setReferenceControlledProviders((previous) =>
@@ -729,7 +737,9 @@ function LiteralEditor({
               onChange({ ...entry, value: event.target.value });
             }}
           >
-            <option value="">{t("modelProfiles.chooseProvider")}</option>
+            <option value="" disabled>
+              {t("modelProfiles.chooseProvider")}
+            </option>
             {typeof entry.value === "string" &&
               entry.value &&
               !providerNames.includes(entry.value) && (
