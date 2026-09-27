@@ -54,6 +54,7 @@
   "modelProfiles.save": "儲存模型設定檔",
   "modelProfiles.saving": "正在儲存…",
   "modelProfiles.valueType": "值類型",
+  "modelProfiles.expectedType": "PySubtrans 預期類型：{type}",
   "modelProfiles.value": "值",
   "modelProfiles.providerValue": "服務提供者",
   "modelProfiles.chooseProvider": "選擇服務提供者",

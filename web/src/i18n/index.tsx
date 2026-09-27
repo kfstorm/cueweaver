@@ -104,6 +104,7 @@ const ENGLISH = {
   "modelProfiles.save": "Save Model Profile",
   "modelProfiles.saving": "Saving…",
   "modelProfiles.valueType": "Value type",
+  "modelProfiles.expectedType": "PySubtrans expects: {type}",
   "modelProfiles.value": "Value",
   "modelProfiles.providerValue": "Provider",
   "modelProfiles.chooseProvider": "Choose a provider",

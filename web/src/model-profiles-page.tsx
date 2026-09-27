@@ -41,6 +41,22 @@ const inputValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
   type === "array" ? "string list" : (type ?? undefined);
+const settingTypeInfo = (
+  entry: ProfileSetting,
+  reference: SettingReference | undefined,
+  referenceGuided: boolean,
+) => {
+  const actualType = valueType(entry);
+  const referenceType = referenceTypeLabel(reference?.type);
+  const matchesReferenceType =
+    !referenceType ||
+    actualType === referenceType ||
+    (referenceType === "number" && actualType === "integer");
+  const lockTypeToReference = Boolean(
+    referenceType && (referenceGuided || matchesReferenceType),
+  );
+  return { actualType, referenceType, matchesReferenceType, lockTypeToReference };
+};
 const matchesSettingReference = (
   value: unknown,
   reference: SettingReference,
@@ -358,6 +374,17 @@ function ProfileForm({
           const entry = local.get(key);
           const parentEntry = inherited.get(key);
           const settingReference = providerSettings.find((item) => item.key === key);
+          const referenceGuided =
+            referenceAddedKeys.has(key) && Boolean(settingReference);
+          const typeEntry =
+            entry?.kind === "literal"
+              ? entry
+              : !entry && parentEntry
+                ? { key, kind: "literal" as const, value: parentEntry.value }
+                : undefined;
+          const typeInfo = typeEntry
+            ? settingTypeInfo(typeEntry, settingReference, referenceGuided)
+            : undefined;
           const effective =
             entry?.kind === "unset"
               ? undefined
@@ -377,18 +404,28 @@ function ProfileForm({
                         name: parentEntry?.source.name ?? "",
                       })}{" "}
                   ·{" "}
-                  {referenceTypeLabel(settingReference?.type) ??
-                    (entry
-                      ? valueType(entry)
-                      : parentEntry
-                        ? valueType({ key, kind: "literal", value: parentEntry.value })
-                        : "")}
+                  {typeInfo
+                    ? typeInfo.lockTypeToReference
+                      ? typeInfo.referenceType
+                      : typeInfo.actualType
+                    : entry?.kind === "unset"
+                      ? (referenceTypeLabel(settingReference?.type) ?? valueType(entry))
+                      : ""}
                 </span>
                 {settingReference?.description && (
                   <p className="field-help profile-setting-description">
                     {settingReference.description}
                   </p>
                 )}
+                {typeInfo?.referenceType &&
+                  !typeInfo.matchesReferenceType &&
+                  !referenceGuided && (
+                    <p className="field-help">
+                      {t("modelProfiles.expectedType", {
+                        type: typeInfo.referenceType,
+                      })}
+                    </p>
+                  )}
               </div>
               <span className="profile-value">
                 {effective === undefined
@@ -435,6 +472,7 @@ function ProfileForm({
                   key={`${key}:${effectiveProvider ?? ""}:${providerSettings.find((item) => item.key === key)?.type ?? ""}`}
                   entry={entry}
                   reference={settingReference}
+                  referenceGuided={referenceGuided}
                   providerNames={providerNames}
                   onChange={change}
                   onError={(message) => setParseError(key, message)}
@@ -513,19 +551,25 @@ function ProfileForm({
 function LiteralEditor({
   entry,
   reference,
+  referenceGuided,
   providerNames,
   onChange,
   onError,
 }: {
   entry: ProfileSetting;
   reference?: SettingReference;
+  referenceGuided: boolean;
   providerNames: string[];
   onChange: (entry: ProfileSetting) => void;
   onError: (message: string) => void;
 }) {
   const { t } = useI18n();
   const isKnownProvider = entry.key === "provider" && providerNames.length > 0;
-  const type = referenceTypeLabel(reference?.type) ?? valueType(entry);
+  const typeInfo = settingTypeInfo(entry, reference, referenceGuided);
+  const type =
+    typeInfo.lockTypeToReference && typeInfo.referenceType
+      ? typeInfo.referenceType
+      : typeInfo.actualType;
   const [raw, setRaw] = useState(inputValue(entry.value));
   const [editorType, setEditorType] = useState(type);
   const changeType = (next: string) => {
@@ -586,7 +630,7 @@ function LiteralEditor({
         ) : (
           <Select
             value={editorType}
-            disabled={Boolean(reference?.type)}
+            disabled={typeInfo.lockTypeToReference}
             onChange={(event) => changeType(event.target.value)}
           >
             {["string", "integer", "number", "boolean", "string list", "JSON"].map(
@@ -639,7 +683,7 @@ function LiteralEditor({
       ) : (
         <label>
           {t("modelProfiles.value")}
-          {reference?.choices?.length ? (
+          {typeInfo.lockTypeToReference && reference?.choices?.length ? (
             <Select
               value={String(entry.value)}
               onChange={(event) => {

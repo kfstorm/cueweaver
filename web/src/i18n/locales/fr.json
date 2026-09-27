@@ -54,6 +54,7 @@
   "modelProfiles.save": "Enregistrer le profil de modèle",
   "modelProfiles.saving": "Enregistrement…",
   "modelProfiles.valueType": "Type de valeur",
+  "modelProfiles.expectedType": "Type attendu par PySubtrans : {type}",
   "modelProfiles.value": "Valeur",
   "modelProfiles.providerValue": "Fournisseur",
   "modelProfiles.chooseProvider": "Choisir un fournisseur",

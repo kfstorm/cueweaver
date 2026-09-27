@@ -10,7 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { I18nProvider, setActiveLocale } from "../src/i18n";
+import { I18nProvider, setActiveLocale, translate } from "../src/i18n";
 import { ModelProfileEditor } from "../src/model-profiles-page";
 import type { ModelProfile, ModelProfileReference } from "../src/model-profiles";
 import { ThemeProvider } from "../src/theme-provider";
@@ -87,6 +87,22 @@ function profile(
   };
 }
 
+function existingStringTemperatureProfile(): ModelProfile {
+  const source = { id: "existing", name: "existing" };
+  return profile(
+    "existing",
+    null,
+    [
+      { key: "provider", kind: "literal", value: "OpenAI" },
+      { key: "temperature", kind: "literal", value: "0.5" },
+    ],
+    [
+      { key: "provider", value: "OpenAI", source },
+      { key: "temperature", value: "0.5", source },
+    ],
+  );
+}
+
 const inheritedOpenAiProvider = {
   key: "provider",
   value: "OpenAI",
@@ -138,6 +154,7 @@ function renderEditor(
                 element={<ModelProfileEditor />}
               />
               <Route path="/model-profiles" element={<div />} />
+              <Route path="/settings/model-profiles" element={<div />} />
             </Routes>
           </MemoryRouter>
         </I18nProvider>
@@ -162,6 +179,26 @@ async function addProvider(name: string) {
   await addSetting("provider");
   fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
     target: { value: name },
+  });
+}
+
+async function settingRow(key: string): Promise<HTMLElement> {
+  await screen.findByLabelText(/New setting key/);
+  const row = [...document.querySelectorAll<HTMLElement>(".profile-setting")].find(
+    (item) => item.textContent?.includes(key),
+  );
+  if (!row) throw new Error(`Setting ${key} was not rendered`);
+  return row;
+}
+
+async function expectSavedLiteralSetting(
+  saves: Array<{ method: string; body: Record<string, unknown> }>,
+  key: string,
+  value: unknown,
+) {
+  await waitFor(() => expect(saves).toHaveLength(1));
+  expect(saves[0].body).toMatchObject({
+    settings: expect.arrayContaining([{ key, kind: "literal", value }]),
   });
 }
 
@@ -264,6 +301,85 @@ describe("Model Profile setting references", () => {
       [...datalist.querySelectorAll("option")].map((option) => option.value),
     ).not.toContain("reasoning_effort");
     expect(keyInput).toHaveValue("");
+  });
+
+  it("preserves an existing value whose type differs from the provider reference", async () => {
+    const current = existingStringTemperatureProfile();
+    const { saves } = renderEditor("/model-profiles/existing", [current]);
+
+    const row = await settingRow("temperature");
+    const type = within(row).getByLabelText("Value type");
+    expect(type).toHaveValue("string");
+    expect(type).toBeEnabled();
+    expect(row).toHaveTextContent(
+      translate("modelProfiles.expectedType", { type: "number" }),
+    );
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Existing profile" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "temperature", "0.5");
+  });
+
+  it("converts a mismatched existing setting only after the user changes its type", async () => {
+    const current = existingStringTemperatureProfile();
+    const { saves } = renderEditor("/model-profiles/existing", [current]);
+
+    const row = await settingRow("temperature");
+    fireEvent.change(within(row).getByLabelText("Value type"), {
+      target: { value: "number" },
+    });
+    expect(within(row).getByLabelText("Value type")).toHaveValue("number");
+    expect(row).not.toHaveTextContent(
+      translate("modelProfiles.expectedType", { type: "number" }),
+    );
+    fireEvent.change(within(row).getByLabelText("Value"), {
+      target: { value: "0.5" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "temperature", 0.5);
+  });
+
+  it("preserves the inherited type and value when a setting is overridden", async () => {
+    const inheritedTemperature = {
+      key: "temperature",
+      value: "0.5",
+      source: { id: "base", name: "base" },
+    };
+    const base = profile(
+      "base",
+      null,
+      [
+        { key: "provider", kind: "literal", value: "OpenAI" },
+        { key: "temperature", kind: "literal", value: "0.5" },
+      ],
+      [inheritedOpenAiProvider, inheritedTemperature],
+    );
+    const child = profile(
+      "child",
+      "base",
+      [],
+      [inheritedOpenAiProvider, inheritedTemperature],
+    );
+    const { saves } = renderEditor("/model-profiles/child", [base, child]);
+
+    let row = await settingRow("temperature");
+    expect(row).toHaveTextContent("· string");
+    expect(row).toHaveTextContent(
+      translate("modelProfiles.expectedType", { type: "number" }),
+    );
+
+    fireEvent.click(within(row).getByRole("button", { name: "Override" }));
+    row = await settingRow("temperature");
+    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
+    expect(within(row).getByLabelText("Value type")).toBeEnabled();
+    expect(within(row).getByLabelText("Value")).toHaveValue("0.5");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "temperature", "0.5");
   });
 
   it("validates a typed setting added before reference metadata arrives", async () => {
@@ -377,14 +493,9 @@ describe("Model Profile setting references", () => {
     );
     renderEditor("/model-profiles/child", [base, child]);
 
-    await screen.findByLabelText(/New setting key/);
-    let row = [...document.querySelectorAll(".profile-setting")].find((item) =>
-      item.textContent?.includes("temperature"),
-    )!;
+    let row = await settingRow("temperature");
     fireEvent.click(within(row).getByRole("button", { name: "Override" }));
-    row = [...document.querySelectorAll(".profile-setting")].find((item) =>
-      item.textContent?.includes("temperature"),
-    )!;
+    row = await settingRow("temperature");
     fireEvent.click(within(row).getByRole("button", { name: "Unset" }));
     expect(row.querySelector(".profile-value")).not.toHaveTextContent("0.25");
     expect(within(row).getAllByRole("button")).toHaveLength(1);

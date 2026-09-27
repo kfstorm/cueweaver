@@ -54,6 +54,7 @@
   "modelProfiles.save": "モデルプロファイルを保存",
   "modelProfiles.saving": "保存中…",
   "modelProfiles.valueType": "値の型",
+  "modelProfiles.expectedType": "PySubtrans が想定する型: {type}",
   "modelProfiles.value": "値",
   "modelProfiles.providerValue": "プロバイダー",
   "modelProfiles.chooseProvider": "プロバイダーを選択",
