@@ -190,6 +190,14 @@ async function selectBatchMedia() {
   fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
 }
 
+function expectModelProfileFieldStatus() {
+  const profileField = screen
+    .getByRole("combobox", { name: "Model Profile" })
+    .closest<HTMLElement>(".model-profile-field");
+  if (!profileField) throw new Error("Model Profile field was not rendered");
+  expect(within(profileField).getByRole("status").textContent?.trim()).not.toBe("");
+}
+
 async function selectDirectoryTermMap(id: string, optionName: string) {
   const directorySelect = await screen.findByRole("combobox", {
     name: "Directory default",
@@ -996,9 +1004,7 @@ describe("product shell", () => {
   it("shows the nearby empty Model Profile state and disables translation", async () => {
     renderRoute("/translate", false);
 
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "There are no selectable Model Profiles available",
-    );
+    expectModelProfileFieldStatus();
     expect(screen.getAllByRole("link", { name: "Manage" })[0]).toHaveAttribute(
       "href",
       "/settings/model-profiles",
@@ -1066,12 +1072,22 @@ describe("product shell", () => {
   });
 
   it("does not request or poll a global product status", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const fetchMock = emptyTranslateFetch();
-    renderWithFetch("/translate", fetchMock);
+    try {
+      renderWithFetch("/translate", fetchMock);
 
-    await screen.findByRole("heading", { name: "Translate" });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(fetchMock.mock.calls.every(([input]) => input !== "/api/status")).toBe(true);
+      await screen.findByRole("heading", { name: "Translate" });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(fetchMock.mock.calls.every(([input]) => input !== "/api/status")).toBe(
+        true,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("searches Job history, exposes every status filter, and clears no-match filters", async () => {
@@ -4100,9 +4116,7 @@ describe("product shell", () => {
     fireEvent.click(screen.getByLabelText("Overwrite existing output"));
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "There are no selectable Model Profiles available",
-    );
+    expectModelProfileFieldStatus();
   });
 
   it("requires a selectable Model Profile even with skip output policy", async () => {

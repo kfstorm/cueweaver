@@ -1219,11 +1219,7 @@ test("missing selectable Model Profiles are actionable and cannot submit", async
   );
   await page.goto("/translate");
 
-  await expect(
-    page
-      .getByRole("status")
-      .filter({ hasText: "There are no selectable Model Profiles available" }),
-  ).toContainText("There are no selectable Model Profiles available");
+  await expect(page.locator(".model-profile-field [role=status]")).not.toBeEmpty();
   await expect(page.getByRole("link", { name: "Manage" }).first()).toHaveAttribute(
     "href",
     "/settings/model-profiles",

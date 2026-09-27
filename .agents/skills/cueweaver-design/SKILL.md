@@ -90,7 +90,8 @@ when reused.
 
 ## Accessibility
 
-- Use shadcn/ui or Radix-backed controls with visible labels and semantic HTML.
+- Use shadcn/ui or Radix-backed controls where available. Native controls must
+  keep visible labels and semantic HTML.
 - Maintain WCAG AA contrast and a visible two-pixel focus ring. Do not rely on
   color alone for selection or errors.
 - Announce asynchronous state changes with `status` or `alert` semantics.
