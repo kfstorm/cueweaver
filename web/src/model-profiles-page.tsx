@@ -301,22 +301,8 @@ function ProfileForm({
   const addSetting = () => {
     const key = newKey.trim();
     if (!key || keys.includes(key)) return;
-    const settingReference = providerSettings.find((item) => item.key === key);
-    const settingType = key === "provider" ? "string" : settingReference?.type;
     change({ key, kind: "literal", value: "" });
     setReferenceAddedKeys((previous) => new Set(previous).add(key));
-    if (
-      settingReference?.choices?.length ||
-      (settingType !== null && settingType !== undefined && settingType !== "string")
-    ) {
-      setParseError(
-        key,
-        t("modelProfiles.invalidValue", {
-          type: referenceTypeLabel(settingType) ?? settingType ?? "string",
-          key,
-        }),
-      );
-    }
     setNewKey("");
   };
   return (

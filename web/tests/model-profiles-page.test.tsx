@@ -58,6 +58,12 @@ const REFERENCE: ModelProfileReference = {
         description: "Synthetic reasoning description",
         choices: ["none", "low", "high"],
       },
+      {
+        key: "free_plan",
+        type: "boolean",
+        description: null,
+        choices: null,
+      },
     ],
   },
 };
@@ -152,6 +158,13 @@ async function addSetting(key: string) {
   return keyInput;
 }
 
+async function addProvider(name: string) {
+  await addSetting("provider");
+  fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
+    target: { value: name },
+  });
+}
+
 afterEach(() => {
   cleanup();
   setActiveLocale("en");
@@ -165,15 +178,12 @@ describe("Model Profile setting references", () => {
     const suggestions = document.getElementById("model-profile-setting-reference");
     expect(suggestions?.querySelector('option[value="provider"]')).toBeInTheDocument();
 
-    await addSetting("provider");
+    await addProvider("OpenAI");
     const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
       row.textContent?.includes("provider"),
     )!;
     expect(within(providerRow).getByLabelText("Value type")).toHaveValue("string");
     expect(within(providerRow).getByLabelText("Value type")).toBeDisabled();
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-      target: { value: "OpenAI" },
-    });
     expect(keyInput).toHaveValue("");
 
     await addSetting("api_key");
@@ -287,12 +297,27 @@ describe("Model Profile setting references", () => {
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
 
+  it("keeps a provider-specific key custom after switching to another provider", async () => {
+    renderEditor("/model-profiles/new");
+    await addProvider("OpenAI");
+
+    await addSetting("free_plan");
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+    const providerValue = screen.getByRole("combobox", { name: "Provider" });
+    fireEvent.change(providerValue, { target: { value: "DeepSeek" } });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled(),
+    );
+    const freePlanRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
+      row.textContent?.includes("free_plan"),
+    )!;
+    expect(within(freePlanRow).getByLabelText("Value type")).toBeEnabled();
+  });
+
   it("uses numeric types and static choices while leaving dynamic model values editable", async () => {
     renderEditor("/model-profiles/new");
-    await addSetting("provider");
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-      target: { value: "OpenAI" },
-    });
+    await addProvider("OpenAI");
 
     await addSetting("temperature");
     let rows = [...document.querySelectorAll(".profile-setting")];
