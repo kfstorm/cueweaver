@@ -266,6 +266,7 @@ describe("Model Profile setting references", () => {
     )!;
     expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("number");
     const temperatureValue = within(temperatureRow).getByLabelText("Value");
+    expect(within(temperatureRow).getByLabelText("Value type")).toBeDisabled();
     expect(temperatureValue.tagName).toBe("INPUT");
     expect(temperatureValue).toHaveValue("");
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();

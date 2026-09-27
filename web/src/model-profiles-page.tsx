@@ -548,6 +548,7 @@ function LiteralEditor({
         ) : (
           <Select
             value={editorType}
+            disabled={Boolean(reference?.type)}
             onChange={(event) => changeType(event.target.value)}
           >
             {["string", "integer", "number", "boolean", "string list", "JSON"].map(
