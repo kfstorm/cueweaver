@@ -2,13 +2,12 @@ import {
   ArrowLeftIcon,
   BriefcaseIcon,
   CheckCircleIcon,
+  GearSixIcon,
   ListChecksIcon,
   MagnifyingGlassIcon,
-  SlidersHorizontalIcon,
   SpinnerGapIcon,
   TranslateIcon,
   UploadSimpleIcon,
-  WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
@@ -31,6 +30,7 @@ import {
   Link,
   Route,
   Routes,
+  useLocation,
   useNavigate,
 } from "react-router-dom";
 
@@ -48,7 +48,6 @@ import {
   type UnsupportedSubtitleCandidate,
 } from "./browse";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
-import { useProductStatus } from "./status";
 import {
   useCreateBatchJobs,
   useCreateJob,
@@ -68,7 +67,7 @@ import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
 import { ModelProfilesPage, ModelProfileEditor } from "./model-profiles-page";
 import { useModelProfiles } from "./model-profiles";
 import { ThemeProvider } from "./theme-provider";
-import { ThemeToggle } from "./theme-toggle";
+import { GeneralSettingsPage, SettingsArea } from "./settings-page";
 import {
   formatError,
   getErrorDetail,
@@ -91,22 +90,13 @@ import {
 } from "./term-maps";
 
 const routes: Array<{
-  labelKey:
-    | "navigation.translate"
-    | "navigation.jobs"
-    | "navigation.termMaps"
-    | "navigation.modelProfiles";
+  labelKey: "navigation.translate" | "navigation.jobs" | "navigation.settings";
   path: string;
   icon: Icon;
 }> = [
   { labelKey: "navigation.translate", path: "/translate", icon: TranslateIcon },
   { labelKey: "navigation.jobs", path: "/jobs", icon: BriefcaseIcon },
-  { labelKey: "navigation.termMaps", path: "/term-maps", icon: ListChecksIcon },
-  {
-    labelKey: "navigation.modelProfiles",
-    path: "/model-profiles",
-    icon: SlidersHorizontalIcon,
-  },
+  { labelKey: "navigation.settings", path: "/settings", icon: GearSixIcon },
 ];
 const DIRECTORY_TERM_MAP_VALUE = "__directory_default__";
 const TARGET_LANGUAGE_STORAGE_KEY = "cueweaver.target-language";
@@ -144,40 +134,13 @@ function Navigation({ mobile = false }: { mobile?: boolean }) {
           <span>{t(labelKey)}</span>
         </NavLink>
       ))}
-      {mobile && <LanguageSelector />}
     </nav>
   );
 }
 
-function LanguageSelector() {
-  const { locale, setLocale, t, localeOptions } = useI18n();
-  return (
-    <label className="language-selector">
-      <span className="language-selector-label">{t("language.label")}</span>
-      <Select
-        value={locale}
-        aria-label={t("language.change")}
-        onChange={(event) => setLocale(event.target.value as typeof locale)}
-      >
-        {localeOptions.map((option) => (
-          <option key={option.code} value={option.code}>
-            {option.label}
-          </option>
-        ))}
-      </Select>
-    </label>
-  );
-}
-
 function Shell() {
-  const { t } = useI18n();
-  const status = useProductStatus();
   const jobs = useJobs();
   const jobNotifications = useJobNotifications(jobs.data);
-  const ready =
-    status.data?.api.ready &&
-    status.data?.roots.ready &&
-    status.data.translation_provider.ready;
   return (
     <div className="product-shell">
       <aside className="sidebar">
@@ -188,18 +151,6 @@ function Shell() {
           <span>CueWeaver</span>
         </div>
         <Navigation />
-        <div className="runtime-summary">
-          <span className={cn("status-dot", ready && "ready")} />
-          {status.isPending
-            ? t("runtime.checking")
-            : status.data && !status.data.translation_provider.ready
-              ? t("runtime.provider")
-              : ready
-                ? t("runtime.ready")
-                : t("runtime.unavailable")}
-        </div>
-        <ThemeToggle className="sidebar-theme-toggle" />
-        <LanguageSelector />
       </aside>
       <main className="workspace">
         <Outlet />
@@ -210,42 +161,6 @@ function Shell() {
   );
 }
 
-function TranslationRuntimeNotice() {
-  const { t } = useI18n();
-  const status = useProductStatus();
-  if (status.isPending) return null;
-  if (status.isError) {
-    return (
-      <Guidance
-        title={t("runtime.unreachableTitle")}
-        tone="error"
-        action={
-          <Button type="button" variant="outline" onClick={() => void status.refetch()}>
-            {t("runtime.tryAgain")}
-          </Button>
-        }
-      >
-        {t("runtime.unreachableDetail")}
-      </Guidance>
-    );
-  }
-  if (!status.data.api.ready || !status.data.roots.ready) {
-    return (
-      <Guidance title={t("runtime.attentionTitle")} tone="warning">
-        {t("runtime.attentionDetail")}
-      </Guidance>
-    );
-  }
-  if (!status.data.translation_provider.ready) {
-    return (
-      <Guidance title={t("runtime.providerNotConfiguredTitle")} tone="warning">
-        {t("runtime.providerNotConfiguredDetail")}
-      </Guidance>
-    );
-  }
-  return null;
-}
-
 type TranslationStepState = {
   batchMode: boolean;
   selectedMedia: string | null;
@@ -254,10 +169,9 @@ type TranslationStepState = {
   selectedCandidate: SubtitleCandidate | undefined;
   targetLanguage: string;
   outputSuffixError: string | null;
-  providerReady: boolean;
-  providerPending: boolean;
-  runtimeReady: boolean;
-  runtimeError: boolean;
+  profilesPending: boolean;
+  profilesError: boolean;
+  hasSelectableProfile: boolean;
 };
 
 function getNextTranslationStep({
@@ -268,15 +182,11 @@ function getNextTranslationStep({
   selectedCandidate,
   targetLanguage,
   outputSuffixError,
-  providerReady,
-  providerPending,
-  runtimeReady,
-  runtimeError,
+  profilesPending,
+  profilesError,
+  hasSelectableProfile,
   t,
 }: TranslationStepState & { t: ReturnType<typeof useI18n>["t"] }): string {
-  if (providerPending) return t("translate.nextChecking");
-  if (runtimeError) return t("translate.nextRuntimeError");
-  if (!runtimeReady) return t("translate.nextConfigureRoots");
   if (!batchMode && selectedMedia === null) return t("translate.nextChooseMedia");
   if (batchMode && batchMediaCount === 0) {
     return t("translate.nextChooseMediaBatch");
@@ -290,9 +200,9 @@ function getNextTranslationStep({
   }
   if (!targetLanguage.trim()) return t("translate.nextChooseLanguage");
   if (outputSuffixError) return outputSuffixError;
-  if (!providerReady) {
-    return t("translate.nextProviderUnavailable");
-  }
+  if (profilesPending) return t("modelProfiles.loading");
+  if (profilesError) return t("modelProfiles.loadFailed");
+  if (!hasSelectableProfile) return t("modelProfiles.noSelectableProfiles");
   const count = batchMode ? batchMediaCount : 1;
   return t("translate.nextReady", {
     count,
@@ -365,14 +275,27 @@ function OutputSuffixError({ error }: { error: string | null }) {
   ) : null;
 }
 
+function LegacySettingsRedirect({
+  section,
+}: {
+  section: "model-profiles" | "term-maps";
+}) {
+  const { pathname, search, hash } = useLocation();
+  const legacyPrefix = `/${section}`;
+  const suffix = pathname.slice(legacyPrefix.length);
+  return <Navigate to={`/settings/${section}${suffix}${search}${hash}`} replace />;
+}
+
 function Translate() {
   const { locale, t } = useI18n();
   const queryClient = useQueryClient();
   const createJob = useCreateJob();
   const createBatchJobs = useCreateBatchJobs();
   const navigate = useNavigate();
-  const status = useProductStatus();
   const profiles = useModelProfiles();
+  const selectableProfiles =
+    profiles.data?.filter((profile) => profile.selectable) ?? [];
+  const hasSelectableProfile = profiles.isSuccess && selectableProfiles.length > 0;
   const [modelProfileId, setModelProfileId] = useState("");
   const selectedProfile = profiles.data?.find(
     (profile) => profile.id === modelProfileId && profile.selectable,
@@ -515,14 +438,6 @@ function Translate() {
       )
     : null;
   const outputSuffixError = validateOutputSuffix(outputSuffix, t);
-  const providerReady =
-    !status.isError &&
-    status.data?.translation_provider.ready === true &&
-    !!selectedProfile;
-  const runtimeReady =
-    !status.isError &&
-    status.data?.api.ready === true &&
-    status.data?.roots.ready === true;
   const updateTargetLanguage = (value: string) => {
     setTargetLanguage(value);
     if (!suffixEdited.current) setOutputSuffix(value);
@@ -539,8 +454,8 @@ function Translate() {
         selectedCandidate.format !== undefined)) &&
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
-    runtimeReady &&
-    providerReady &&
+    hasSelectableProfile &&
+    !!selectedProfile &&
     !createJob.isSuccess &&
     !createBatchJobs.isSuccess &&
     !createJob.isPending &&
@@ -555,10 +470,9 @@ function Translate() {
     selectedCandidate,
     targetLanguage,
     outputSuffixError,
-    providerReady,
-    providerPending: status.isPending || profiles.isPending,
-    runtimeReady,
-    runtimeError: status.isError,
+    profilesPending: profiles.isPending,
+    profilesError: profiles.isError,
+    hasSelectableProfile,
     t,
   });
 
@@ -593,7 +507,6 @@ function Translate() {
         ]}
       />
       <p className="page-note">{t("translate.backgroundNote")}</p>
-      <TranslationRuntimeNotice />
       <section className="workflow-panel" aria-labelledby="source-title">
         <div className="step-index">01</div>
         <div className="step-content">
@@ -848,29 +761,57 @@ function Translate() {
         <div className="step-content">
           <h2 id="configure-title">{t("translate.configure")}</h2>
           <p>{t("translate.configureDetail")}</p>
-          <label htmlFor="model-profile-select">
-            {t("modelProfiles.title")}
+          <div className="model-profile-field">
+            <div className="selector-heading">
+              <label htmlFor="model-profile-select">{t("modelProfiles.title")}</label>
+              <Link to="/settings/model-profiles">{t("settings.manage")}</Link>
+            </div>
             <Select
               id="model-profile-select"
               value={selectedProfile?.id ?? ""}
+              disabled={!hasSelectableProfile || profiles.isError}
               onChange={(event) => setModelProfileId(event.target.value)}
             >
-              <option value="">{t("modelProfiles.choose")}</option>
-              {profiles.data
-                ?.filter((profile) => profile.selectable)
-                .map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </option>
-                ))}
+              <option value="">
+                {profiles.isPending
+                  ? t("modelProfiles.loading")
+                  : profiles.isError
+                    ? t("modelProfiles.loadFailed")
+                    : !hasSelectableProfile
+                      ? t("modelProfiles.noSelectableProfiles")
+                      : t("modelProfiles.choose")}
+              </option>
+              {selectableProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
             </Select>
-          </label>
-          {profiles.data?.every((profile) => !profile.selectable) && (
-            <p className="field-help">
-              <Link to="/model-profiles">{t("modelProfiles.createFirst")}</Link>
-            </p>
-          )}
-          {profiles.isError && <p role="alert">{profiles.error.message}</p>}
+            {profiles.isPending && (
+              <p className="field-help" role="status">
+                {t("modelProfiles.loading")}
+              </p>
+            )}
+            {profiles.isError && (
+              <div className="field-recovery">
+                <div className="form-error" role="alert">
+                  <LocalizedErrorMessage error={profiles.error} />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void profiles.refetch()}
+                >
+                  {t("common.tryAgain")}
+                </Button>
+              </div>
+            )}
+            {profiles.isSuccess && !hasSelectableProfile && (
+              <p className="field-help" role="status">
+                {t("modelProfiles.noSelectableProfilesDetail")}
+              </p>
+            )}
+          </div>
           <label htmlFor="common-target-language">
             {t("translate.commonTargetLanguage")}
             <Select
@@ -921,7 +862,10 @@ function Translate() {
             {t("translate.targetLanguageHelp")}
           </span>
           <div className="term-map-field">
-            <label htmlFor="term-map-select">{t("translate.termMap")}</label>
+            <div className="selector-heading">
+              <label htmlFor="term-map-select">{t("translate.termMap")}</label>
+              <Link to="/settings/term-maps">{t("settings.manage")}</Link>
+            </div>
             <Select
               id="term-map-select"
               ref={termMapSelectRef}
@@ -966,10 +910,7 @@ function Translate() {
             </span>
             <span className="field-help">{t("translate.termMapHelp")}</span>
             {termMaps.data?.term_maps.length === 0 && (
-              <span className="field-help">
-                {t("translate.noTermMapsHelp")}{" "}
-                <Link to="/term-maps">{t("termMaps.createFirst")}</Link>.
-              </span>
+              <span className="field-help">{t("translate.noTermMapsHelp")}</span>
             )}
             {termMaps.isPending && (
               <span className="field-help" role="status">
@@ -1122,7 +1063,6 @@ function Translate() {
         ) : (
           <>
             <p className="next-action">{nextTranslationStep}</p>
-            <ProviderState />
             <Button
               disabled={!canSubmit}
               onClick={() => {
@@ -2214,44 +2154,6 @@ function MediaEntry({
   );
 }
 
-function ProviderState() {
-  const { t } = useI18n();
-  const status = useProductStatus();
-  if (status.isPending) {
-    return (
-      <div role="status" className="provider-state">
-        <SpinnerGapIcon className="spin" size={18} /> {t("runtime.checking")}
-      </div>
-    );
-  }
-  if (status.isError) {
-    return (
-      <div role="alert" className="provider-state error">
-        <WarningCircleIcon size={18} /> <LocalizedErrorMessage error={status.error} />
-      </div>
-    );
-  }
-  if (!status.data.translation_provider.ready) {
-    return (
-      <div role="status" className="provider-state warning">
-        <WarningCircleIcon size={18} />
-        <div>
-          {t("runtime.providerNotConfiguredTitle")}
-          <details>
-            <summary>{t("translate.showErrorDetails")}</summary>
-            <p className="field-help">{status.data.translation_provider.message}</p>
-          </details>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div role="status" className="provider-state ready">
-      <CheckCircleIcon size={18} weight="fill" /> {t("translate.providerReady")}
-    </div>
-  );
-}
-
 function TermMapsPage() {
   const { t } = useI18n();
   const maps = useTermMaps();
@@ -2423,7 +2325,7 @@ function TermMapsPage() {
 
   return (
     <>
-      <PageHeader title={t("termMaps.title")} detail={t("termMaps.detail")} />
+      <PageHeader title={t("settings.termMaps")} detail={t("termMaps.detail")} />
       <Guidance title={t("termMaps.guidanceTitle")}>{t("termMaps.guidance")}</Guidance>
       <section className="concept-help" aria-label={t("termMaps.createHelpLabel")}>
         <strong>{t("termMaps.createHelpTitle")}</strong>
@@ -2843,9 +2745,24 @@ export function App() {
             <Route path="translate" element={<Translate />} />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="jobs/:jobId" element={<JobsPage />} />
-            <Route path="term-maps" element={<TermMapsPage />} />
-            <Route path="model-profiles" element={<ModelProfilesPage />} />
-            <Route path="model-profiles/:profileId" element={<ModelProfileEditor />} />
+            <Route path="settings" element={<SettingsArea />}>
+              <Route index element={<Navigate to="general" replace />} />
+              <Route path="general" element={<GeneralSettingsPage />} />
+              <Route path="model-profiles" element={<ModelProfilesPage />} />
+              <Route
+                path="model-profiles/:profileId"
+                element={<ModelProfileEditor />}
+              />
+              <Route path="term-maps" element={<TermMapsPage />} />
+            </Route>
+            <Route
+              path="model-profiles/*"
+              element={<LegacySettingsRedirect section="model-profiles" />}
+            />
+            <Route
+              path="term-maps/*"
+              element={<LegacySettingsRedirect section="term-maps" />}
+            />
             <Route path="*" element={<Navigate to="/translate" replace />} />
           </Route>
         </Routes>

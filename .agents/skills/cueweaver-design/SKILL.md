@@ -1,6 +1,6 @@
 ---
 name: cueweaver-design
-description: Apply CueWeaver's product design system whenever creating or changing its React shell, Translate flow, Jobs UI, Term maps UI, runtime states, navigation, typography, spacing, or responsive behavior. Treat the rules below as an implementation contract, not optional visual advice.
+description: Apply CueWeaver's product design system whenever creating or changing its React shell, Translate flow, Jobs UI, Settings, Term maps, workflow states, navigation, typography, spacing, or responsive behavior. Treat the rules below as an implementation contract, not optional visual advice.
 ---
 
 # CueWeaver Design
@@ -21,21 +21,22 @@ interaction rules below across every product route.
 
 ## Theme Principles
 
-- Treat light and dark as first-class visual systems, not as an inverted
-  screenshot. Keep the cool-neutral canvas and indigo emphasis recognizable in
-  both themes while recalibrating surfaces, text, borders, and status colors.
+- Treat light and dark as first-class visual systems. Keep the cool-neutral
+  canvas and indigo emphasis recognizable in both themes while recalibrating
+  surfaces, text, borders, and status colors.
 - Use color by role: canvas, surface, raised surface, primary text, muted text,
   border, accent, focus, success, warning, and error. A theme change may alter
   value and contrast, but not the meaning of a role.
 - Prefer the system theme for first-time visitors and remember a deliberate
   user choice. Theme changes should be immediate, reversible, and quiet; never
   interrupt a workflow with a confirmation or a decorative transition.
-- Place theme controls according to information architecture, not navigation:
-  use the desktop sidebar footer and the mobile page-header action area. Keep
-  bottom navigation reserved for the three product destinations.
-- Make the control easy to recognize: use a concise visible label such as
-  `Dark mode`, show its current state, and maintain a 44px mobile touch target
-  without giving it the visual weight of a primary workflow action.
+- Store the theme preference as `system`, `light`, or `dark`; no storage key
+  means `system`. Listen for system appearance changes while that preference is
+  active, and keep System, Light, and Dark explicit in the control.
+- Put theme and interface-language preferences in Settings → General. Keep the
+  three product destinations in primary navigation and mobile bottom navigation.
+- Keep theme choices clearly labeled, with a 44px mobile touch target and less
+  visual weight than a primary workflow action.
 - Recheck contrast and hierarchy in both themes, including primary actions,
   badges, focus rings, selected states, and success/warning/error states.
 
@@ -77,12 +78,13 @@ when reused.
 
 ## Product States
 
-- Design loading, empty, error, disabled, and ready states with the same layout
+- Design loading, empty, error, disabled, and available states with the same layout
   footprint so status changes do not shift the workflow.
 - Show coarse Job states only. Never invent percentages or imply provider
   progress that CueWeaver does not know.
-- Provider unavailability must preserve browsing and management actions while
-  disabling Translation submission with a nearby actionable message.
+- When Model Profiles have no selectable profile or fail to load, preserve Media
+  browsing and nearby Settings management actions. Explain the state beside the
+  Model Profile field and disable Translation submission.
 - Keep errors friendly and expose approved structured context on demand. Never
   render tracebacks, credentials, provider details, or absolute roots.
 
@@ -90,7 +92,7 @@ when reused.
 
 - Use shadcn/ui or Radix-backed controls with visible labels and semantic HTML.
 - Maintain WCAG AA contrast and a visible two-pixel focus ring. Do not rely on
-  color alone for selection, errors, or readiness.
+  color alone for selection or errors.
 - Announce asynchronous state changes with `status` or `alert` semantics.
 - Preserve logical focus order and full keyboard operation at every viewport.
 - Honor `prefers-reduced-motion`; motion is limited to direct interaction and
@@ -114,10 +116,10 @@ inspection alone.
   browser inspection path. Before running a browser command, load its current
   workflow with `agent-browser skills get core`.
 - Check 1280x800 and 390x844 viewports with Agent Browser.
-- Check Translate, Jobs, and Term maps, including at least one populated and
-  one empty/loading/error state affected by the change.
-- Check both light and dark themes, including the desktop sidebar switch, the
-  mobile page-header switch, hierarchy, contrast, and system-theme fallback.
+- Check Translate, Jobs, Settings, and Term maps at affected loading, empty,
+  error, and populated states.
+- Check System, Light, and Dark preferences at desktop and mobile widths,
+  including system-theme changes, hierarchy, and contrast.
 - Inspect computed font size, line height, control height, gap, and margins for
   the changed controls. Same-kind controls must not silently diverge.
 - Confirm there is no horizontal overflow, fixed-navigation overlap, clipped
@@ -134,6 +136,6 @@ Browser inspection.
 ## Completion Check
 
 Before finishing a UI change, verify all affected routes at desktop and mobile
-widths, keyboard focus, provider unavailable behavior, loading/error states,
+  widths, keyboard focus, Model Profile loading/error/empty states,
 and every visible string. The change is incomplete if the density contract or
 visual verification checklist has not been checked.

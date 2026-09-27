@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app";
 import type { MediaDirectory, MediaDiscovery } from "../src/browse";
+import type { ModelProfile } from "../src/model-profiles";
 import {
   getLocaleTable,
   setActiveLocale,
@@ -26,6 +27,24 @@ const CHARACTERS_TERM_MAP: TermMapSummary = {
   name: "Characters",
   entry_count: 1,
   updated_at: "2026-08-13T12:00:00Z",
+};
+
+const SELECTABLE_PROFILE: ModelProfile = {
+  id: "profile-1",
+  name: "Test profile",
+  parent_id: null,
+  selectable: true,
+  deletable: true,
+  created_at: "2026-08-13T12:00:00Z",
+  updated_at: "2026-08-13T12:00:00Z",
+  settings: [],
+  effective_settings: [
+    {
+      key: "provider",
+      value: "OpenAI",
+      source: { id: "profile-1", name: "Test profile" },
+    },
+  ],
 };
 
 const BATCH_MEDIA: MediaDirectory = {
@@ -144,6 +163,27 @@ function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
 
+function emptyTranslateFetch() {
+  return vi.fn().mockImplementation(async (input: string) => {
+    if (input === "/api/media/browse") return emptyMediaResponse();
+    if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+    return jobListResponse([]);
+  });
+}
+
+function mockSystemAppearance(initialMatches: boolean) {
+  let onChange: (() => void) | undefined;
+  const mediaQuery = {
+    matches: initialMatches,
+    addEventListener: vi.fn((_event: string, listener: () => void) => {
+      onChange = listener;
+    }),
+    removeEventListener: vi.fn(),
+  };
+  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mediaQuery));
+  return { mediaQuery, dispatchChange: () => onChange?.() };
+}
+
 async function selectBatchMedia() {
   fireEvent.click(await screen.findByLabelText("Batch mode"));
   fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
@@ -244,7 +284,6 @@ function createDirectoryMutationFetchMock(
   const fetchMock = vi
     .fn()
     .mockImplementation(async (input: string, init?: RequestInit) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") {
         return jsonResponse({ term_maps: termMaps });
       }
@@ -270,47 +309,18 @@ function createDirectoryMutationFetchMock(
   return { fetchMock, scenario };
 }
 
-function statusResponse(
-  providerReady = true,
-  runtime: { apiReady?: boolean; rootsReady?: boolean } = {},
+function renderWithFetch(
+  path: string,
+  fetchImplementation: typeof fetch,
+  modelProfiles: ModelProfile[] | null = [SELECTABLE_PROFILE],
 ) {
-  return jsonResponse({
-    api: { ready: runtime.apiReady ?? true },
-    roots: { ready: runtime.rootsReady ?? true },
-    translation_provider: providerReady
-      ? { ready: true }
-      : {
-          ready: false,
-          message: "Create a selectable Model Profile to translate.",
-        },
-    worker: { ready: true, mode: "single" },
-  });
-}
-
-function renderWithFetch(path: string, fetchImplementation: typeof fetch) {
   vi.stubGlobal("fetch", fetchImplementation);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  queryClient.setQueryData(
-    ["model-profiles"],
-    [
-      {
-        id: "profile-1",
-        name: "Test profile",
-        parent_id: null,
-        selectable: true,
-        settings: [],
-        effective_settings: [
-          {
-            key: "provider",
-            value: "OpenAI",
-            source: { id: "profile-1", name: "Test profile" },
-          },
-        ],
-      },
-    ],
-  );
+  if (modelProfiles !== null) {
+    queryClient.setQueryData(["model-profiles"], modelProfiles);
+  }
   const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
@@ -333,7 +343,6 @@ async function openVisibleJobDetail(fetchImplementation: typeof fetch) {
 
 function jobsFetch(job: JobFixture) {
   return vi.fn().mockImplementation(async (input: string) => {
-    if (input === "/api/status") return statusResponse();
     if (isJobDetailRequest(input)) return jsonResponse(job);
     if (input.startsWith("/api/jobs")) return jobListResponse([job]);
     return jsonResponse({ term_maps: [] });
@@ -342,7 +351,6 @@ function jobsFetch(job: JobFixture) {
 
 function jobListFetch(getJobs: () => JobFixture[]) {
   return vi.fn().mockImplementation(async (input: string) => {
-    if (input === "/api/status") return statusResponse();
     if (isJobDetailRequest(input)) return jsonResponse(getJobs()[0]);
     if (input.startsWith("/api/jobs")) return jobListResponse(getJobs());
     return jsonResponse({ term_maps: [] });
@@ -351,7 +359,6 @@ function jobListFetch(getJobs: () => JobFixture[]) {
 
 function emptyJobsFetch() {
   return vi.fn().mockImplementation(async (input: string) => {
-    if (input === "/api/status") return statusResponse();
     if (input.startsWith("/api/jobs")) return jobListResponse([]);
     return jsonResponse({ term_maps: [] });
   });
@@ -368,7 +375,6 @@ function cancelJobFetch(jobId: string, cancelError?: string) {
   };
   let currentJob: JobFixture = queuedJob;
   return vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
-    if (input === "/api/status") return statusResponse();
     if (input.endsWith("/cancel") && init?.method === "POST") {
       if (cancelError !== undefined) {
         return jsonResponse({ message: cancelError }, false);
@@ -392,7 +398,6 @@ function jobsPageFetch(
   details: Record<string, unknown> = {},
 ) {
   return vi.fn().mockImplementation(async (input: string) => {
-    if (input === "/api/status") return statusResponse();
     if (input in details) return jsonResponse(details[input]);
     if (isJobDetailRequest(input)) return jsonResponse(getJobs());
     if (input.startsWith("/api/jobs")) return jobListResponse([getJobs()]);
@@ -458,7 +463,6 @@ function queuedEmbeddedJob(id: string) {
 function mockQueuedJobCreation(job: JobFixture, termMaps: TermMapSummary[] = []) {
   const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
   fetchMock.mockImplementation(async (input: string, request?: RequestInit) => {
-    if (input === "/api/status") return statusResponse();
     if (input === "/api/jobs" && request?.method === "POST") {
       return jsonResponse(job);
     }
@@ -482,7 +486,6 @@ function retryFetch(job: JobFixture, firstFailure?: string) {
   const fetchMock = vi
     .fn()
     .mockImplementation(async (input: string, init?: RequestInit) => {
-      if (input === "/api/status") return statusResponse();
       if (input.endsWith("/retry") && init?.method === "POST") {
         attempts += 1;
         if (firstFailure && attempts === 1) {
@@ -619,7 +622,6 @@ async function expectQueuedJobRequest(
 
 function termMapFetch(postResponse: unknown = {}, postOk = true) {
   return vi.fn().mockImplementation(async (input: string, init?: RequestInit) => {
-    if (input === "/api/status") return statusResponse();
     if (init?.method === "POST") {
       return jsonResponse(postResponse, postOk);
     }
@@ -649,7 +651,7 @@ async function expectDuplicateContentRejected(fetchMock: ReturnType<typeof vi.fn
 
 function renderRoute(
   path: string,
-  providerReady = true,
+  hasSelectableProfile = true,
   browseResponse: MediaDirectory = {
     path: "",
     entries: [
@@ -682,11 +684,6 @@ function renderRoute(
     MediaDiscovery | Error | Promise<MediaDiscovery | Error>
   > = [],
   termMaps: TermMapSummary[] = [],
-  runtime: {
-    apiReady?: boolean;
-    rootsReady?: boolean;
-    statusFailure?: boolean;
-  } = {},
 ) {
   let discoveryCall = 0;
   const fetchMock = vi
@@ -720,12 +717,20 @@ function renderRoute(
       if (String(input) === "/api/term-maps") {
         return Promise.resolve(jsonResponse({ term_maps: [...termMaps] }));
       }
-      if (runtime.statusFailure) {
-        return Promise.reject(new Error("status unavailable"));
+      if (String(input) === "/api/model-profiles") {
+        return Promise.resolve(
+          jsonResponse({
+            model_profiles: hasSelectableProfile ? [SELECTABLE_PROFILE] : [],
+          }),
+        );
       }
-      return Promise.resolve(statusResponse(providerReady, runtime));
+      return Promise.resolve(jobListResponse([]));
     });
-  return renderWithFetch(path, fetchMock);
+  return renderWithFetch(
+    path,
+    fetchMock,
+    hasSelectableProfile ? [SELECTABLE_PROFILE] : [],
+  );
 }
 
 function renderTermMaps() {
@@ -738,9 +743,6 @@ function renderTermMaps() {
   return renderWithFetch(
     "/term-maps",
     vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") {
-        return statusResponse();
-      }
       if (input === "/api/term-maps") {
         return jsonResponse({ term_maps: [summary] });
       }
@@ -785,99 +787,98 @@ describe("product shell", () => {
     },
   );
 
-  it("follows the system theme and lets the user persist a choice", () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn().mockReturnValue({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      }),
-    );
-    renderRoute("/translate");
+  it("uses System by default and follows system appearance changes", () => {
+    const systemAppearance = mockSystemAppearance(false);
+    renderRoute("/settings/general");
 
-    const themeToggle = screen.getAllByRole("switch", {
-      name: "Dark mode",
-    })[0];
-    expect(themeToggle).toHaveAttribute("aria-checked", "true");
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-    expect(document.documentElement.style.colorScheme).toBe("dark");
-    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
-      "content",
-      "#111827",
-    );
-
-    fireEvent.click(themeToggle);
-
-    expect(screen.getAllByRole("switch", { name: "Dark mode" })[0]).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(window.localStorage.getItem("cueweaver.theme")).toBe("light");
+    expect(screen.getByRole("radio", { name: "System" })).toBeChecked();
+    expect(window.localStorage.getItem("cueweaver.theme")).toBeNull();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
-    expect(document.documentElement.style.colorScheme).toBe("light");
-    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
-      "content",
-      "#f7f8fa",
-    );
-  });
 
-  it("tracks system theme changes until the user chooses a theme", () => {
-    let onSystemThemeChange: (() => void) | undefined;
-    const mediaQuery = {
-      matches: false,
-      addEventListener: vi.fn((_event: string, listener: () => void) => {
-        onSystemThemeChange = listener;
-      }),
-      removeEventListener: vi.fn(),
-    };
-    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mediaQuery));
-    renderRoute("/translate");
-
-    mediaQuery.matches = true;
-    act(() => onSystemThemeChange?.());
+    systemAppearance.mediaQuery.matches = true;
+    act(systemAppearance.dispatchChange);
 
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByRole("radio", { name: "System" })).toBeChecked();
     expect(window.localStorage.getItem("cueweaver.theme")).toBeNull();
   });
 
-  it("restores a saved theme across routes", () => {
-    window.localStorage.setItem("cueweaver.theme", "dark");
-    renderRoute("/jobs");
+  it("persists Light and Dark overrides and removes the override when returning to System", () => {
+    const systemAppearance = mockSystemAppearance(true);
+    renderRoute("/settings/general");
 
-    expect(screen.getAllByRole("switch", { name: "Dark mode" })[0]).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Light" }));
+    expect(window.localStorage.getItem("cueweaver.theme")).toBe("light");
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+
+    fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+    expect(window.localStorage.getItem("cueweaver.theme")).toBe("dark");
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+
+    systemAppearance.mediaQuery.matches = false;
+    act(systemAppearance.dispatchChange);
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+
+    fireEvent.click(screen.getByRole("radio", { name: "System" }));
+    expect(window.localStorage.getItem("cueweaver.theme")).toBeNull();
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  });
+
+  it.each(["light", "dark"] as const)(
+    "continues to honor an existing %s theme override",
+    (theme) => {
+      window.localStorage.setItem("cueweaver.theme", theme);
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn().mockReturnValue({ matches: theme !== "dark" }),
+      );
+      renderRoute("/settings/general");
+
+      expect(
+        screen.getByRole("radio", { name: theme === "light" ? "Light" : "Dark" }),
+      ).toBeChecked();
+      expect(document.documentElement).toHaveAttribute("data-theme", theme);
+      expect(window.localStorage.getItem("cueweaver.theme")).toBe(theme);
+    },
+  );
+
+  it("keeps the mobile primary navigation to the three product destinations", () => {
+    renderRoute("/translate");
+
+    const desktopNavigation = screen.getByRole("navigation", {
+      name: "Primary navigation",
+    });
+    const mobileNavigation = screen.getByRole("navigation", {
+      name: "Mobile navigation",
+    });
+    for (const navigation of [desktopNavigation, mobileNavigation]) {
+      expect(
+        within(navigation)
+          .getAllByRole("link")
+          .map((link) => link.textContent),
+      ).toEqual(["Translate", "Jobs", "Settings"]);
+    }
   });
 
   it("detects, switches, and persists the interface locale independently", async () => {
     const chinese = getLocaleTable("zh-CN");
     window.localStorage.setItem("cueweaver.target-language", "zh-Hans");
     vi.stubGlobal("navigator", { languages: ["zh-CN"] });
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
-      if (input === "/api/media/browse") return emptyMediaResponse();
-      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
-      return jobListResponse([]);
-    });
+    const fetchMock = emptyTranslateFetch();
 
-    const view = renderWithFetch("/translate", fetchMock);
+    const view = renderWithFetch("/settings/general", fetchMock);
     expect(
-      await screen.findByRole("heading", { name: chinese["translate.title"] }),
+      await screen.findByRole("heading", { name: chinese["settings.general"] }),
     ).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("zh-CN");
     expect(window.localStorage.getItem("cueweaver.ui-locale")).toBeNull();
-    expect(
-      screen.getAllByRole("switch", { name: chinese["theme.darkMode"] })[0],
-    ).toHaveTextContent(chinese["theme.off"]);
+    expect(screen.getByRole("radio", { name: chinese["theme.system"] })).toBeChecked();
 
-    fireEvent.change(screen.getAllByLabelText(chinese["language.change"])[0], {
+    fireEvent.change(screen.getByLabelText(chinese["language.change"]), {
       target: { value: "en" },
     });
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Translate" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument(),
     );
     expect(document.documentElement.lang).toBe("en");
     expect(window.localStorage.getItem("cueweaver.ui-locale")).toBe("en");
@@ -885,33 +886,9 @@ describe("product shell", () => {
 
     view.unmount();
     cleanup();
-    renderWithFetch("/translate", fetchMock);
-    expect(
-      await screen.findByRole("heading", { name: "Translate" }),
-    ).toBeInTheDocument();
+    renderWithFetch("/settings/general", fetchMock);
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("en");
-  });
-
-  it("localizes the runtime recovery guidance in Simplified Chinese", async () => {
-    const chinese = getLocaleTable("zh-CN");
-    window.localStorage.setItem("cueweaver.ui-locale", "zh-CN");
-    vi.stubGlobal("navigator", { languages: ["zh-CN"] });
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") throw new Error("offline");
-      if (input === "/api/media/browse") return emptyMediaResponse();
-      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
-      return jobListResponse([]);
-    });
-
-    renderWithFetch("/translate", fetchMock);
-
-    expect(
-      await screen.findByText(chinese["runtime.unreachableTitle"], { exact: true }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: chinese["runtime.tryAgain"] }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(chinese["runtime.unreachableDetail"])).toBeInTheDocument();
   });
 
   it("localizes successful completed Job cleanup in Simplified Chinese", async () => {
@@ -927,7 +904,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input === "/api/jobs/completed" && init?.method === "DELETE") {
           cleared = true;
           return jsonResponse({ deleted: [job.id], failed: [] });
@@ -972,91 +948,135 @@ describe("product shell", () => {
     ).toBeInTheDocument();
   });
 
+  it("routes Settings to General and uses route navigation for its sections", async () => {
+    renderRoute("/settings");
+
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
+    const settingsNavigation = screen.getByRole("navigation", {
+      name: "Settings sections",
+    });
+    expect(within(settingsNavigation).getAllByRole("link")).toHaveLength(3);
+    expect(
+      within(settingsNavigation).getByRole("link", { name: "General" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(
+      within(settingsNavigation).getByRole("link", { name: "Model Profiles" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Model Profiles" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(settingsNavigation).getByRole("link", { name: "Term maps" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Term maps" }),
+    ).toBeInTheDocument();
+  });
+
   it.each([
-    ["/translate", "Translate"],
-    ["/jobs", "Jobs"],
+    ["/settings/model-profiles", "Model Profiles"],
+    ["/settings/term-maps", "Term maps"],
+    ["/model-profiles", "Model Profiles"],
     ["/term-maps", "Term maps"],
-  ])("renders %s through shared navigation", (path, heading) => {
+  ])("opens the Settings resource route %s", async (path, heading) => {
     renderRoute(path);
 
-    expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
-    expect(screen.getAllByRole("navigation")).toHaveLength(2);
-    expect(screen.getAllByRole("link", { name: heading })[0]).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
   });
 
-  it("presents an actionable unavailable translation state", async () => {
+  it("keeps the Model Profile editor deep link available under Settings", async () => {
+    renderRoute("/settings/model-profiles/profile-1");
+
+    expect(
+      await screen.findByRole("heading", { name: "Edit Test profile" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the nearby empty Model Profile state and disables translation", async () => {
     renderRoute("/translate", false);
 
-    await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Create a selectable Model Profile",
-      ),
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "There are no selectable Model Profiles available",
     );
-    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
-  });
-
-  it("blocks translation when the Media or Work root is unavailable", async () => {
-    renderRoute("/translate", true, undefined, undefined, false, [], [], {
-      rootsReady: false,
-    });
-
+    expect(screen.getAllByRole("link", { name: "Manage" })[0]).toHaveAttribute(
+      "href",
+      "/settings/model-profiles",
+    );
     await selectExternalSubtitle();
     await enterCustomTargetLanguage("zh-Hans");
-
-    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
-    expect(
-      screen.getByText("Check the Media and Work directory configuration."),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the status failure recovery action aligned with the next step", async () => {
-    renderRoute("/translate", true, undefined, undefined, false, [], [], {
-      statusFailure: true,
-    });
-
-    expect(await screen.findByText("CueWeaver is not reachable")).toBeInTheDocument();
-    expect(
-      screen.getByText("CueWeaver status could not be checked. Try again."),
-    ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(
-      0,
-    );
-  });
-
-  it("does not offer submission before the workflow exists", async () => {
-    renderRoute("/translate", true);
-
-    await waitFor(() =>
-      expect(screen.getByText("Translation provider ready")).toBeInTheDocument(),
-    );
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   });
 
-  it("shows runtime and provider failures without enabling submission", async () => {
+  it("shows selectable profiles and contextual Manage links without a provider banner", async () => {
+    renderRoute("/translate");
+
+    expect(
+      await screen.findByRole("option", { name: "Test profile" }),
+    ).toBeInTheDocument();
+    const manageLinks = screen.getAllByRole("link", { name: "Manage" });
+    expect(manageLinks.map((link) => link.getAttribute("href"))).toEqual([
+      "/settings/model-profiles",
+      "/settings/term-maps",
+    ]);
+    expect(screen.queryByText(/provider ready/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("shows a local retry state when Model Profiles fail to load", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status")
-        return jsonResponse({ message: "Runtime unavailable" }, false);
-      if (input === "/api/media/browse") {
-        return emptyMediaResponse();
-      }
-      return jsonResponse({ term_maps: [] });
+      if (input === "/api/model-profiles") throw new Error("Profiles are offline");
+      if (input === "/api/media/browse") return emptyMediaResponse();
+      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+      return jobListResponse([]);
     });
+    renderWithFetch("/translate", fetchMock, null);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Profiles are offline");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+  });
+
+  it("keeps the Model Profile selector in a loading state until its query resolves", async () => {
+    let resolveProfiles!: () => void;
+    const pendingProfiles = new Promise<void>((resolve) => {
+      resolveProfiles = resolve;
+    });
+    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+      if (input === "/api/model-profiles") {
+        await pendingProfiles;
+        return jsonResponse({ model_profiles: [SELECTABLE_PROFILE] });
+      }
+      if (input === "/api/media/browse") return emptyMediaResponse();
+      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
+      return jobListResponse([]);
+    });
+    renderWithFetch("/translate", fetchMock, null);
+
+    const selector = screen.getByRole("combobox", { name: "Model Profile" });
+    expect(selector).toBeDisabled();
+    expect(
+      screen.getByText("Loading Model Profiles…", { selector: "p[role=status]" }),
+    ).toBeInTheDocument();
+    resolveProfiles();
+    expect(
+      await screen.findByRole("option", { name: "Test profile" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Model Profile" })).toBeEnabled();
+  });
+
+  it("does not request or poll a global product status", async () => {
+    const fetchMock = emptyTranslateFetch();
     renderWithFetch("/translate", fetchMock);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "CueWeaver status is unavailable.",
-    );
-    expect(screen.getByText("Runtime unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    await screen.findByRole("heading", { name: "Translate" });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock.mock.calls.every(([input]) => input !== "/api/status")).toBe(true);
   });
 
   it("searches Job history, exposes every status filter, and clears no-match filters", async () => {
     const job = embeddedJob("filter-job", "Failed");
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input.includes("search=missing")) return jobListResponse([]);
       if (input.startsWith("/api/jobs")) return jobListResponse([job]);
       return jsonResponse({ term_maps: [] });
@@ -1113,7 +1133,6 @@ describe("product shell", () => {
   it("shows Media loading, empty, and retryable error states", async () => {
     let browseCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/media/browse") {
         browseCalls += 1;
         if (browseCalls === 1)
@@ -1134,7 +1153,6 @@ describe("product shell", () => {
     const pending = new Promise<never>(() => undefined);
     const fetchMock = vi.fn().mockImplementation((input: string) => {
       if (input === "/api/media/browse") return pending;
-      if (input === "/api/status") return Promise.resolve(statusResponse());
       return Promise.resolve(jsonResponse({ term_maps: [] }));
     });
     renderWithFetch("/translate", fetchMock);
@@ -1542,7 +1560,6 @@ describe("product shell", () => {
     };
     const secondFailed = embeddedJob("history-notice-page-three", "Failed");
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs?limit=1") {
         return jsonResponse({ active_jobs: [], history_jobs: [], next_cursor: null });
       }
@@ -1630,7 +1647,6 @@ describe("product shell", () => {
 
   it("shows a stale-selection state when a requested Job is gone", async () => {
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs/missing") {
         return jsonResponse({ message: "Job does not exist" }, false);
       }
@@ -1648,7 +1664,6 @@ describe("product shell", () => {
   it("distinguishes Job detail loading from Job list loading", async () => {
     const detailPending = new Promise<Response>(() => {});
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs/job-loading") return detailPending;
       if (input.startsWith("/api/jobs")) return jobListResponse([]);
       return jsonResponse({ term_maps: [] });
@@ -1662,7 +1677,6 @@ describe("product shell", () => {
   it("shows Job list loading and retryable error states", async () => {
     let listCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input.startsWith("/api/jobs")) {
         listCalls += 1;
         if (listCalls === 1)
@@ -1699,7 +1713,6 @@ describe("product shell", () => {
       status: "Failed",
     };
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs?limit=1") {
         return jsonResponse({
           active_jobs: [active],
@@ -1739,7 +1752,6 @@ describe("product shell", () => {
     const active = translatingEmbeddedJob("reconciled-job");
     const terminal = { ...completedJob(active), status: "Completed" };
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs?limit=1") return jobListResponse([active]);
       if (input === "/api/jobs") return jobListResponse([terminal]);
       return jsonResponse({ term_maps: [] });
@@ -1768,7 +1780,6 @@ describe("product shell", () => {
     };
     let activeJob: JobFixture | null = null;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/jobs?limit=1")
         return jobListResponse(activeJob ? [activeJob] : []);
       if (input === "/api/jobs") return jobListResponse([failed], "cursor-1");
@@ -1920,7 +1931,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input.endsWith("/retry")) return retryPending;
         if (input.endsWith("mutation-state-1") && init?.method === "DELETE") {
           return jsonResponse({ message: "Job could not be deleted." }, false);
@@ -2059,7 +2069,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input === "/api/jobs/delete-job-1" && init?.method === "DELETE") {
           deleted = true;
           return jsonResponse({ id: job.id, deleted: true });
@@ -2110,7 +2119,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input === "/api/jobs/completed" && init?.method === "DELETE") {
           currentJobs = [second, retained];
           return jsonResponse({
@@ -2229,7 +2237,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input === "/api/jobs/completed" && init?.method === "DELETE") {
           return jsonResponse({
             deleted: [],
@@ -2268,7 +2275,6 @@ describe("product shell", () => {
   it("keeps global cleanup disabled when filtered rows have no Completed Jobs", async () => {
     const failed = embeddedJob("clear-filtered-failed", "Failed");
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input.startsWith("/api/jobs")) {
         return jobListResponse([failed], "more-history", 0);
       }
@@ -2339,7 +2345,6 @@ describe("product shell", () => {
       resolveDetail = resolve;
     });
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") return listPending;
       if (input === "/api/term-maps/map-1") return detailPending;
       return jsonResponse({ term_maps: [] });
@@ -2375,7 +2380,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input === "/api/term-maps" && init?.method === "POST") return uploadPending;
         if (input === "/api/term-maps") {
           listCalls += 1;
@@ -2414,7 +2418,6 @@ describe("product shell", () => {
   it("shows and retries a Term map detail error", async () => {
     let detailCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps")
         return jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
       if (input === "/api/term-maps/map-1") {
@@ -2449,7 +2452,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (input === "/api/term-maps") {
           return jsonResponse({ term_maps: deleted ? [] : [summary] });
         }
@@ -2574,7 +2576,6 @@ describe("product shell", () => {
     const fetchMock = vi
       .fn()
       .mockImplementation(async (input: string, init?: RequestInit) => {
-        if (input === "/api/status") return statusResponse();
         if (init?.method === "PATCH") {
           return renamePending.finally(() => {
             renameSettled = true;
@@ -3698,7 +3699,6 @@ describe("product shell", () => {
   it("keeps the Term map control disabled while its list is loading", async () => {
     const pending = new Promise<never>(() => undefined);
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") return pending;
       const mediaResponse = singleExternalMediaResponse(input);
       if (mediaResponse) return mediaResponse;
@@ -3715,7 +3715,6 @@ describe("product shell", () => {
   it("recovers the Term map control after its list request fails", async () => {
     let termMapCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") {
         termMapCalls += 1;
         return termMapCalls === 1
@@ -3750,7 +3749,6 @@ describe("product shell", () => {
   it("recovers the Directory default after its binding request fails", async () => {
     let directoryCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/status") return statusResponse();
       if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
       if (input.startsWith("/api/term-maps/directory")) {
         directoryCalls += 1;
@@ -4094,7 +4092,7 @@ describe("product shell", () => {
     );
   });
 
-  it("blocks all translation submission when the provider is unavailable", async () => {
+  it("blocks all translation submission when there are no selectable Model Profiles", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
@@ -4102,9 +4100,9 @@ describe("product shell", () => {
     fireEvent.click(screen.getByLabelText("Overwrite existing output"));
 
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
-    expect(
-      screen.getByText("Next: choose a selectable Model Profile."),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "There are no selectable Model Profiles available",
+    );
   });
 
   it("requires a selectable Model Profile even with skip output policy", async () => {

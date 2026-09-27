@@ -1,10 +1,11 @@
 import { createContext, useContext } from "react";
 
-import type { Theme } from "./theme";
+import type { ResolvedTheme, ThemePreference } from "./theme";
 
 export type ThemeContextValue = {
-  theme: Theme;
-  toggleTheme: () => void;
+  preference: ThemePreference;
+  resolvedTheme: ResolvedTheme;
+  setPreference: (preference: ThemePreference) => void;
 };
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);

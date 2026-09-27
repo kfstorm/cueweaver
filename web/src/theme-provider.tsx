@@ -1,42 +1,49 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { ThemeContext } from "./theme-context";
 import {
   applyTheme,
-  getInitialTheme,
-  getStoredTheme,
+  getThemePreference,
   getSystemTheme,
   THEME_STORAGE_KEY,
+  type ThemePreference,
 } from "./theme";
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState(getInitialTheme);
-  const userSelectedTheme = useRef(false);
+  const [preference, setPreferenceState] = useState(getThemePreference);
+  const [systemTheme, setSystemTheme] = useState(getSystemTheme);
+  const resolvedTheme = preference === "system" ? systemTheme : preference;
 
   useEffect(() => {
-    applyTheme(theme);
+    applyTheme(resolvedTheme);
+  }, [resolvedTheme]);
 
+  useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleSystemThemeChange = () => {
-      if (!userSelectedTheme.current && getStoredTheme() === null) {
-        setTheme(getSystemTheme());
-      }
+      setSystemTheme(getSystemTheme());
     };
     mediaQuery.addEventListener?.("change", handleSystemThemeChange);
     return () => mediaQuery.removeEventListener?.("change", handleSystemThemeChange);
-  }, [theme]);
+  }, []);
 
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    userSelectedTheme.current = true;
+  const setPreference = (nextPreference: ThemePreference) => {
     try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+      if (nextPreference === "system") {
+        window.localStorage.removeItem(THEME_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(THEME_STORAGE_KEY, nextPreference);
+      }
     } catch {
       // Keep the current session usable when browser storage is unavailable.
     }
-    setTheme(nextTheme);
+    setPreferenceState(nextPreference);
   };
 
-  return <ThemeContext value={{ theme, toggleTheme }}>{children}</ThemeContext>;
+  return (
+    <ThemeContext value={{ preference, resolvedTheme, setPreference }}>
+      {children}
+    </ThemeContext>
+  );
 }

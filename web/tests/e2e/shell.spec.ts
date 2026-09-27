@@ -6,9 +6,11 @@ import { jobRecord } from "./fixtures";
 const routes = [
   ["/translate", "Translate"],
   ["/jobs", "Jobs"],
-  ["/term-maps", "Term maps"],
-  ["/model-profiles", "Model Profiles"],
+  ["/settings", "General"],
+  ["/settings/model-profiles", "Model Profiles"],
+  ["/settings/term-maps", "Term maps"],
 ] as const;
+const primaryNavigationLabels = ["Translate", "Jobs", "Settings"];
 
 let modelProfileId: string;
 
@@ -33,6 +35,17 @@ async function expectResponsiveShell(page: Page, mobile: boolean) {
     const bottom = page.getByRole("navigation", { name: "Mobile navigation" });
     await expect(desktop)[mobile ? "toBeHidden" : "toBeVisible"]();
     await expect(bottom)[mobile ? "toBeVisible" : "toBeHidden"]();
+    const desktopLinks = page.locator(".desktop-nav .nav-link");
+    const mobileLinks = page.locator(".mobile-nav .nav-link");
+    await expect(desktopLinks).toHaveCount(3);
+    await expect(mobileLinks).toHaveCount(3);
+    expect(await desktopLinks.locator("span").allTextContents()).toEqual(
+      primaryNavigationLabels,
+    );
+    expect(await mobileLinks.locator("span").allTextContents()).toEqual(
+      primaryNavigationLabels,
+    );
+    await expect(bottom.locator("select")).toHaveCount(0);
   }
 }
 
@@ -49,25 +62,6 @@ async function expectAccessibleProductRoutes(page: Page, dark = false) {
       `${path}${dark ? " dark theme" : ""} accessibility violations`,
     ).toEqual([]);
   }
-}
-
-async function stubProductStatus(page: Page, providerReady = true) {
-  await page.route("/api/status", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        api: { ready: true },
-        roots: { ready: true },
-        translation_provider: providerReady
-          ? { ready: true }
-          : {
-              ready: false,
-              message: "Create a selectable Model Profile to translate.",
-            },
-        worker: { ready: true, mode: "single" },
-      }),
-    }),
-  );
 }
 
 async function stubTermMapRoutes(
@@ -378,25 +372,51 @@ test("mobile shell renders every product route", async ({ page }) => {
   await expectResponsiveShell(page, true);
 });
 
-test("theme switching stays separate from mobile navigation", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/translate");
-
-  await expect(page.locator(".sidebar-theme-toggle")).toBeVisible();
-  await expect(page.locator(".page-theme-toggle")).toBeHidden();
+test("legacy resource URLs redirect into Settings and keep profile deep links", async ({
+  page,
+}) => {
+  await page.goto(`/model-profiles/new?parent=${modelProfileId}`);
+  await expect(page).toHaveURL(`/settings/model-profiles/new?parent=${modelProfileId}`);
   await expect(
-    page.getByRole("navigation", { name: "Mobile navigation" }),
-  ).toBeHidden();
-  await page.locator(".sidebar-theme-toggle").click();
+    page.getByRole("heading", { name: "Create Model Profile" }),
+  ).toBeVisible();
+
+  await page.goto("/term-maps?source=legacy");
+  await expect(page).toHaveURL("/settings/term-maps?source=legacy");
+  await expect(
+    page.getByRole("heading", { name: "Term maps", exact: true }),
+  ).toBeVisible();
+});
+
+test("Settings controls the System, Light, and Dark themes outside navigation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/settings/general");
+
+  await expect(page.getByRole("radio", { name: "System" })).toBeChecked();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("cueweaver.theme")))
+    .toBeNull();
+  await page.emulateMedia({ colorScheme: "dark" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("cueweaver.theme")))
+    .toBe("light");
+  await page.getByRole("radio", { name: "System" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("cueweaver.theme")))
+    .toBeNull();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator(".sidebar-theme-toggle")).toBeHidden();
-  await expect(page.locator(".page-theme-toggle")).toBeVisible();
-  await expect(
-    page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link"),
-  ).toHaveCount(4);
-  await page.locator(".page-theme-toggle").click();
+  const mobileNavigation = page.getByRole("navigation", { name: "Mobile navigation" });
+  await expect(mobileNavigation.getByRole("link")).toHaveCount(3);
+  await expect(mobileNavigation.getByRole("combobox")).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "System" })).toBeVisible();
+  await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
@@ -478,7 +498,6 @@ test.describe("responsive Media and Discovery layout", () => {
       page,
     }) => {
       await page.setViewportSize(viewport);
-      await stubProductStatus(page);
       await stubBatchTranslate(page);
       await stubBatchJobs(page);
       await page.goto("/translate");
@@ -539,7 +558,6 @@ test.describe("batch Translate workflow", () => {
       page,
     }) => {
       await page.setViewportSize(viewport);
-      await stubProductStatus(page);
       await stubBatchTranslate(page);
       await stubBatchJobs(page);
 
@@ -927,7 +945,6 @@ test("Translate Term map controls are keyboard-operable", async ({ page }) => {
 test("Translate submits the server-authoritative directory default", async ({
   page,
 }) => {
-  await stubProductStatus(page);
   const defaultTermMap = {
     id: "map-follow",
     name: "Series terms",
@@ -964,7 +981,6 @@ test("Translate submits the server-authoritative directory default", async ({
 test("Translate keeps one-off Term map choices scoped to each submission", async ({
   page,
 }) => {
-  await stubProductStatus(page);
   const termMap = {
     id: "map-one-off",
     name: "One-off terms",
@@ -1011,7 +1027,6 @@ test("Translate keeps one-off Term map choices scoped to each submission", async
 test("Translate clears a one-off Term map choice when changing directories", async ({
   page,
 }) => {
-  await stubProductStatus(page);
   const termMap = {
     id: "map-directory-default",
     name: "Directory terms",
@@ -1107,7 +1122,6 @@ test.describe("Job history layouts", () => {
       page,
     }) => {
       await page.setViewportSize(viewport);
-      await stubProductStatus(page);
       await stubJobs(page, [jobRecord("job-e2e")]);
       await page.goto("/jobs");
 
@@ -1148,7 +1162,6 @@ test.describe("Job history mutations", () => {
       page,
     }) => {
       await page.setViewportSize(viewport);
-      await stubProductStatus(page);
       await stubMutableJobs(page, [
         jobRecord("job-completed"),
         jobRecord("job-failed", "Failed"),
@@ -1181,7 +1194,6 @@ test.describe("Job history mutations", () => {
 
 test("desktop Job history keeps a long list scrollable", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await stubProductStatus(page);
   await stubJobs(
     page,
     Array.from({ length: 30 }, (_, index) => jobRecord(`job-${index}`)),
@@ -1196,20 +1208,32 @@ test("desktop Job history keeps a long list scrollable", async ({ page }) => {
   ).toBe(true);
 });
 
-test("unavailable provider is actionable and cannot submit", async ({ page }) => {
-  await stubProductStatus(page, false);
+test("missing selectable Model Profiles are actionable and cannot submit", async ({
+  page,
+}) => {
+  await page.route("/api/model-profiles", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ model_profiles: [] }),
+    }),
+  );
   await page.goto("/translate");
 
   await expect(
-    page.getByRole("status").filter({ hasText: "Create a selectable Model Profile" }),
-  ).toContainText("Create a selectable Model Profile");
+    page
+      .getByRole("status")
+      .filter({ hasText: "There are no selectable Model Profiles available" }),
+  ).toContainText("There are no selectable Model Profiles available");
+  await expect(page.getByRole("link", { name: "Manage" }).first()).toHaveAttribute(
+    "href",
+    "/settings/model-profiles",
+  );
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });
 
 test("Term maps management works with keyboard and search on desktop and mobile", async ({
   page,
 }) => {
-  await stubProductStatus(page);
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -1248,7 +1272,7 @@ test("Term maps management works with keyboard and search on desktop and mobile"
   ]) {
     releaseDetails = undefined;
     await page.setViewportSize(viewport);
-    await page.goto("/term-maps");
+    await page.goto("/settings/term-maps");
     await page.getByRole("button", { name: /Characters/ }).press("Enter");
     const loadingHeading = page.getByRole("heading", { name: "Term map details" });
     await expect(loadingHeading).toBeVisible();
@@ -1281,7 +1305,6 @@ test("Term map mutations update the browser state", async ({ page }) => {
   };
   let content: Record<string, string> = { Captain: "队长", Ship: "舰船" };
   let deleted = false;
-  await stubProductStatus(page);
   await page.route("/api/term-maps", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -1304,7 +1327,7 @@ test("Term map mutations update the browser state", async ({ page }) => {
     });
   });
 
-  await page.goto("/term-maps");
+  await page.goto("/settings/term-maps");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: /Characters/ }).click();
   expect(
@@ -1386,7 +1409,7 @@ test("Term maps API validates and persists a real browser-created resource", asy
   const detail = await page.request.get(`/api/term-maps/${summary.id}`);
   expect((await detail.json()).content).toEqual({ Captain: "队长", Ship: "舰船" });
 
-  await page.goto("/term-maps");
+  await page.goto("/settings/term-maps");
   await page.getByRole("button", { name: new RegExp(name) }).press("Enter");
   await page.getByLabel("Search Source or Target").fill("captain");
   await expect(page.getByRole("cell", { name: "Captain" })).toBeVisible();
@@ -1478,7 +1501,6 @@ test.describe("subtitle submission", () => {
         page,
       }) => {
         await page.setViewportSize(viewport);
-        await stubProductStatus(page);
         await page.route("**/api/media/browse", (route) =>
           route.fulfill({
             contentType: "application/json",
@@ -1718,7 +1740,7 @@ test.describe("real translation workflow", () => {
     expect((await second.json()).queue_position).toBe(1);
     expect((await third.json()).queue_position).toBe(2);
 
-    expect((await page.request.get("/api/status")).ok()).toBeTruthy();
+    expect((await page.request.get("/api/status")).status()).toBe(404);
     expect(
       (await page.request.post("/api/media/browse", { data: { path: "" } })).ok(),
     ).toBeTruthy();

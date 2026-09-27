@@ -45,11 +45,11 @@ export function ModelProfilesPage() {
   return (
     <>
       <PageHeader
-        title={t("navigation.modelProfiles")}
+        title={t("settings.modelProfiles")}
         detail={t("modelProfiles.managementDetail")}
       />
       <Button asChild>
-        <Link to="/model-profiles/new">{t("modelProfiles.create")}</Link>
+        <Link to="/settings/model-profiles/new">{t("modelProfiles.create")}</Link>
       </Button>
       {profiles.isPending && <p role="status">{t("modelProfiles.loading")}</p>}
       {profiles.isError && <p role="alert">{profiles.error.message}</p>}
@@ -89,10 +89,12 @@ export function ModelProfilesPage() {
               </p>
             </div>
             <div className="profile-actions">
-              <Link to={`/model-profiles/${profile.id}`}>
+              <Link to={`/settings/model-profiles/${profile.id}`}>
                 {t("modelProfiles.edit")}
               </Link>
-              <Link to={`/model-profiles/new?parent=${encodeURIComponent(profile.id)}`}>
+              <Link
+                to={`/settings/model-profiles/new?parent=${encodeURIComponent(profile.id)}`}
+              >
                 {t("modelProfiles.createDerived")}
               </Link>
               <Button
@@ -101,7 +103,7 @@ export function ModelProfilesPage() {
                 disabled={remove.isPending || !profile.deletable}
                 onClick={() =>
                   remove.mutate(profile.id, {
-                    onSuccess: () => navigate("/model-profiles"),
+                    onSuccess: () => navigate("/settings/model-profiles"),
                   })
                 }
               >
@@ -147,7 +149,7 @@ export function ModelProfileEditor() {
       onSave={(input) =>
         save.mutate(
           { id: current?.id, input },
-          { onSuccess: () => navigate("/model-profiles") },
+          { onSuccess: () => navigate("/settings/model-profiles") },
         )
       }
       pending={save.isPending}
@@ -372,7 +374,7 @@ function ProfileForm({
           <Button type="submit" disabled={pending || parseErrors.size > 0}>
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
-          <Link to="/model-profiles">{t("common.cancel")}</Link>
+          <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
         </div>
       </form>
     </>

@@ -53,7 +53,6 @@ export function useSaveModelProfile() {
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["model-profiles"] });
-      void client.invalidateQueries({ queryKey: ["product-status"] });
     },
   });
 }
@@ -68,7 +67,6 @@ export function useDeleteModelProfile() {
       }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["model-profiles"] });
-      void client.invalidateQueries({ queryKey: ["product-status"] });
     },
   });
 }

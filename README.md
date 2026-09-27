@@ -16,7 +16,7 @@ Translate subtitles from a local media library and keep every translation in a d
 
 - Docker with permission to build and run containers.
 - A media directory that the container can read and write when it publishes translated subtitles.
-- A supported translation provider and its credentials, configured in a Model Profile after startup.
+- A supported translation provider and its credentials, configured in Settings → Model Profiles after startup.
 
 ### Start CueWeaver
 
@@ -36,7 +36,7 @@ docker run --rm \
 
 Open [http://localhost:8000](http://localhost:8000) in your browser.
 
-Open **Model Profiles**, create a selectable profile, and add literal settings such as `provider` = `DeepSeek`, `model` = `deepseek-chat`, and `api_key` = your key. Select that profile on **Translate** before creating a Job.
+Open **Settings → Model Profiles**, create a selectable profile, and add literal settings such as `provider` = `DeepSeek`, `model` = `deepseek-chat`, and `api_key` = your key. Select that profile on **Translate** before creating a Job.
 
 The `media` directory is the library shown in CueWeaver. Replace it with an existing directory if your media is stored elsewhere. Keep the `cueweaver-work` volume: it contains job history and in-progress translation state.
 
@@ -70,7 +70,7 @@ preserve the entire Work volume before restoring or inspecting a backup.
 
 ## Model Profiles
 
-Create Model Profiles on the **Model Profiles** page. A selectable profile can be chosen for a new Job and must resolve to a `provider` from the local PySubtrans provider registry; `model` is optional. A non-selectable profile may be incomplete and used as a base for inheritance. CueWeaver starts without a selectable profile, but new translations require one.
+Create Model Profiles in **Settings → Model Profiles**. A selectable profile can be chosen for a new Job and must resolve to a `provider` from the local PySubtrans provider registry; `model` is optional. A non-selectable profile may be incomplete and used as a base for inheritance. CueWeaver starts without a selectable profile, but new translations require one.
 
 Use **Create derived** to inherit from one parent. Settings merge by top-level key: a local literal overrides the inherited value, including a nested JSON object as a whole. **Unset** removes a key from the effective profile without suppressing PySubtrans defaults or environment fallbacks. **Remove local** removes a local override or unset and restores inheritance.
 
