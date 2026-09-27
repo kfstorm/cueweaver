@@ -163,12 +163,19 @@ function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
 
-function emptyTranslateFetch() {
+function translateFetchWithProfiles(profileRequest: () => Promise<unknown>) {
   return vi.fn().mockImplementation(async (input: string) => {
+    if (input === "/api/model-profiles") return profileRequest();
     if (input === "/api/media/browse") return emptyMediaResponse();
     if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
     return jobListResponse([]);
   });
+}
+
+function emptyTranslateFetch() {
+  return translateFetchWithProfiles(async () =>
+    jsonResponse({ model_profiles: [SELECTABLE_PROFILE] }),
+  );
 }
 
 function mockSystemAppearance(initialMatches: boolean) {
@@ -1030,16 +1037,26 @@ describe("product shell", () => {
   });
 
   it("shows a local retry state when Model Profiles fail to load", async () => {
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/model-profiles") throw new Error("Profiles are offline");
-      if (input === "/api/media/browse") return emptyMediaResponse();
-      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
-      return jobListResponse([]);
+    let profileLoads = 0;
+    const fetchMock = translateFetchWithProfiles(async () => {
+      profileLoads += 1;
+      if (profileLoads === 1) throw new Error("Profiles are offline");
+      return jsonResponse({ model_profiles: [SELECTABLE_PROFILE] });
     });
     renderWithFetch("/translate", fetchMock, null);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Profiles are offline");
-    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    const profileField = screen
+      .getByRole("combobox", { name: "Model Profile" })
+      .closest<HTMLElement>(".model-profile-field");
+    if (!profileField) throw new Error("Model Profile field was not rendered");
+    expect(await within(profileField).findByRole("alert")).toHaveTextContent(
+      "Profiles are offline",
+    );
+    fireEvent.click(within(profileField).getByRole("button"));
+    expect(
+      await within(profileField).findByRole("option", { name: "Test profile" }),
+    ).toBeInTheDocument();
+    expect(profileLoads).toBe(2);
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   });
 
@@ -1048,22 +1065,15 @@ describe("product shell", () => {
     const pendingProfiles = new Promise<void>((resolve) => {
       resolveProfiles = resolve;
     });
-    const fetchMock = vi.fn().mockImplementation(async (input: string) => {
-      if (input === "/api/model-profiles") {
-        await pendingProfiles;
-        return jsonResponse({ model_profiles: [SELECTABLE_PROFILE] });
-      }
-      if (input === "/api/media/browse") return emptyMediaResponse();
-      if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
-      return jobListResponse([]);
+    const fetchMock = translateFetchWithProfiles(async () => {
+      await pendingProfiles;
+      return jsonResponse({ model_profiles: [SELECTABLE_PROFILE] });
     });
     renderWithFetch("/translate", fetchMock, null);
 
     const selector = screen.getByRole("combobox", { name: "Model Profile" });
     expect(selector).toBeDisabled();
-    expect(
-      screen.getByText("Loading Model Profiles…", { selector: "p[role=status]" }),
-    ).toBeInTheDocument();
+    expectModelProfileFieldStatus();
     resolveProfiles();
     expect(
       await screen.findByRole("option", { name: "Test profile" }),
