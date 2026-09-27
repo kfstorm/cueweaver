@@ -109,22 +109,6 @@ function existingStringTemperatureProfile(): ModelProfile {
   );
 }
 
-function existingIntegerReasoningEffortProfile(): ModelProfile {
-  const source = { id: "existing", name: "existing" };
-  return profile(
-    "existing",
-    null,
-    [
-      { key: "provider", kind: "literal", value: "OpenAI" },
-      { key: "reasoning_effort", kind: "literal", value: 123 },
-    ],
-    [
-      { key: "provider", value: "OpenAI", source },
-      { key: "reasoning_effort", value: 123, source },
-    ],
-  );
-}
-
 function existingIntegerProviderProfile(): ModelProfile {
   const source = { id: "base", name: "base" };
   return profile(
@@ -262,7 +246,7 @@ describe("Model Profile setting references", () => {
       row.textContent?.includes("provider"),
     )!;
     expect(within(providerRow).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(providerRow).getByLabelText("Value type")).toBeDisabled();
+    expect(within(providerRow).getByLabelText("Value type")).toBeEnabled();
     expect(keyInput).toHaveValue("");
 
     await addSetting("api_key");
@@ -354,7 +338,7 @@ describe("Model Profile setting references", () => {
     expect(type).toHaveValue("string");
     expect(type).toBeEnabled();
     expect(row).toHaveTextContent(
-      translate("modelProfiles.expectedType", { type: "number" }),
+      translate("modelProfiles.pysubtransType", { type: "number" }),
     );
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
 
@@ -374,8 +358,8 @@ describe("Model Profile setting references", () => {
       target: { value: "number" },
     });
     expect(within(row).getByLabelText("Value type")).toHaveValue("number");
-    expect(row).not.toHaveTextContent(
-      translate("modelProfiles.expectedType", { type: "number" }),
+    expect(row).toHaveTextContent(
+      translate("modelProfiles.pysubtransType", { type: "number" }),
     );
     fireEvent.change(within(row).getByLabelText("Value"), {
       target: { value: "0.5" },
@@ -385,29 +369,27 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "temperature", 0.5);
   });
 
-  it("requires a suggested choice after changing a legacy setting to its reference type", async () => {
-    const current = existingIntegerReasoningEffortProfile();
-    const { saves } = renderEditor("/model-profiles/existing", [current]);
-    const row = await settingRow("reasoning_effort");
-    expect(within(row).getByLabelText("Value type")).toHaveValue("integer");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "string" },
+  it("allows custom values for settings with static choice suggestions", async () => {
+    const { saves } = renderEditor("/model-profiles/new");
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Synthetic profile" },
     });
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    const value = within(row).getByLabelText("Value");
-    expect(value.tagName).toBe("SELECT");
-    expect(value).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+    await addProvider("OpenAI");
+    await addSetting("reasoning_effort");
 
-    fireEvent.change(value, { target: { value: "low" } });
+    const row = await settingRow("reasoning_effort");
+    expect(within(row).getByLabelText("Value type")).toBeEnabled();
+    const value = within(row).getByRole("textbox");
+    expect(value.tagName).toBe("INPUT");
+    expect(row).toHaveTextContent(/none.*low.*high/);
+    fireEvent.change(value, { target: { value: "custom-effort" } });
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "reasoning_effort", "low");
+    await expectSavedLiteralSetting(saves, "reasoning_effort", "custom-effort");
   });
 
-  it("keeps a custom key uncontrolled when a provider switch makes it known", async () => {
+  it("updates reference hints without changing an existing setting", async () => {
     renderEditor("/model-profiles/new");
     await addProvider("OpenAI");
     await addSetting("deepseek_limit");
@@ -423,7 +405,7 @@ describe("Model Profile setting references", () => {
     expect(within(row).getByLabelText("Value type")).toHaveValue("string");
     expect(within(row).getByLabelText("Value type")).toBeEnabled();
     expect(row).toHaveTextContent(
-      translate("modelProfiles.expectedType", { type: "number" }),
+      translate("modelProfiles.pysubtransType", { type: "number" }),
     );
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
@@ -453,36 +435,13 @@ describe("Model Profile setting references", () => {
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
 
-  it("clears an old parse error when a changed reference schema remounts the editor", async () => {
-    renderEditor("/model-profiles/new");
-    await addProvider("DeepSeek");
-    await addSetting("reasoning_effort");
-    const row = await settingRow("reasoning_effort");
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "integer" },
-    });
-    fireEvent.change(within(row).getByLabelText("Value"), {
-      target: { value: "abc" },
-    });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-      target: { value: "OpenAI" },
-    });
-
-    await waitFor(() => {
-      expect(within(row).getByLabelText("Value")).toHaveValue("0");
-      expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-    });
-  });
-
   it("preserves a legacy non-string provider until the user changes its type", async () => {
     const current = existingIntegerProviderProfile();
     const { saves } = renderEditor("/model-profiles/base", [current]);
     const row = await settingRow("provider");
     expect(row).toHaveTextContent("· integer");
     expect(row).toHaveTextContent(
-      translate("modelProfiles.expectedType", { type: "string" }),
+      translate("modelProfiles.pysubtransType", { type: "string" }),
     );
     expect(within(row).getByLabelText("Value type")).toHaveValue("integer");
     expect(within(row).getByLabelText("Value type")).toBeEnabled();
@@ -491,36 +450,7 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "provider", 123);
   });
 
-  it("requires a registered provider after explicitly converting a legacy provider", async () => {
-    const current = existingIntegerProviderProfile();
-    const { saves } = renderEditor("/model-profiles/base", [current]);
-    const row = await settingRow("provider");
-    const save = screen.getByRole("button", { name: "Save Model Profile" });
-
-    expect(save).toBeEnabled();
-    expect(within(row).getByLabelText("Value type")).toHaveValue("integer");
-
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "string" },
-    });
-    const provider = within(row).getByRole("combobox", { name: "Provider" });
-    expect(provider).toHaveValue("");
-    expect(save).toBeDisabled();
-    expect(provider.querySelector('option[value=""]')).toBeDisabled();
-
-    fireEvent.change(provider, { target: { value: "OpenAI" } });
-    expect(save).toBeEnabled();
-
-    fireEvent.click(save);
-    await expectSavedLiteralSetting(saves, "provider", "OpenAI");
-    expect(saves[0].body.settings).toContainEqual({
-      key: "provider",
-      kind: "literal",
-      value: "OpenAI",
-    });
-  });
-
-  it("requires a registered provider after adding a new provider setting", async () => {
+  it("offers a provider dropdown when adding a provider setting", async () => {
     const { saves } = renderEditor("/model-profiles/new");
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Synthetic profile" },
@@ -531,8 +461,11 @@ describe("Model Profile setting references", () => {
     const provider = within(row).getByRole("combobox", { name: "Provider" });
     const save = screen.getByRole("button", { name: "Save Model Profile" });
     expect(provider).toHaveValue("");
+    expect(
+      [...provider.querySelectorAll("option")].map((option) => option.value),
+    ).toEqual(["", "DeepSeek", "OpenAI"]);
     expect(provider.querySelector('option[value=""]')).toBeDisabled();
-    expect(save).toBeDisabled();
+    expect(save).toBeEnabled();
 
     fireEvent.change(provider, { target: { value: "OpenAI" } });
     expect(save).toBeEnabled();
@@ -566,7 +499,7 @@ describe("Model Profile setting references", () => {
     let row = await settingRow("temperature");
     expect(row).toHaveTextContent("· string");
     expect(row).toHaveTextContent(
-      translate("modelProfiles.expectedType", { type: "number" }),
+      translate("modelProfiles.pysubtransType", { type: "number" }),
     );
 
     fireEvent.click(within(row).getByRole("button", { name: "Override" }));
@@ -579,48 +512,7 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "temperature", "0.5");
   });
 
-  it("clears reference control when a local setting is removed", async () => {
-    const base = profile(
-      "base",
-      null,
-      [
-        { key: "provider", kind: "literal", value: "OpenAI" },
-        { key: "reasoning_effort", kind: "literal", value: "legacy-value" },
-      ],
-      [
-        { key: "provider", value: "OpenAI", source: { id: "base", name: "base" } },
-        {
-          key: "reasoning_effort",
-          value: "legacy-value",
-          source: { id: "base", name: "base" },
-        },
-      ],
-    );
-    const child = profile("child", "base", [], base.effective_settings);
-    renderEditor("/model-profiles/child", [base, child]);
-    let row = await settingRow("reasoning_effort");
-
-    fireEvent.click(within(row).getByRole("button", { name: "Override" }));
-    row = await settingRow("reasoning_effort");
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "integer" },
-    });
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "string" },
-    });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-
-    fireEvent.click(within(row).getByRole("button", { name: "Remove local" }));
-    row = await settingRow("reasoning_effort");
-    fireEvent.click(within(row).getByRole("button", { name: "Override" }));
-    row = await settingRow("reasoning_effort");
-
-    expect(within(row).getByLabelText("Value type")).toBeEnabled();
-    expect(within(row).getByLabelText("Value")).toHaveValue("legacy-value");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-  });
-
-  it("validates a typed setting added before reference metadata arrives", async () => {
+  it("keeps the generic type for a key added before reference metadata arrives", async () => {
     let resolveReference!: (value: ModelProfileReference) => void;
     const referenceResponse = new Promise<ModelProfileReference>((resolve) => {
       resolveReference = resolve;
@@ -635,20 +527,18 @@ describe("Model Profile setting references", () => {
       target: { value: "OpenAI" },
     });
     await addSetting("temperature");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
 
     resolveReference(REFERENCE);
 
     const temperatureRow = await screen.findByText("Synthetic temperature description");
     const row = temperatureRow.closest(".profile-setting")!;
-    expect(within(row).getByLabelText("Value type")).toHaveValue("number");
+    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
     expect(within(row).getByLabelText("Value")).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-
-    fireEvent.change(within(row).getByLabelText("Value"), {
-      target: { value: "0.5" },
-    });
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+    expect(row).toHaveTextContent(
+      translate("modelProfiles.pysubtransType", { type: "number" }),
+    );
   });
 
   it("allows an untouched legacy provider string outside the current registry", async () => {
@@ -666,25 +556,23 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "provider", "OldCustomProvider");
   });
 
-  it("keeps a provider-specific key custom after switching to another provider", async () => {
+  it("keeps a setting editable after switching away from its reference provider", async () => {
     renderEditor("/model-profiles/new");
     await addProvider("OpenAI");
 
     await addSetting("free_plan");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
     const providerValue = screen.getByRole("combobox", { name: "Provider" });
     fireEvent.change(providerValue, { target: { value: "DeepSeek" } });
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled(),
-    );
     const freePlanRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
       row.textContent?.includes("free_plan"),
     )!;
     expect(within(freePlanRow).getByLabelText("Value type")).toBeEnabled();
+    expect(within(freePlanRow).getByLabelText("Value type")).toHaveValue("boolean");
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
 
-  it("uses numeric types and static choices while leaving dynamic model values editable", async () => {
+  it("initializes known numeric settings and leaves model values editable", async () => {
     renderEditor("/model-profiles/new");
     await addProvider("OpenAI");
 
@@ -693,40 +581,54 @@ describe("Model Profile setting references", () => {
     const temperatureRow = rows.find((row) =>
       row.textContent?.includes("temperature"),
     )!;
-    expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("number");
+    expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("integer");
+    expect(within(temperatureRow).getByLabelText("Value type")).toBeEnabled();
     const temperatureValue = within(temperatureRow).getByLabelText("Value");
-    expect(within(temperatureRow).getByLabelText("Value type")).toBeDisabled();
     expect(temperatureValue.tagName).toBe("INPUT");
-    expect(temperatureValue).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-    fireEvent.change(temperatureValue, { target: { value: "0.5" } });
-
-    await addSetting("reasoning_effort");
-    rows = [...document.querySelectorAll(".profile-setting")];
-    const reasoningRow = rows.find((row) =>
-      row.textContent?.includes("reasoning_effort"),
-    )!;
-    const choices = within(reasoningRow).getByLabelText("Value");
-    expect(choices.tagName).toBe("SELECT");
-    expect(
-      within(choices)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toHaveLength(4);
-    expect(choices).toHaveValue("");
-    expect(
-      within(reasoningRow).getByText(translate("modelProfiles.staticChoicesHelp")),
-    ).toBeInTheDocument();
-    fireEvent.change(choices, { target: { value: "low" } });
-    expect(choices).toHaveValue("low");
-    expect(
-      within(reasoningRow).getByText("Synthetic reasoning description"),
-    ).toBeInTheDocument();
+    expect(temperatureValue).toHaveValue("0");
+    expect(temperatureRow).toHaveTextContent(
+      translate("modelProfiles.pysubtransType", { type: "number" }),
+    );
 
     await addSetting("model");
     rows = [...document.querySelectorAll(".profile-setting")];
     const modelRow = rows.find((row) => row.textContent?.includes("model"))!;
     expect(within(modelRow).getByLabelText("Value").tagName).toBe("INPUT");
+  });
+
+  it("uses generic provider editing when provider reference data is unavailable", async () => {
+    const { saves } = renderEditor(
+      "/model-profiles/new",
+      [],
+      Promise.reject(new Error("unavailable")),
+    );
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Synthetic profile" },
+    });
+    await addSetting("provider");
+
+    const row = await settingRow("provider");
+    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
+    const provider = within(row).getByLabelText("Value");
+    expect(provider.tagName).toBe("INPUT");
+    fireEvent.change(provider, { target: { value: "UnlistedProvider" } });
+    await addSetting("custom_option");
+    const customRow = await settingRow("custom_option");
+    fireEvent.change(within(customRow).getByLabelText("Value type"), {
+      target: { value: "number" },
+    });
+    fireEvent.change(within(customRow).getByLabelText("Value"), {
+      target: { value: "2.5" },
+    });
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "provider", "UnlistedProvider");
+    expect(saves[0].body.settings).toContainEqual({
+      key: "custom_option",
+      kind: "literal",
+      value: 2.5,
+    });
   });
 
   it("keeps inherited override, unset and remove-local controls available", async () => {

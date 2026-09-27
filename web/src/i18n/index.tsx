@@ -104,14 +104,13 @@ const ENGLISH = {
   "modelProfiles.save": "Save Model Profile",
   "modelProfiles.saving": "Saving…",
   "modelProfiles.valueType": "Value type",
-  "modelProfiles.expectedType": "PySubtrans expects: {type}",
+  "modelProfiles.pysubtransType": "PySubtrans type: {type}",
   "modelProfiles.value": "Value",
   "modelProfiles.providerValue": "Provider",
   "modelProfiles.chooseProvider": "Choose a provider",
   "modelProfiles.chooseValue": "Choose a value",
   "modelProfiles.staticChoicesHelp":
-    "Static choices are suggestions; available options may depend on the model.",
-  "modelProfiles.selectSuggestedValue": "Choose one of the suggested values for {key}",
+    "Suggested values: {values}. Availability can depend on the model or runtime.",
   "modelProfiles.settingSuggestionHelp":
     "Suggestions follow the effective provider. Custom keys are allowed.",
   "modelProfiles.true": "True",

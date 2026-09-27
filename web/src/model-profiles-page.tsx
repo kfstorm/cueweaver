@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { PageHeader } from "./components/page-header";
@@ -40,52 +40,23 @@ const displayValue = (value: unknown): string =>
 const inputValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
-  type === "array" ? "string list" : (type ?? undefined);
+  type === "array" ? "string list" : type === "object" ? "JSON" : (type ?? undefined);
+const initialValueForReferenceType = (type: string | null | undefined): unknown =>
+  type === "integer" || type === "number"
+    ? 0
+    : type === "boolean"
+      ? false
+      : type === "array" || type === "string list"
+        ? []
+        : type === "object" || type === "JSON"
+          ? {}
+          : "";
 const PROVIDER_REFERENCE: SettingReference = {
   key: "provider",
   type: "string",
   description: null,
   choices: null,
 };
-const settingTypeInfo = (
-  entry: ProfileSetting,
-  reference: SettingReference | undefined,
-  referenceControlled: boolean,
-) => {
-  const actualType = valueType(entry);
-  const referenceType = referenceTypeLabel(reference?.type);
-  const matchesReferenceType =
-    !referenceType ||
-    actualType === referenceType ||
-    (referenceType === "number" && actualType === "integer");
-  const lockTypeToReference = Boolean(referenceType && referenceControlled);
-  return { actualType, referenceType, matchesReferenceType, lockTypeToReference };
-};
-const matchesSettingReference = (
-  value: unknown,
-  reference: SettingReference,
-): boolean => {
-  if (!matchesSettingReferenceType(value, reference)) return false;
-  return (
-    !reference.choices?.length ||
-    (typeof value === "string" && reference.choices.includes(value))
-  );
-};
-const matchesSettingReferenceType = (
-  value: unknown,
-  reference: SettingReference,
-): boolean =>
-  reference.type === "string"
-    ? typeof value === "string"
-    : reference.type === "integer"
-      ? typeof value === "number" && Number.isInteger(value)
-      : reference.type === "number"
-        ? typeof value === "number" && Number.isFinite(value)
-        : reference.type === "boolean"
-          ? typeof value === "boolean"
-          : reference.type === "array"
-            ? Array.isArray(value) && value.every((item) => typeof item === "string")
-            : true;
 
 export function ModelProfilesPage() {
   const { t } = useI18n();
@@ -198,7 +169,6 @@ export function ModelProfileEditor() {
       }
       profiles={profiles.data ?? []}
       reference={reference.data}
-      referencePending={reference.isPending}
       onSave={(input) =>
         save.mutate(
           { id: current?.id, input },
@@ -216,7 +186,6 @@ function ProfileForm({
   initial,
   profiles,
   reference,
-  referencePending,
   onSave,
   pending,
   error,
@@ -225,7 +194,6 @@ function ProfileForm({
   initial: ProfileInput;
   profiles: ModelProfile[];
   reference?: ModelProfileReference;
-  referencePending: boolean;
   onSave: (input: ProfileInput) => void;
   pending: boolean;
   error?: string;
@@ -234,9 +202,6 @@ function ProfileForm({
   const [draft, setDraft] = useState(initial);
   const [newKey, setNewKey] = useState("");
   const [parseErrors, setParseErrors] = useState<Map<string, string>>(() => new Map());
-  const [referenceControlledProviders, setReferenceControlledProviders] = useState<
-    Map<string, string | null>
-  >(() => new Map());
   const setParseError = useCallback((key: string, message: string) => {
     setParseErrors((previous) => {
       const next = new Map(previous);
@@ -271,20 +236,6 @@ function ProfileForm({
   const providerSettings = effectiveProvider
     ? (reference?.providers?.[effectiveProvider] ?? [])
     : [];
-  const activeReferenceControlledKeys = new Set(
-    [...referenceControlledProviders]
-      .filter(([key, provider]) => {
-        const settingReference =
-          key === "provider"
-            ? PROVIDER_REFERENCE
-            : providerSettings.find((item) => item.key === key);
-        return (
-          Boolean(settingReference) &&
-          provider === (key === "provider" ? null : effectiveProvider)
-        );
-      })
-      .map(([key]) => key),
-  );
   const addableSettings = providerSettings.filter((item) => !keys.includes(item.key));
   if (!effectiveProvider && !keys.includes("provider")) {
     addableSettings.unshift({
@@ -295,38 +246,6 @@ function ProfileForm({
     });
   }
   const selectedReference = addableSettings.find((item) => item.key === newKey.trim());
-  const validationErrors = new Map(parseErrors);
-  for (const key of activeReferenceControlledKeys) {
-    const setting = local.get(key);
-    const settingReference =
-      key === "provider"
-        ? PROVIDER_REFERENCE
-        : providerSettings.find((item) => item.key === key);
-    const matchesControlledValue =
-      setting?.kind === "literal" &&
-      settingReference &&
-      (key === "provider"
-        ? typeof setting.value === "string" &&
-          setting.value.length > 0 &&
-          providerNames.includes(setting.value)
-        : matchesSettingReference(setting.value, settingReference));
-    if (setting?.kind === "literal" && settingReference && !matchesControlledValue) {
-      const message =
-        key === "provider"
-          ? t("modelProfiles.chooseProvider")
-          : settingReference.choices?.length &&
-              matchesSettingReferenceType(setting.value, settingReference)
-            ? t("modelProfiles.selectSuggestedValue", { key })
-            : t("modelProfiles.invalidValue", {
-                type:
-                  referenceTypeLabel(settingReference.type) ??
-                  settingReference.type ??
-                  "string",
-                key,
-              });
-      validationErrors.set(key, message);
-    }
-  }
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
     setDraft((previous) => ({
@@ -336,11 +255,6 @@ function ProfileForm({
   };
   const remove = (key: string) => {
     setParseError(key, "");
-    setReferenceControlledProviders((previous) => {
-      const next = new Map(previous);
-      next.delete(key);
-      return next;
-    });
     setDraft((previous) => ({
       ...previous,
       settings: previous.settings.filter((item) => item.key !== key),
@@ -353,19 +267,15 @@ function ProfileForm({
   const addSetting = () => {
     const key = newKey.trim();
     if (!key || keys.includes(key)) return;
-    change({ key, kind: "literal", value: "" });
-    if (key === "provider" || providerSettings.some((item) => item.key === key)) {
-      setReferenceControlledProviders((previous) =>
-        new Map(previous).set(
-          key,
-          key === "provider" ? null : (effectiveProvider ?? null),
-        ),
-      );
-    } else if (referencePending && effectiveProvider) {
-      setReferenceControlledProviders((previous) =>
-        new Map(previous).set(key, effectiveProvider),
-      );
-    }
+    const settingReference =
+      key === "provider"
+        ? PROVIDER_REFERENCE
+        : providerSettings.find((item) => item.key === key);
+    change({
+      key,
+      kind: "literal",
+      value: initialValueForReferenceType(settingReference?.type),
+    });
     setNewKey("");
   };
   return (
@@ -424,17 +334,12 @@ function ProfileForm({
             key === "provider"
               ? PROVIDER_REFERENCE
               : providerSettings.find((item) => item.key === key);
-          const referenceControlled =
-            activeReferenceControlledKeys.has(key) && Boolean(settingReference);
           const typeEntry =
             entry?.kind === "literal"
               ? entry
               : !entry && parentEntry
                 ? { key, kind: "literal" as const, value: parentEntry.value }
                 : undefined;
-          const typeInfo = typeEntry
-            ? settingTypeInfo(typeEntry, settingReference, referenceControlled)
-            : undefined;
           const effective =
             entry?.kind === "unset"
               ? undefined
@@ -454,12 +359,10 @@ function ProfileForm({
                         name: parentEntry?.source.name ?? "",
                       })}{" "}
                   ·{" "}
-                  {typeInfo
-                    ? typeInfo.lockTypeToReference
-                      ? typeInfo.referenceType
-                      : typeInfo.actualType
+                  {typeEntry
+                    ? valueType(typeEntry)
                     : entry?.kind === "unset"
-                      ? (referenceTypeLabel(settingReference?.type) ?? valueType(entry))
+                      ? "unset"
                       : ""}
                 </span>
                 {settingReference?.description && (
@@ -467,15 +370,15 @@ function ProfileForm({
                     {settingReference.description}
                   </p>
                 )}
-                {typeInfo?.referenceType &&
-                  !typeInfo.matchesReferenceType &&
-                  !referenceControlled && (
-                    <p className="field-help">
-                      {t("modelProfiles.expectedType", {
-                        type: typeInfo.referenceType,
-                      })}
-                    </p>
-                  )}
+                {settingReference?.type && (
+                  <p className="field-help">
+                    {t("modelProfiles.pysubtransType", {
+                      type:
+                        referenceTypeLabel(settingReference.type) ??
+                        settingReference.type,
+                    })}
+                  </p>
+                )}
               </div>
               <span className="profile-value">
                 {effective === undefined
@@ -519,28 +422,10 @@ function ProfileForm({
               )}
               {entry?.kind === "literal" && (
                 <LiteralEditor
-                  key={`${key}:${JSON.stringify([
-                    settingReference?.type ?? null,
-                    settingReference?.choices ?? null,
-                    key === "provider" &&
-                      providerNames.length > 0 &&
-                      typeInfo?.actualType === "string",
-                  ])}`}
                   entry={entry}
                   reference={settingReference}
-                  referenceControlled={referenceControlled}
                   providerNames={providerNames}
                   onChange={change}
-                  onTypeChange={(type) => {
-                    if (type === referenceTypeLabel(settingReference?.type)) {
-                      setReferenceControlledProviders((previous) =>
-                        new Map(previous).set(
-                          key,
-                          key === "provider" ? null : (effectiveProvider ?? null),
-                        ),
-                      );
-                    }
-                  }}
                   onError={setParseError}
                 />
               )}
@@ -574,7 +459,8 @@ function ProfileForm({
             </datalist>
             {selectedReference && (
               <span className="field-help" role="status">
-                {selectedReference.type ?? t("modelProfiles.valueType")}
+                {referenceTypeLabel(selectedReference.type) ??
+                  t("modelProfiles.valueType")}
                 {selectedReference.description
                   ? ` · ${selectedReference.description}`
                   : ""}
@@ -593,7 +479,7 @@ function ProfileForm({
             {t("modelProfiles.addSetting")}
           </Button>
         </div>
-        {[...validationErrors].map(([key, message]) => (
+        {[...parseErrors].map(([key, message]) => (
           <p key={key} role="alert" className="form-error">
             {message}
           </p>
@@ -604,7 +490,7 @@ function ProfileForm({
           </p>
         )}
         <div className="profile-actions">
-          <Button type="submit" disabled={pending || validationErrors.size > 0}>
+          <Button type="submit" disabled={pending || parseErrors.size > 0}>
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
           <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
@@ -617,45 +503,27 @@ function ProfileForm({
 function LiteralEditor({
   entry,
   reference,
-  referenceControlled,
   providerNames,
   onChange,
-  onTypeChange,
   onError,
 }: {
   entry: ProfileSetting;
   reference?: SettingReference;
-  referenceControlled: boolean;
   providerNames: string[];
   onChange: (entry: ProfileSetting) => void;
-  onTypeChange: (type: string) => void;
   onError: (key: string, message: string) => void;
 }) {
   const { t } = useI18n();
-  const typeInfo = settingTypeInfo(entry, reference, referenceControlled);
   const isKnownProvider =
     entry.key === "provider" &&
     providerNames.length > 0 &&
-    typeInfo.actualType === "string";
-  const type =
-    typeInfo.lockTypeToReference && typeInfo.referenceType
-      ? typeInfo.referenceType
-      : typeInfo.actualType;
+    valueType(entry) === "string";
+  const choices = reference?.choices?.length ? reference.choices : undefined;
   const [raw, setRaw] = useState(inputValue(entry.value));
-  const [editorType, setEditorType] = useState(type);
-  const choicesHelpId = `model-profile-${entry.key}-choices-help`;
-  const editorSchemaKey = JSON.stringify([
-    reference?.type ?? null,
-    reference?.choices ?? null,
-    isKnownProvider,
-  ]);
-  useEffect(() => {
-    onError(entry.key, "");
-  }, [editorSchemaKey, entry.key, onError]);
+  const [editorType, setEditorType] = useState(() => valueType(entry));
   const changeType = (next: string) => {
     setEditorType(next);
     onError(entry.key, "");
-    onTypeChange(next);
     const value =
       next === "boolean"
         ? false
@@ -707,25 +575,15 @@ function LiteralEditor({
     <div className="profile-editor">
       <label>
         {t("modelProfiles.valueType")}
-        {isKnownProvider ? (
-          <Select value="string" disabled>
-            <option value="string">string</option>
-          </Select>
-        ) : (
-          <Select
-            value={editorType}
-            disabled={typeInfo.lockTypeToReference}
-            onChange={(event) => changeType(event.target.value)}
-          >
-            {["string", "integer", "number", "boolean", "string list", "JSON"].map(
-              (item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ),
-            )}
-          </Select>
-        )}
+        <Select value={editorType} onChange={(event) => changeType(event.target.value)}>
+          {["string", "integer", "number", "boolean", "string list", "JSON"].map(
+            (item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ),
+          )}
+        </Select>
       </label>
       {isKnownProvider ? (
         <label>
@@ -774,38 +632,15 @@ function LiteralEditor({
       ) : (
         <label>
           {t("modelProfiles.value")}
-          {typeInfo.lockTypeToReference && reference?.choices?.length ? (
-            <>
-              <Select
-                aria-label={t("modelProfiles.value")}
-                aria-describedby={choicesHelpId}
-                value={String(entry.value)}
-                onChange={(event) => {
-                  onError(entry.key, "");
-                  onChange({ ...entry, value: event.target.value });
-                }}
-              >
-                {String(entry.value) === "" ? (
-                  <option value="" disabled>
-                    {t("modelProfiles.chooseValue")}
-                  </option>
-                ) : !reference.choices.includes(String(entry.value)) ? (
-                  <option value={String(entry.value)}>{String(entry.value)}</option>
-                ) : null}
-                {reference.choices.map((choice) => (
-                  <option key={choice} value={choice}>
-                    {choice}
-                  </option>
-                ))}
-              </Select>
-              <span id={choicesHelpId} className="field-help">
-                {t("modelProfiles.staticChoicesHelp")}
-              </span>
-            </>
-          ) : editorType === "JSON" || editorType === "string list" ? (
+          {editorType === "JSON" || editorType === "string list" ? (
             <Textarea value={raw} onChange={(event) => changeRaw(event.target.value)} />
           ) : (
             <Input value={raw} onChange={(event) => changeRaw(event.target.value)} />
+          )}
+          {choices && (
+            <span className="field-help">
+              {t("modelProfiles.staticChoicesHelp", { values: choices.join(", ") })}
+            </span>
           )}
         </label>
       )}
