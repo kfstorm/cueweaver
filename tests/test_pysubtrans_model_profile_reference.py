@@ -35,6 +35,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
                     "status": settings.get_str("status"),
                     "advanced": settings.get_str("advanced"),
                     "changing": settings.get_str("changing"),
+                    "branch": settings.get_str("branch"),
                     "complex": build_setting(),
                 }))
 
@@ -54,6 +55,10 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
                 options["advanced"] = (["basic", "advanced"], "Advanced description")
                 options["changing"] = (["one", "two"], "Static description")
                 options["changing"] = (models, "Dynamic description")
+                if settings.get_bool("dynamic"):
+                    options["branch"] = (models, "Dynamic branch")
+                else:
+                    options["branch"] = (["one", "two"], "Static branch")
                 return options
         """
     )
@@ -74,6 +79,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
         "status": "string",
         "advanced": "string",
         "changing": "string",
+        "branch": "string",
         "complex": None,
     }
     assert provider.settings["api_key"].description == "Synthetic API key description"
@@ -82,6 +88,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
     assert provider.settings["models"].choices is None
     assert provider.settings["status"].choices is None
     assert provider.settings["changing"].choices is None
+    assert provider.settings["branch"].choices is None
 
 
 def test_installed_provider_contract_is_complete_without_runtime_discovery(monkeypatch):

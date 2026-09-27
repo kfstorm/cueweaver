@@ -281,6 +281,14 @@ def _get_options(
             key = _literal_string(node.targets[0].slice)
             if key is not None:
                 _record_option(options, key, node.value)
+    for metadata in options.values():
+        candidates = metadata.pop("choice_candidates")
+        first = candidates[0] if candidates else None
+        metadata["choices"] = (
+            first
+            if first is not None and all(candidate == first for candidate in candidates)
+            else None
+        )
     return options
 
 
@@ -292,14 +300,14 @@ def _record_option(
         or len(value.elts) < _OPTION_TUPLE_LENGTH
     ):
         return
-    metadata = options.setdefault(key, {"descriptions": [], "choices": None})
+    metadata = options.setdefault(key, {"descriptions": [], "choice_candidates": []})
     for description in _description_strings(value.elts[1]):
         if (
             not _is_placeholder_text(description)
             and description not in metadata["descriptions"]
         ):
             metadata["descriptions"].append(description)
-    metadata["choices"] = _static_choices(value.elts[0])
+    metadata["choice_candidates"].append(_static_choices(value.elts[0]))
 
 
 def _static_choices(node: ast.expr) -> list[str] | None:
