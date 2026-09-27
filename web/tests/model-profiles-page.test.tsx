@@ -93,7 +93,11 @@ const inheritedModel = {
   source: { id: "base", name: "base" },
 };
 
-function renderEditor(path: string, profiles: ModelProfile[] = []) {
+function renderEditor(
+  path: string,
+  profiles: ModelProfile[] = [],
+  referenceResponse: Promise<ModelProfileReference> = Promise.resolve(REFERENCE),
+) {
   const saves: Array<{ method: string; body: Record<string, unknown> }> = [];
   const fetchMock = vi
     .fn()
@@ -102,7 +106,7 @@ function renderEditor(path: string, profiles: ModelProfile[] = []) {
         return jsonResponse({ model_profiles: profiles });
       }
       if (input === "/api/model-profile-reference") {
-        return jsonResponse(REFERENCE);
+        return jsonResponse(await referenceResponse);
       }
       if (input.startsWith("/api/model-profiles") && init?.method) {
         saves.push({
@@ -250,6 +254,37 @@ describe("Model Profile setting references", () => {
       [...datalist.querySelectorAll("option")].map((option) => option.value),
     ).not.toContain("reasoning_effort");
     expect(keyInput).toHaveValue("");
+  });
+
+  it("validates a typed setting added before reference metadata arrives", async () => {
+    let resolveReference!: (value: ModelProfileReference) => void;
+    const referenceResponse = new Promise<ModelProfileReference>((resolve) => {
+      resolveReference = resolve;
+    });
+    renderEditor("/model-profiles/new", [], referenceResponse);
+
+    await addSetting("provider");
+    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
+      row.textContent?.includes("provider"),
+    )!;
+    fireEvent.change(within(providerRow).getByLabelText("Value"), {
+      target: { value: "OpenAI" },
+    });
+    await addSetting("temperature");
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+
+    resolveReference(REFERENCE);
+
+    const temperatureRow = await screen.findByText("Synthetic temperature description");
+    const row = temperatureRow.closest(".profile-setting")!;
+    expect(within(row).getByLabelText("Value type")).toHaveValue("number");
+    expect(within(row).getByLabelText("Value")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+
+    fireEvent.change(within(row).getByLabelText("Value"), {
+      target: { value: "0.5" },
+    });
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
 
   it("uses numeric types and static choices while leaving dynamic model values editable", async () => {

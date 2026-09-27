@@ -41,6 +41,28 @@ const inputValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
   type === "array" ? "string list" : (type ?? undefined);
+const matchesSettingReference = (
+  value: unknown,
+  reference: SettingReference,
+): boolean => {
+  const matchesType =
+    reference.type === "string"
+      ? typeof value === "string"
+      : reference.type === "integer"
+        ? typeof value === "number" && Number.isInteger(value)
+        : reference.type === "number"
+          ? typeof value === "number" && Number.isFinite(value)
+          : reference.type === "boolean"
+            ? typeof value === "boolean"
+            : reference.type === "array"
+              ? Array.isArray(value) && value.every((item) => typeof item === "string")
+              : true;
+  if (!matchesType) return false;
+  return (
+    !reference.choices ||
+    (typeof value === "string" && reference.choices.includes(value))
+  );
+};
 
 export function ModelProfilesPage() {
   const { t } = useI18n();
@@ -186,6 +208,9 @@ function ProfileForm({
   const [draft, setDraft] = useState(initial);
   const [newKey, setNewKey] = useState("");
   const [parseErrors, setParseErrors] = useState<Map<string, string>>(() => new Map());
+  const [referenceAddedKeys, setReferenceAddedKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
   const setParseError = (key: string, message: string) =>
     setParseErrors((previous) => {
       const next = new Map(previous);
@@ -229,6 +254,27 @@ function ProfileForm({
     });
   }
   const selectedReference = addableSettings.find((item) => item.key === newKey.trim());
+  const validationErrors = new Map(parseErrors);
+  for (const key of referenceAddedKeys) {
+    const setting = local.get(key);
+    const settingReference = providerSettings.find((item) => item.key === key);
+    if (
+      setting?.kind === "literal" &&
+      settingReference &&
+      !matchesSettingReference(setting.value, settingReference)
+    ) {
+      validationErrors.set(
+        key,
+        t("modelProfiles.invalidValue", {
+          type:
+            referenceTypeLabel(settingReference.type) ??
+            settingReference.type ??
+            "string",
+          key,
+        }),
+      );
+    }
+  }
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
     setDraft((previous) => ({
@@ -238,6 +284,11 @@ function ProfileForm({
   };
   const remove = (key: string) => {
     setParseError(key, "");
+    setReferenceAddedKeys((previous) => {
+      const next = new Set(previous);
+      next.delete(key);
+      return next;
+    });
     setDraft((previous) => ({
       ...previous,
       settings: previous.settings.filter((item) => item.key !== key),
@@ -253,6 +304,7 @@ function ProfileForm({
     const settingReference = providerSettings.find((item) => item.key === key);
     const settingType = key === "provider" ? "string" : settingReference?.type;
     change({ key, kind: "literal", value: "" });
+    setReferenceAddedKeys((previous) => new Set(previous).add(key));
     if (
       settingReference?.choices?.length ||
       (settingType !== null && settingType !== undefined && settingType !== "string")
@@ -451,7 +503,7 @@ function ProfileForm({
             {t("modelProfiles.addSetting")}
           </Button>
         </div>
-        {[...parseErrors].map(([key, message]) => (
+        {[...validationErrors].map(([key, message]) => (
           <p key={key} role="alert" className="form-error">
             {message}
           </p>
@@ -462,7 +514,7 @@ function ProfileForm({
           </p>
         )}
         <div className="profile-actions">
-          <Button type="submit" disabled={pending || parseErrors.size > 0}>
+          <Button type="submit" disabled={pending || validationErrors.size > 0}>
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
           <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
