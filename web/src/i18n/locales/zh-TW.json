@@ -59,6 +59,8 @@
   "modelProfiles.providerValue": "服務提供者",
   "modelProfiles.chooseProvider": "選擇服務提供者",
   "modelProfiles.chooseValue": "選擇一個值",
+  "modelProfiles.staticChoicesHelp": "靜態選項僅供參考；可用選項可能因模型而異。",
+  "modelProfiles.selectSuggestedValue": "請選擇 {key} 的一個建議值",
   "modelProfiles.settingSuggestionHelp": "建議項目會依生效的服務提供者顯示。仍可新增自訂鍵。",
   "modelProfiles.true": "是",
   "modelProfiles.false": "否",

@@ -59,6 +59,8 @@
   "modelProfiles.providerValue": "Provedor",
   "modelProfiles.chooseProvider": "Escolha um provedor",
   "modelProfiles.chooseValue": "Escolha um valor",
+  "modelProfiles.staticChoicesHelp": "As opções estáticas são sugestões; as opções disponíveis podem depender do modelo.",
+  "modelProfiles.selectSuggestedValue": "Escolha um dos valores sugeridos para {key}.",
   "modelProfiles.settingSuggestionHelp": "As sugestões seguem o provedor efetivo. Chaves personalizadas continuam permitidas.",
   "modelProfiles.true": "Verdadeiro",
   "modelProfiles.false": "Falso",

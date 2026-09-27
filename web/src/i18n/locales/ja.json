@@ -59,6 +59,8 @@
   "modelProfiles.providerValue": "プロバイダー",
   "modelProfiles.chooseProvider": "プロバイダーを選択",
   "modelProfiles.chooseValue": "値を選択",
+  "modelProfiles.staticChoicesHelp": "静的な選択肢は候補です。利用可能な選択肢はモデルによって異なる場合があります。",
+  "modelProfiles.selectSuggestedValue": "{key} の候補から値を選択してください。",
   "modelProfiles.settingSuggestionHelp": "有効なプロバイダーに応じて候補を表示します。カスタムキーも追加できます。",
   "modelProfiles.true": "真",
   "modelProfiles.false": "偽",

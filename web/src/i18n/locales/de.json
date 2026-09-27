@@ -59,6 +59,8 @@
   "modelProfiles.providerValue": "Anbieter",
   "modelProfiles.chooseProvider": "Anbieter auswählen",
   "modelProfiles.chooseValue": "Wert auswählen",
+  "modelProfiles.staticChoicesHelp": "Statische Auswahlwerte sind Vorschläge; die verfügbaren Optionen können vom Modell abhängen.",
+  "modelProfiles.selectSuggestedValue": "Wähle einen der vorgeschlagenen Werte für {key}.",
   "modelProfiles.settingSuggestionHelp": "Vorschläge richten sich nach dem wirksamen Anbieter. Benutzerdefinierte Schlüssel sind möglich.",
   "modelProfiles.true": "Wahr",
   "modelProfiles.false": "Falsch",

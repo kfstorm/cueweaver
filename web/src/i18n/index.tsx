@@ -109,6 +109,9 @@ const ENGLISH = {
   "modelProfiles.providerValue": "Provider",
   "modelProfiles.chooseProvider": "Choose a provider",
   "modelProfiles.chooseValue": "Choose a value",
+  "modelProfiles.staticChoicesHelp":
+    "Static choices are suggestions; available options may depend on the model.",
+  "modelProfiles.selectSuggestedValue": "Choose one of the suggested values for {key}",
   "modelProfiles.settingSuggestionHelp":
     "Suggestions follow the effective provider. Custom keys are allowed.",
   "modelProfiles.true": "True",
