@@ -36,6 +36,7 @@ cancel_job
 clear_completed_jobs
 delete_job
 list_profiles
+model_profile_reference
 create_profile
 get_profile
 replace_profile

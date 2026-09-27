@@ -72,6 +72,8 @@ preserve the entire Work volume before restoring or inspecting a backup.
 
 Create Model Profiles in **Settings → Model Profiles**. A selectable profile can be chosen for a new Job and must resolve to a `provider` from the local PySubtrans provider registry; `model` is optional. A non-selectable profile may be incomplete and used as a base for inheritance. CueWeaver starts without a selectable profile, but new translations require one.
 
+The editor uses the bundled PySubtrans source to suggest provider settings, types, descriptions, and static choices. Suggestions do not restrict custom setting keys.
+
 Use **Create derived** to inherit from one parent. Settings merge by top-level key: a local literal overrides the inherited value, including a nested JSON object as a whole. **Unset** removes a key from the effective profile without suppressing PySubtrans defaults or environment fallbacks. **Remove local** removes a local override or unset and restores inheritance.
 
 Literal values retain their types: string, integer, number, boolean, string list, or nested JSON. For example, a non-selectable profile can define `provider` = `OpenRouter` and `api_key` = your key, while a selectable child defines `model` = `deepseek/deepseek-v3.2` and `max_threads` = `2` (integer). CueWeaver owns `target_language`, `prompt`, subtitle processing, terminology, error behavior, and project checkpoint settings; these cannot be profile entries.

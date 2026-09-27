@@ -21,6 +21,16 @@ export type ProfileInput = Pick<
   ModelProfile,
   "name" | "parent_id" | "selectable" | "settings"
 >;
+export type SettingReference = {
+  key: string;
+  type: string | null;
+  description: string | null;
+  choices: string[] | null;
+};
+export type ModelProfileReference = {
+  pysubtrans_version: string;
+  providers: Record<string, SettingReference[]>;
+};
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -36,6 +46,14 @@ export function useModelProfiles() {
     queryFn: async () =>
       (await request<{ model_profiles: ModelProfile[] }>("/api/model-profiles"))
         .model_profiles,
+  });
+}
+
+export function useModelProfileReference() {
+  return useQuery({
+    queryKey: ["model-profile-reference"],
+    staleTime: 60_000,
+    queryFn: () => request<ModelProfileReference>("/api/model-profile-reference"),
   });
 }
 

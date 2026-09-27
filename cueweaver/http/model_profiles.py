@@ -5,6 +5,9 @@ from typing import Any, Protocol
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 
+from ..adapters.pysubtrans_model_profile_reference import (
+    pysubtrans_model_profile_reference,
+)
 from ..application.model_profiles import ModelProfiles
 
 
@@ -22,6 +25,10 @@ class ProfileApplication(Protocol):
 
 
 def register_model_profiles(app: FastAPI, application: ProfileApplication) -> None:
+    @app.get("/api/model-profile-reference")
+    def model_profile_reference() -> dict[str, object]:
+        return pysubtrans_model_profile_reference().as_dict()
+
     @app.get("/api/model-profiles")
     def list_profiles() -> dict[str, object]:
         return {"model_profiles": application.model_profiles.list()}
