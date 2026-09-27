@@ -12,6 +12,8 @@
   "settings.modelProfiles": "모델 프로필",
   "settings.termMaps": "용어 맵",
   "settings.manage": "관리",
+  "settings.manageModelProfiles": "모델 프로필 관리",
+  "settings.manageTermMaps": "용어 맵 관리",
   "settings.generalDetail": "CueWeaver의 모양과 인터페이스 언어를 설정합니다.",
   "settings.appearance": "모양",
   "settings.theme": "테마",

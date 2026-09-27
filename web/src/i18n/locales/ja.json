@@ -12,6 +12,8 @@
   "settings.modelProfiles": "モデルプロファイル",
   "settings.termMaps": "用語マップ",
   "settings.manage": "管理",
+  "settings.manageModelProfiles": "モデルプロファイルを管理",
+  "settings.manageTermMaps": "用語マップを管理",
   "settings.generalDetail": "外観と CueWeaver の画面表示言語を設定します。",
   "settings.appearance": "外観",
   "settings.theme": "テーマ",

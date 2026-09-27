@@ -12,6 +12,8 @@
   "settings.modelProfiles": "Profils de modèle",
   "settings.termMaps": "Cartes terminologiques",
   "settings.manage": "Gérer",
+  "settings.manageModelProfiles": "Gérer les profils de modèle",
+  "settings.manageTermMaps": "Gérer les cartes terminologiques",
   "settings.generalDetail": "Définissez l'apparence et la langue de l'interface CueWeaver.",
   "settings.appearance": "Apparence",
   "settings.theme": "Thème",

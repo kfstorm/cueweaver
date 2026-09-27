@@ -12,6 +12,8 @@
   "settings.modelProfiles": "模型配置",
   "settings.termMaps": "术语表",
   "settings.manage": "管理",
+  "settings.manageModelProfiles": "管理模型配置",
+  "settings.manageTermMaps": "管理术语表",
   "settings.generalDetail": "设置外观和 CueWeaver 界面语言。",
   "settings.appearance": "外观",
   "settings.theme": "主题",

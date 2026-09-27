@@ -1224,9 +1224,12 @@ test("missing selectable Model Profiles are actionable and cannot submit", async
   await expect(
     page.getByRole("group", { name: "Model Profile" }).getByRole("status"),
   ).not.toBeEmpty();
-  await expect(page.getByRole("link", { name: "Manage" }).first()).toHaveAttribute(
+  await expect(
+    page.getByRole("link", { name: "Manage Model Profiles" }),
+  ).toHaveAttribute("href", "/settings/model-profiles");
+  await expect(page.getByRole("link", { name: "Manage Term Maps" })).toHaveAttribute(
     "href",
-    "/settings/model-profiles",
+    "/settings/term-maps",
   );
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });

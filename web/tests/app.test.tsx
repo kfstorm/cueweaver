@@ -1009,7 +1009,7 @@ describe("product shell", () => {
     renderRoute("/translate", false);
 
     expectModelProfileFieldStatus();
-    expect(screen.getAllByRole("link", { name: "Manage" })[0]).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Manage Model Profiles" })).toHaveAttribute(
       "href",
       "/settings/model-profiles",
     );
@@ -1024,11 +1024,14 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("option", { name: "Test profile" }),
     ).toBeInTheDocument();
-    const manageLinks = screen.getAllByRole("link", { name: "Manage" });
-    expect(manageLinks.map((link) => link.getAttribute("href"))).toEqual([
+    expect(screen.getByRole("link", { name: "Manage Model Profiles" })).toHaveAttribute(
+      "href",
       "/settings/model-profiles",
+    );
+    expect(screen.getByRole("link", { name: "Manage Term Maps" })).toHaveAttribute(
+      "href",
       "/settings/term-maps",
-    ]);
+    );
     expect(screen.queryByText(/provider ready/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   });

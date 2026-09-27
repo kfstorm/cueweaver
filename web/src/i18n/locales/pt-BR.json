@@ -12,6 +12,8 @@
   "settings.modelProfiles": "Perfis de modelo",
   "settings.termMaps": "Mapas de termos",
   "settings.manage": "Gerenciar",
+  "settings.manageModelProfiles": "Gerenciar perfis de modelo",
+  "settings.manageTermMaps": "Gerenciar mapas de termos",
   "settings.generalDetail": "Defina a aparência e o idioma da interface do CueWeaver.",
   "settings.appearance": "Aparência",
   "settings.theme": "Tema",

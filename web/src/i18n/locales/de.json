@@ -12,6 +12,8 @@
   "settings.modelProfiles": "Modellprofile",
   "settings.termMaps": "Begriffskarten",
   "settings.manage": "Verwalten",
+  "settings.manageModelProfiles": "Modellprofile verwalten",
+  "settings.manageTermMaps": "Begriffskarten verwalten",
   "settings.generalDetail": "Legen Sie Darstellung und CueWeaver-Oberflächensprache fest.",
   "settings.appearance": "Darstellung",
   "settings.theme": "Design",

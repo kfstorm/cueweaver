@@ -770,7 +770,12 @@ function Translate() {
               <label id="model-profile-select-label" htmlFor="model-profile-select">
                 {t("modelProfiles.title")}
               </label>
-              <Link to="/settings/model-profiles">{t("settings.manage")}</Link>
+              <Link
+                to="/settings/model-profiles"
+                aria-label={t("settings.manageModelProfiles")}
+              >
+                {t("settings.manage")}
+              </Link>
             </div>
             <Select
               id="model-profile-select"
@@ -870,7 +875,9 @@ function Translate() {
           <div className="term-map-field">
             <div className="selector-heading">
               <label htmlFor="term-map-select">{t("translate.termMap")}</label>
-              <Link to="/settings/term-maps">{t("settings.manage")}</Link>
+              <Link to="/settings/term-maps" aria-label={t("settings.manageTermMaps")}>
+                {t("settings.manage")}
+              </Link>
             </div>
             <Select
               id="term-map-select"

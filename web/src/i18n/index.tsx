@@ -57,6 +57,8 @@ const ENGLISH = {
   "settings.modelProfiles": "Model Profiles",
   "settings.termMaps": "Term maps",
   "settings.manage": "Manage",
+  "settings.manageModelProfiles": "Manage Model Profiles",
+  "settings.manageTermMaps": "Manage Term Maps",
   "settings.generalDetail": "Set your appearance and CueWeaver interface language.",
   "settings.appearance": "Appearance",
   "settings.theme": "Theme",
