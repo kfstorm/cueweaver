@@ -31,21 +31,23 @@ async function expectResponsiveShell(page: Page, mobile: boolean) {
   for (const [path, title] of routes) {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
-    const desktop = page.getByRole("navigation", { name: "Primary navigation" });
-    const bottom = page.getByRole("navigation", { name: "Mobile navigation" });
+    const desktop = page.getByRole("navigation", {
+      name: "Primary navigation",
+      includeHidden: true,
+    });
+    const bottom = page.getByRole("navigation", {
+      name: "Mobile navigation",
+      includeHidden: true,
+    });
     await expect(desktop)[mobile ? "toBeHidden" : "toBeVisible"]();
     await expect(bottom)[mobile ? "toBeVisible" : "toBeHidden"]();
-    const desktopLinks = page.locator(".desktop-nav .nav-link");
-    const mobileLinks = page.locator(".mobile-nav .nav-link");
+    const desktopLinks = desktop.getByRole("link", { includeHidden: true });
+    const mobileLinks = bottom.getByRole("link", { includeHidden: true });
     await expect(desktopLinks).toHaveCount(3);
     await expect(mobileLinks).toHaveCount(3);
-    expect(await desktopLinks.locator("span").allTextContents()).toEqual(
-      primaryNavigationLabels,
-    );
-    expect(await mobileLinks.locator("span").allTextContents()).toEqual(
-      primaryNavigationLabels,
-    );
-    await expect(bottom.locator("select")).toHaveCount(0);
+    expect(await desktopLinks.allTextContents()).toEqual(primaryNavigationLabels);
+    expect(await mobileLinks.allTextContents()).toEqual(primaryNavigationLabels);
+    await expect(bottom.getByRole("combobox", { includeHidden: true })).toHaveCount(0);
   }
 }
 
@@ -1219,7 +1221,9 @@ test("missing selectable Model Profiles are actionable and cannot submit", async
   );
   await page.goto("/translate");
 
-  await expect(page.locator(".model-profile-field [role=status]")).not.toBeEmpty();
+  await expect(
+    page.getByRole("group", { name: "Model Profile" }).getByRole("status"),
+  ).not.toBeEmpty();
   await expect(page.getByRole("link", { name: "Manage" }).first()).toHaveAttribute(
     "href",
     "/settings/model-profiles",

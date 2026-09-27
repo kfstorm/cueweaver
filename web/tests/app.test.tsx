@@ -198,10 +198,7 @@ async function selectBatchMedia() {
 }
 
 function expectModelProfileFieldStatus() {
-  const profileField = screen
-    .getByRole("combobox", { name: "Model Profile" })
-    .closest<HTMLElement>(".model-profile-field");
-  if (!profileField) throw new Error("Model Profile field was not rendered");
+  const profileField = screen.getByRole("group", { name: "Model Profile" });
   expect(within(profileField).getByRole("status").textContent?.trim()).not.toBe("");
 }
 
@@ -1045,10 +1042,7 @@ describe("product shell", () => {
     });
     renderWithFetch("/translate", fetchMock, null);
 
-    const profileField = screen
-      .getByRole("combobox", { name: "Model Profile" })
-      .closest<HTMLElement>(".model-profile-field");
-    if (!profileField) throw new Error("Model Profile field was not rendered");
+    const profileField = screen.getByRole("group", { name: "Model Profile" });
     expect(await within(profileField).findByRole("alert")).toHaveTextContent(
       "Profiles are offline",
     );

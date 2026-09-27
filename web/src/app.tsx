@@ -761,9 +761,15 @@ function Translate() {
         <div className="step-content">
           <h2 id="configure-title">{t("translate.configure")}</h2>
           <p>{t("translate.configureDetail")}</p>
-          <div className="model-profile-field">
+          <div
+            className="model-profile-field"
+            role="group"
+            aria-labelledby="model-profile-select-label"
+          >
             <div className="selector-heading">
-              <label htmlFor="model-profile-select">{t("modelProfiles.title")}</label>
+              <label id="model-profile-select-label" htmlFor="model-profile-select">
+                {t("modelProfiles.title")}
+              </label>
               <Link to="/settings/model-profiles">{t("settings.manage")}</Link>
             </div>
             <Select
