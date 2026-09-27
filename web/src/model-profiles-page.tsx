@@ -41,6 +41,14 @@ const inputValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
   type === "array" ? "string list" : type === "object" ? "JSON" : (type ?? undefined);
+const editorTypeForReference = (type: string | null | undefined): string => {
+  const label = referenceTypeLabel(type);
+  return ["string", "integer", "number", "boolean", "string list", "JSON"].includes(
+    label ?? "",
+  )
+    ? label!
+    : "string";
+};
 // A fractional seed keeps JSON-backed number values distinct from integers.
 const initialValueForType = (type: string | null | undefined): unknown =>
   type === "integer"
@@ -204,6 +212,9 @@ function ProfileForm({
   const { t } = useI18n();
   const [draft, setDraft] = useState(initial);
   const [newKey, setNewKey] = useState("");
+  const [pendingEditorTypes, setPendingEditorTypes] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   const [parseErrors, setParseErrors] = useState<Map<string, string>>(() => new Map());
   const setParseError = useCallback((key: string, message: string) => {
     setParseErrors((previous) => {
@@ -225,7 +236,9 @@ function ProfileForm({
     profiles.find((item) => item.id === draft.parent_id)?.effective_settings ?? [];
   const inherited = new Map(parentEffective.map((item) => [item.key, item]));
   const local = new Map(draft.settings.map((item) => [item.key, item]));
-  const keys = [...new Set([...inherited.keys(), ...local.keys()])].sort();
+  const keys = [
+    ...new Set([...inherited.keys(), ...local.keys(), ...pendingEditorTypes.keys()]),
+  ].sort();
   const localProvider = local.get("provider");
   const providerValue =
     localProvider?.kind === "unset"
@@ -251,6 +264,12 @@ function ProfileForm({
   const selectedReference = addableSettings.find((item) => item.key === newKey.trim());
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
+    setPendingEditorTypes((previous) => {
+      if (!previous.has(entry.key)) return previous;
+      const next = new Map(previous);
+      next.delete(entry.key);
+      return next;
+    });
     setDraft((previous) => ({
       ...previous,
       settings: [...previous.settings.filter((item) => item.key !== entry.key), entry],
@@ -258,6 +277,12 @@ function ProfileForm({
   };
   const remove = (key: string) => {
     setParseError(key, "");
+    setPendingEditorTypes((previous) => {
+      if (!previous.has(key)) return previous;
+      const next = new Map(previous);
+      next.delete(key);
+      return next;
+    });
     setDraft((previous) => ({
       ...previous,
       settings: previous.settings.filter((item) => item.key !== key),
@@ -265,6 +290,7 @@ function ProfileForm({
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (pending || parseErrors.size > 0 || pendingEditorTypes.size > 0) return;
     onSave(draft);
   };
   const addSetting = () => {
@@ -274,11 +300,13 @@ function ProfileForm({
       key === "provider"
         ? PROVIDER_REFERENCE
         : providerSettings.find((item) => item.key === key);
-    change({
-      key,
-      kind: "literal",
-      value: initialValueForType(settingReference?.type),
-    });
+    if (settingReference) {
+      setPendingEditorTypes((previous) =>
+        new Map(previous).set(key, editorTypeForReference(settingReference.type)),
+      );
+    } else {
+      change({ key, kind: "literal", value: "" });
+    }
     setNewKey("");
   };
   return (
@@ -333,6 +361,7 @@ function ProfileForm({
         {keys.map((key) => {
           const entry = local.get(key);
           const parentEntry = inherited.get(key);
+          const pendingEditorType = pendingEditorTypes.get(key);
           const settingReference =
             key === "provider"
               ? PROVIDER_REFERENCE
@@ -358,15 +387,18 @@ function ProfileForm({
                     ? entry.kind === "unset"
                       ? t("modelProfiles.unsetLocally")
                       : t("modelProfiles.local")
-                    : t("modelProfiles.inheritedFrom", {
-                        name: parentEntry?.source.name ?? "",
-                      })}{" "}
+                    : pendingEditorType !== undefined
+                      ? t("modelProfiles.local")
+                      : t("modelProfiles.inheritedFrom", {
+                          name: parentEntry?.source.name ?? "",
+                        })}{" "}
                   ·{" "}
-                  {typeEntry
-                    ? valueType(typeEntry)
-                    : entry?.kind === "unset"
-                      ? "unset"
-                      : ""}
+                  {pendingEditorType ??
+                    (typeEntry
+                      ? valueType(typeEntry)
+                      : entry?.kind === "unset"
+                        ? "unset"
+                        : "")}
                 </span>
                 {settingReference?.description && (
                   <p className="field-help profile-setting-description">
@@ -384,9 +416,11 @@ function ProfileForm({
                 )}
               </div>
               <span className="profile-value">
-                {effective === undefined
-                  ? t("modelProfiles.unset")
-                  : displayValue(effective)}
+                {pendingEditorType !== undefined
+                  ? t("modelProfiles.chooseValue")
+                  : effective === undefined
+                    ? t("modelProfiles.unset")
+                    : displayValue(effective)}
               </span>
               {entry ? (
                 <>
@@ -403,6 +437,10 @@ function ProfileForm({
                     </Button>
                   )}
                 </>
+              ) : pendingEditorType !== undefined ? (
+                <Button type="button" variant="outline" onClick={() => remove(key)}>
+                  {t("modelProfiles.removeLocal")}
+                </Button>
               ) : (
                 <>
                   <Button
@@ -423,13 +461,23 @@ function ProfileForm({
                   </Button>
                 </>
               )}
-              {entry?.kind === "literal" && (
+              {(entry?.kind === "literal" || pendingEditorType !== undefined) && (
                 <LiteralEditor
-                  entry={entry}
+                  entry={
+                    entry?.kind === "literal"
+                      ? entry
+                      : { key, kind: "literal", value: "" }
+                  }
+                  pendingType={pendingEditorType}
                   reference={settingReference}
                   providerNames={providerNames}
                   onChange={change}
                   onError={setParseError}
+                  onPendingTypeChange={(settingKey, type) =>
+                    setPendingEditorTypes((previous) =>
+                      new Map(previous).set(settingKey, type),
+                    )
+                  }
                 />
               )}
             </div>
@@ -493,7 +541,10 @@ function ProfileForm({
           </p>
         )}
         <div className="profile-actions">
-          <Button type="submit" disabled={pending || parseErrors.size > 0}>
+          <Button
+            type="submit"
+            disabled={pending || parseErrors.size > 0 || pendingEditorTypes.size > 0}
+          >
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
           <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
@@ -505,28 +556,35 @@ function ProfileForm({
 
 function LiteralEditor({
   entry,
+  pendingType,
   reference,
   providerNames,
   onChange,
   onError,
+  onPendingTypeChange,
 }: {
   entry: ProfileSetting;
+  pendingType?: string;
   reference?: SettingReference;
   providerNames: string[];
   onChange: (entry: ProfileSetting) => void;
   onError: (key: string, message: string) => void;
+  onPendingTypeChange: (key: string, type: string) => void;
 }) {
   const { t } = useI18n();
-  const isKnownProvider =
-    entry.key === "provider" &&
-    providerNames.length > 0 &&
-    valueType(entry) === "string";
-  const choices = reference?.choices?.length ? reference.choices : undefined;
   const [raw, setRaw] = useState(inputValue(entry.value));
-  const [editorType, setEditorType] = useState(() => valueType(entry));
+  const [editorType, setEditorType] = useState(() => pendingType ?? valueType(entry));
+  const isKnownProvider =
+    entry.key === "provider" && providerNames.length > 0 && editorType === "string";
+  const choices = reference?.choices?.length ? reference.choices : undefined;
   const changeType = (next: string) => {
     setEditorType(next);
     onError(entry.key, "");
+    if (pendingType !== undefined) {
+      setRaw("");
+      onPendingTypeChange(entry.key, next);
+      return;
+    }
     const value = initialValueForType(next);
     setRaw(inputValue(value));
     onChange({ ...entry, value });
