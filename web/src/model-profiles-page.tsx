@@ -41,16 +41,19 @@ const inputValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
   type === "array" ? "string list" : type === "object" ? "JSON" : (type ?? undefined);
-const initialValueForReferenceType = (type: string | null | undefined): unknown =>
-  type === "integer" || type === "number"
+// A fractional seed keeps JSON-backed number values distinct from integers.
+const initialValueForType = (type: string | null | undefined): unknown =>
+  type === "integer"
     ? 0
-    : type === "boolean"
-      ? false
-      : type === "array" || type === "string list"
-        ? []
-        : type === "object" || type === "JSON"
-          ? {}
-          : "";
+    : type === "number"
+      ? 0.5
+      : type === "boolean"
+        ? false
+        : type === "array" || type === "string list"
+          ? []
+          : type === "object" || type === "JSON"
+            ? {}
+            : "";
 const PROVIDER_REFERENCE: SettingReference = {
   key: "provider",
   type: "string",
@@ -274,7 +277,7 @@ function ProfileForm({
     change({
       key,
       kind: "literal",
-      value: initialValueForReferenceType(settingReference?.type),
+      value: initialValueForType(settingReference?.type),
     });
     setNewKey("");
   };
@@ -524,16 +527,7 @@ function LiteralEditor({
   const changeType = (next: string) => {
     setEditorType(next);
     onError(entry.key, "");
-    const value =
-      next === "boolean"
-        ? false
-        : next === "integer" || next === "number"
-          ? 0
-          : next === "string list"
-            ? []
-            : next === "JSON"
-              ? {}
-              : "";
+    const value = initialValueForType(next);
     setRaw(inputValue(value));
     onChange({ ...entry, value });
   };

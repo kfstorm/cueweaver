@@ -382,6 +382,7 @@ describe("Model Profile setting references", () => {
     const value = within(row).getByRole("textbox");
     expect(value.tagName).toBe("INPUT");
     expect(row).toHaveTextContent(/none.*low.*high/);
+    expect(row.querySelector(".profile-editor .field-help")).toBeInTheDocument();
     fireEvent.change(value, { target: { value: "custom-effort" } });
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
 
@@ -573,7 +574,10 @@ describe("Model Profile setting references", () => {
   });
 
   it("initializes known numeric settings and leaves model values editable", async () => {
-    renderEditor("/model-profiles/new");
+    const { saves } = renderEditor("/model-profiles/new");
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Synthetic profile" },
+    });
     await addProvider("OpenAI");
 
     await addSetting("temperature");
@@ -581,11 +585,11 @@ describe("Model Profile setting references", () => {
     const temperatureRow = rows.find((row) =>
       row.textContent?.includes("temperature"),
     )!;
-    expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("integer");
+    expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("number");
     expect(within(temperatureRow).getByLabelText("Value type")).toBeEnabled();
     const temperatureValue = within(temperatureRow).getByLabelText("Value");
     expect(temperatureValue.tagName).toBe("INPUT");
-    expect(temperatureValue).toHaveValue("0");
+    expect(temperatureValue).toHaveValue("0.5");
     expect(temperatureRow).toHaveTextContent(
       translate("modelProfiles.pysubtransType", { type: "number" }),
     );
@@ -594,6 +598,9 @@ describe("Model Profile setting references", () => {
     rows = [...document.querySelectorAll(".profile-setting")];
     const modelRow = rows.find((row) => row.textContent?.includes("model"))!;
     expect(within(modelRow).getByLabelText("Value").tagName).toBe("INPUT");
+    fireEvent.change(temperatureValue, { target: { value: "0.75" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "temperature", 0.75);
   });
 
   it("uses generic provider editing when provider reference data is unavailable", async () => {

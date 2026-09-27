@@ -48,7 +48,6 @@ test("adds a provider setting from the bundled reference", async ({ page }) => {
     .filter({ hasText: "reasoning_effort" });
   await expect(setting.getByLabel("Value type")).toHaveValue("string");
   await expect(setting.getByLabel("Value type")).toBeEnabled();
-  await expect(setting.getByText(/Suggested values:/)).toBeVisible();
   await setting.getByRole("textbox").fill("custom-effort");
 
   await page.getByRole("button", { name: "Save Model Profile" }).click();
