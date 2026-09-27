@@ -27,6 +27,33 @@ test.beforeAll(async ({ request }) => {
   modelProfileId = (await response.json()).id as string;
 });
 
+test("adds a provider setting from the bundled reference", async ({ page }) => {
+  await page.goto("/model-profiles/new");
+  await page.getByLabel("Name").fill("Reference profile");
+
+  const keyInput = page.getByLabel(/New setting key/);
+  await keyInput.fill("provider");
+  await page.getByRole("button", { name: "Add setting" }).click();
+  await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption({
+    label: "OpenAI",
+  });
+
+  await keyInput.fill("reasoning_effort");
+  await expect(
+    page.locator('#model-profile-setting-reference option[value="reasoning_effort"]'),
+  ).toBeAttached();
+  await page.getByRole("button", { name: "Add setting" }).click();
+  const setting = page
+    .locator(".profile-setting")
+    .filter({ hasText: "reasoning_effort" });
+  const valueControls = setting.getByRole("combobox");
+  await expect(valueControls.nth(0)).toHaveValue("string");
+  await expect(valueControls.nth(1)).toHaveValue("none");
+
+  await page.getByRole("button", { name: "Save Model Profile" }).click();
+  await expect(page.getByRole("heading", { name: "Model Profiles" })).toBeVisible();
+});
+
 async function expectResponsiveShell(page: Page, mobile: boolean) {
   for (const [path, title] of routes) {
     await page.goto(path);

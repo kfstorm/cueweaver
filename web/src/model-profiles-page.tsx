@@ -7,11 +7,14 @@ import { Input, Select, Textarea } from "./components/ui/input";
 import { useI18n } from "./i18n";
 import {
   useDeleteModelProfile,
+  useModelProfileReference,
   useModelProfiles,
   useSaveModelProfile,
   type ModelProfile,
+  type ModelProfileReference,
   type ProfileInput,
   type ProfileSetting,
+  type SettingReference,
 } from "./model-profiles";
 
 const empty = (parent_id: string | null = null): ProfileInput => ({
@@ -36,6 +39,8 @@ const displayValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 const inputValue = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
+const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
+  type === "array" ? "string list" : (type ?? undefined);
 
 export function ModelProfilesPage() {
   const { t } = useI18n();
@@ -124,6 +129,7 @@ export function ModelProfileEditor() {
   const location = useLocation();
   const navigate = useNavigate();
   const profiles = useModelProfiles();
+  const reference = useModelProfileReference();
   const save = useSaveModelProfile();
   const current = profiles.data?.find((item) => item.id === profileId);
   const parent = new URLSearchParams(location.search).get("parent");
@@ -146,6 +152,7 @@ export function ModelProfileEditor() {
           : empty(profiles.data?.some((item) => item.id === parent) ? parent : null)
       }
       profiles={profiles.data ?? []}
+      reference={reference.data}
       onSave={(input) =>
         save.mutate(
           { id: current?.id, input },
@@ -162,6 +169,7 @@ function ProfileForm({
   current,
   initial,
   profiles,
+  reference,
   onSave,
   pending,
   error,
@@ -169,6 +177,7 @@ function ProfileForm({
   current?: ModelProfile;
   initial: ProfileInput;
   profiles: ModelProfile[];
+  reference?: ModelProfileReference;
   onSave: (input: ProfileInput) => void;
   pending: boolean;
   error?: string;
@@ -197,6 +206,29 @@ function ProfileForm({
   const inherited = new Map(parentEffective.map((item) => [item.key, item]));
   const local = new Map(draft.settings.map((item) => [item.key, item]));
   const keys = [...new Set([...inherited.keys(), ...local.keys()])].sort();
+  const localProvider = local.get("provider");
+  const providerValue =
+    localProvider?.kind === "unset"
+      ? undefined
+      : localProvider?.kind === "literal"
+        ? localProvider.value
+        : inherited.get("provider")?.value;
+  const effectiveProvider =
+    typeof providerValue === "string" ? providerValue : undefined;
+  const providerNames = Object.keys(reference?.providers ?? {});
+  const providerSettings = effectiveProvider
+    ? (reference?.providers[effectiveProvider] ?? [])
+    : [];
+  const addableSettings = providerSettings.filter((item) => !keys.includes(item.key));
+  if (!effectiveProvider && !keys.includes("provider")) {
+    addableSettings.unshift({
+      key: "provider",
+      type: "string",
+      description: null,
+      choices: null,
+    });
+  }
+  const selectedReference = addableSettings.find((item) => item.key === newKey.trim());
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
     setDraft((previous) => ({
@@ -214,6 +246,15 @@ function ProfileForm({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onSave(draft);
+  };
+  const addSetting = () => {
+    const key = newKey.trim();
+    if (!key || keys.includes(key)) return;
+    const settingReference = providerSettings.find((item) => item.key === key);
+    const type = key === "provider" ? "string" : settingReference?.type;
+    const value = initialSettingValue(type, settingReference?.choices ?? null);
+    change({ key, kind: "literal", value });
+    setNewKey("");
   };
   return (
     <>
@@ -267,6 +308,7 @@ function ProfileForm({
         {keys.map((key) => {
           const entry = local.get(key);
           const parentEntry = inherited.get(key);
+          const settingReference = providerSettings.find((item) => item.key === key);
           const effective =
             entry?.kind === "unset"
               ? undefined
@@ -286,12 +328,18 @@ function ProfileForm({
                         name: parentEntry?.source.name ?? "",
                       })}{" "}
                   ·{" "}
-                  {entry
-                    ? valueType(entry)
-                    : parentEntry
-                      ? valueType({ key, kind: "literal", value: parentEntry.value })
-                      : ""}
+                  {referenceTypeLabel(settingReference?.type) ??
+                    (entry
+                      ? valueType(entry)
+                      : parentEntry
+                        ? valueType({ key, kind: "literal", value: parentEntry.value })
+                        : "")}
                 </span>
+                {settingReference?.description && (
+                  <p className="field-help profile-setting-description">
+                    {settingReference.description}
+                  </p>
+                )}
               </div>
               <span className="profile-value">
                 {effective === undefined
@@ -335,7 +383,10 @@ function ProfileForm({
               )}
               {entry?.kind === "literal" && (
                 <LiteralEditor
+                  key={`${key}:${effectiveProvider ?? ""}:${providerSettings.find((item) => item.key === key)?.type ?? ""}`}
                   entry={entry}
+                  reference={settingReference}
+                  providerNames={providerNames}
                   onChange={change}
                   onError={(message) => setParseError(key, message)}
                 />
@@ -346,16 +397,45 @@ function ProfileForm({
         <div className="profile-add">
           <label>
             {t("modelProfiles.newKey")}
-            <Input value={newKey} onChange={(event) => setNewKey(event.target.value)} />
+            <Input
+              list="model-profile-setting-reference"
+              autoComplete="off"
+              value={newKey}
+              onChange={(event) => setNewKey(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addSetting();
+                }
+              }}
+              aria-describedby="model-profile-setting-help"
+            />
+            <datalist id="model-profile-setting-reference">
+              {addableSettings.map((item) => (
+                <option
+                  key={item.key}
+                  value={item.key}
+                  label={`${item.type ?? ""}${item.description ? ` · ${item.description}` : ""}`}
+                />
+              ))}
+            </datalist>
+            {selectedReference && (
+              <span className="field-help" role="status">
+                {selectedReference.type ?? t("modelProfiles.valueType")}
+                {selectedReference.description
+                  ? ` · ${selectedReference.description}`
+                  : ""}
+              </span>
+            )}
+            <span id="model-profile-setting-help" className="field-help">
+              {t("modelProfiles.settingSuggestionHelp")}
+            </span>
           </label>
           <Button
             type="button"
             variant="outline"
-            disabled={!newKey.trim() || keys.includes(newKey)}
-            onClick={() => {
-              change({ key: newKey, kind: "literal", value: "" });
-              setNewKey("");
-            }}
+            disabled={!newKey.trim() || keys.includes(newKey.trim())}
+            onClick={addSetting}
           >
             {t("modelProfiles.addSetting")}
           </Button>
@@ -383,15 +463,21 @@ function ProfileForm({
 
 function LiteralEditor({
   entry,
+  reference,
+  providerNames,
   onChange,
   onError,
 }: {
   entry: ProfileSetting;
+  reference?: SettingReference;
+  providerNames: string[];
   onChange: (entry: ProfileSetting) => void;
   onError: (message: string) => void;
 }) {
   const { t } = useI18n();
-  const type = valueType(entry);
+  const isKnownProvider = entry.key === "provider" && providerNames.length > 0;
+  const type =
+    reference?.type === "array" ? "string list" : (reference?.type ?? valueType(entry));
   const [raw, setRaw] = useState(inputValue(entry.value));
   const [editorType, setEditorType] = useState(type);
   const changeType = (next: string) => {
@@ -445,17 +531,44 @@ function LiteralEditor({
     <div className="profile-editor">
       <label>
         {t("modelProfiles.valueType")}
-        <Select value={editorType} onChange={(event) => changeType(event.target.value)}>
-          {["string", "integer", "number", "boolean", "string list", "JSON"].map(
-            (item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ),
-          )}
-        </Select>
+        {isKnownProvider ? (
+          <Select value="string" disabled>
+            <option value="string">string</option>
+          </Select>
+        ) : (
+          <Select
+            value={editorType}
+            onChange={(event) => changeType(event.target.value)}
+          >
+            {["string", "integer", "number", "boolean", "string list", "JSON"].map(
+              (item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ),
+            )}
+          </Select>
+        )}
       </label>
-      {editorType === "boolean" ? (
+      {isKnownProvider ? (
+        <label>
+          {t("modelProfiles.providerValue")}
+          <Select
+            value={String(entry.value)}
+            onChange={(event) => onChange({ ...entry, value: event.target.value })}
+          >
+            <option value="">{t("modelProfiles.chooseProvider")}</option>
+            {String(entry.value) && !providerNames.includes(String(entry.value)) && (
+              <option value={String(entry.value)}>{String(entry.value)}</option>
+            )}
+            {providerNames.map((provider) => (
+              <option key={provider} value={provider}>
+                {provider}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : editorType === "boolean" ? (
         <label>
           {t("modelProfiles.value")}
           <Select
@@ -471,7 +584,21 @@ function LiteralEditor({
       ) : (
         <label>
           {t("modelProfiles.value")}
-          {editorType === "JSON" || editorType === "string list" ? (
+          {reference?.choices?.length ? (
+            <Select
+              value={String(entry.value)}
+              onChange={(event) => onChange({ ...entry, value: event.target.value })}
+            >
+              {!reference.choices.includes(String(entry.value)) && (
+                <option value={String(entry.value)}>{String(entry.value)}</option>
+              )}
+              {reference.choices.map((choice) => (
+                <option key={choice} value={choice}>
+                  {choice}
+                </option>
+              ))}
+            </Select>
+          ) : editorType === "JSON" || editorType === "string list" ? (
             <Textarea value={raw} onChange={(event) => changeRaw(event.target.value)} />
           ) : (
             <Input value={raw} onChange={(event) => changeRaw(event.target.value)} />
@@ -480,4 +607,15 @@ function LiteralEditor({
       )}
     </div>
   );
+}
+
+function initialSettingValue(
+  type: string | null | undefined,
+  choices: string[] | null,
+): unknown {
+  if (choices?.length) return choices[0];
+  if (type === "boolean") return false;
+  if (type === "integer" || type === "number") return 0;
+  if (type === "array") return [];
+  return "";
 }

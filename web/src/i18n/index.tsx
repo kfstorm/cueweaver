@@ -105,6 +105,10 @@ const ENGLISH = {
   "modelProfiles.saving": "Saving…",
   "modelProfiles.valueType": "Value type",
   "modelProfiles.value": "Value",
+  "modelProfiles.providerValue": "Provider",
+  "modelProfiles.chooseProvider": "Choose a provider",
+  "modelProfiles.settingSuggestionHelp":
+    "Suggestions follow the effective provider. Custom keys are allowed.",
   "modelProfiles.true": "True",
   "modelProfiles.false": "False",
   "modelProfiles.invalidValue": "Invalid {type} value for {key}",

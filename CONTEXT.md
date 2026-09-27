@@ -66,6 +66,10 @@ Profile ID and resolves the current settings when each translation attempt
 starts. A non-selectable Model Profile may be used as an incomplete base for
 inheritance; selectable only controls selection for new Jobs.
 
+The Model Profile editor offers provider setting references extracted from the
+installed PySubtrans source. References suggest keys and types without
+restricting custom settings.
+
 **Job persistence**:
 The application composition owns the SQLite database at
 `<work-root>/cueweaver.sqlite3` and the Work-root lease at
