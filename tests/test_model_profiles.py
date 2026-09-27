@@ -122,6 +122,32 @@ def test_invalid_settings_rejected(tmp_path, settings):
     assert error.value.error_code == "invalid_model_profile"
 
 
+def test_nested_settings_accept_string_lists_and_null(tmp_path):
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    nested = {"provider": {"labels": ["one", "two"], "optional": None}}
+    profile = profiles.create("Example", None, False, [literal("options", nested)])
+
+    assert profiles.resolve(profile["id"])["options"] == nested
+
+
+@pytest.mark.parametrize("items", [[1], [True], [{}], ["valid", 1]])
+def test_nested_settings_reject_non_string_lists(tmp_path, items):
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    with pytest.raises(ServiceError) as error:
+        profiles.create(
+            "Example", None, False, [literal("options", {"deep": {"items": items}})]
+        )
+    assert error.value.error_code == "invalid_model_profile"
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), -float("inf")])
+def test_nested_settings_reject_non_finite_numbers(tmp_path, number):
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    with pytest.raises(ServiceError) as error:
+        profiles.create("Example", None, False, [literal("options", {"value": number})])
+    assert error.value.error_code == "invalid_model_profile"
+
+
 def test_profile_api_and_job_reference(tmp_path):
     media = tmp_path / "media"
     media.mkdir()

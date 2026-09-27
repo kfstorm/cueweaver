@@ -174,7 +174,14 @@ function ProfileForm({
   const { t } = useI18n();
   const [draft, setDraft] = useState(initial);
   const [newKey, setNewKey] = useState("");
-  const [parseError, setParseError] = useState("");
+  const [parseErrors, setParseErrors] = useState<Map<string, string>>(() => new Map());
+  const setParseError = (key: string, message: string) =>
+    setParseErrors((previous) => {
+      const next = new Map(previous);
+      if (message) next.set(key, message);
+      else next.delete(key);
+      return next;
+    });
   const disallowed = useMemo(() => {
     const descendants = new Set<string>(current ? [current.id] : []);
     for (let i = 0; i < profiles.length; i++)
@@ -188,13 +195,15 @@ function ProfileForm({
   const inherited = new Map(parentEffective.map((item) => [item.key, item]));
   const local = new Map(draft.settings.map((item) => [item.key, item]));
   const keys = [...new Set([...inherited.keys(), ...local.keys()])].sort();
-  const change = (entry: ProfileSetting) =>
+  const change = (entry: ProfileSetting) => {
+    if (entry.kind === "unset") setParseError(entry.key, "");
     setDraft((previous) => ({
       ...previous,
       settings: [...previous.settings.filter((item) => item.key !== entry.key), entry],
     }));
+  };
   const remove = (key: string) => {
-    setParseError("");
+    setParseError(key, "");
     setDraft((previous) => ({
       ...previous,
       settings: previous.settings.filter((item) => item.key !== key),
@@ -326,7 +335,7 @@ function ProfileForm({
                 <LiteralEditor
                   entry={entry}
                   onChange={change}
-                  onError={setParseError}
+                  onError={(message) => setParseError(key, message)}
                 />
               )}
             </div>
@@ -349,18 +358,18 @@ function ProfileForm({
             {t("modelProfiles.addSetting")}
           </Button>
         </div>
-        {parseError && (
-          <p role="alert" className="form-error">
-            {parseError}
+        {[...parseErrors].map(([key, message]) => (
+          <p key={key} role="alert" className="form-error">
+            {message}
           </p>
-        )}
+        ))}
         {error && (
           <p role="alert" className="form-error">
             {error}
           </p>
         )}
         <div className="profile-actions">
-          <Button type="submit" disabled={pending || !!parseError}>
+          <Button type="submit" disabled={pending || parseErrors.size > 0}>
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
           <Link to="/model-profiles">{t("common.cancel")}</Link>

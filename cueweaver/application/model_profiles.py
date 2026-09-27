@@ -47,8 +47,6 @@ def _valid_json(value: object) -> bool:
 def _valid_nested(value: object) -> bool:
     if value is None:
         return True
-    if isinstance(value, list):
-        return all(_valid_nested(item) for item in value)
     return _valid_json(value)
 
 
