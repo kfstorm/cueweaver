@@ -4,6 +4,7 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
+from PySubtrans.TranslationProvider import TranslationProvider
 
 from cueweaver.application import CueWeaverApplication
 from cueweaver.application.database import SqliteDatabase
@@ -81,6 +82,54 @@ def test_replacement_rolls_back_invalid_provider_and_cycle(tmp_path):
     assert error.value.error_code == "model_profile_cycle"
 
 
+def test_base_edit_and_reparent_roll_back_when_deep_descendant_loses_provider(tmp_path):
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    source = profiles.create("Source", None, False, [literal("provider", "OpenAI")])
+    root = profiles.create("Root", source["id"], False, [])
+    middle = profiles.create("Middle", root["id"], False, [])
+    leaf = profiles.create("Leaf", middle["id"], True, [])
+    other = profiles.create("Other", None, False, [])
+
+    with pytest.raises(ServiceError) as error:
+        profiles.replace(
+            root["id"], "Renamed", source["id"], False, [unset("provider")]
+        )
+    assert error.value.error_code == "invalid_model_profile_provider"
+    assert profiles.get(root["id"])["name"] == "Root"
+    assert profiles.get(root["id"])["settings"] == []
+    assert profiles.resolve(leaf["id"])["provider"] == "OpenAI"
+
+    with pytest.raises(ServiceError) as error:
+        profiles.replace(root["id"], "Root", other["id"], False, [])
+    assert error.value.error_code == "invalid_model_profile_provider"
+    assert profiles.get(root["id"])["parent_id"] == source["id"]
+    assert profiles.resolve(leaf["id"])["provider"] == "OpenAI"
+
+
+def test_saving_one_tree_does_not_revalidate_unrelated_tree(tmp_path, monkeypatch):
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    root = profiles.create("Root", None, False, [literal("provider", "OpenAI")])
+    child = profiles.create("Child", root["id"], True, [])
+    unrelated = profiles.create(
+        "Unrelated", None, True, [literal("provider", "DeepSeek")]
+    )
+    providers = TranslationProvider.get_providers()
+    monkeypatch.setattr(
+        TranslationProvider,
+        "get_providers",
+        lambda: {
+            name: provider for name, provider in providers.items() if name != "DeepSeek"
+        },
+    )
+
+    profiles.replace(root["id"], "Renamed", None, False, root["settings"])
+    new_child = profiles.create("New child", root["id"], True, [])
+
+    assert profiles.resolve(child["id"])["provider"] == "OpenAI"
+    assert profiles.resolve(new_child["id"])["provider"] == "OpenAI"
+    assert profiles.resolve(unrelated["id"])["provider"] == "DeepSeek"
+
+
 def test_selectable_requires_local_registry_provider_but_no_model(tmp_path):
     profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
     base = profiles.create("Incomplete base", None, False, [])
@@ -103,6 +152,17 @@ def test_selectable_requires_local_registry_provider_but_no_model(tmp_path):
         )
     assert error.value.error_code == "invalid_model_profile_provider"
     assert profiles.resolve(selected["id"]) == {"provider": "OpenAI"}
+
+
+def test_selectable_profile_validates_its_own_changes(tmp_path):
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    profile = profiles.create("Ready", None, True, [literal("provider", "OpenAI")])
+
+    with pytest.raises(ServiceError) as error:
+        profiles.replace(profile["id"], "Changed", None, True, [unset("provider")])
+    assert error.value.error_code == "invalid_model_profile_provider"
+    assert profiles.get(profile["id"])["name"] == "Ready"
+    assert profiles.resolve(profile["id"])["provider"] == "OpenAI"
 
 
 @pytest.mark.parametrize(

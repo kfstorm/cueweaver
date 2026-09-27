@@ -239,11 +239,22 @@ class ModelProfiles:
                 for item in settings
             )
             session.flush()
-            # Editing a base must not silently invalidate selectable descendants.
-            descendants = session.scalars(select(ModelProfileRow)).all()
-            for candidate in descendants:
-                if candidate.selectable:
-                    self._validate_provider(self._effective(session, candidate))
+            # Child edges still identify affected descendants after reparenting.
+            frontier = [row]
+            seen = {row.id}
+            while frontier:
+                for candidate in frontier:
+                    if candidate.selectable:
+                        self._validate_provider(self._effective(session, candidate))
+                children = session.scalars(
+                    select(ModelProfileRow).where(
+                        ModelProfileRow.parent_id.in_(
+                            candidate.id for candidate in frontier
+                        )
+                    )
+                ).all()
+                frontier = [child for child in children if child.id not in seen]
+                seen.update(child.id for child in frontier)
             result = self._detail(session, row)
         return result
 
