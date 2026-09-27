@@ -105,6 +105,7 @@
   "translate.nextChooseSubtitleForMedia_other": "Agora escolha uma legenda para os {count} itens de mídia selecionados.",
   "translate.nextChooseSubtitle": "Agora escolha uma legenda de origem.",
   "translate.nextChooseLanguage": "Agora escolha um idioma de destino.",
+  "translate.nextChooseModelProfile": "Agora escolha um perfil de modelo.",
   "translate.nextReady_one": "Iniciar criará {count} {unit} em segundo plano.",
   "translate.nextReady_other": "Iniciar criará {count} {unit} em segundo plano.",
   "translate.chooseMedia": "Escolher uma mídia",

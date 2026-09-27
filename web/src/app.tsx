@@ -172,6 +172,7 @@ type TranslationStepState = {
   profilesPending: boolean;
   profilesError: boolean;
   hasSelectableProfile: boolean;
+  hasSelectedProfile: boolean;
 };
 
 function getNextTranslationStep({
@@ -185,6 +186,7 @@ function getNextTranslationStep({
   profilesPending,
   profilesError,
   hasSelectableProfile,
+  hasSelectedProfile,
   t,
 }: TranslationStepState & { t: ReturnType<typeof useI18n>["t"] }): string {
   if (!batchMode && selectedMedia === null) return t("translate.nextChooseMedia");
@@ -203,6 +205,7 @@ function getNextTranslationStep({
   if (profilesPending) return t("modelProfiles.loading");
   if (profilesError) return t("modelProfiles.loadFailed");
   if (!hasSelectableProfile) return t("modelProfiles.noSelectableProfiles");
+  if (!hasSelectedProfile) return t("translate.nextChooseModelProfile");
   const count = batchMode ? batchMediaCount : 1;
   return t("translate.nextReady", {
     count,
@@ -473,6 +476,7 @@ function Translate() {
     profilesPending: profiles.isPending,
     profilesError: profiles.isError,
     hasSelectableProfile,
+    hasSelectedProfile: selectedProfile !== undefined,
     t,
   });
 

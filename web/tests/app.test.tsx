@@ -1036,6 +1036,33 @@ describe("product shell", () => {
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   });
 
+  it("requires a selected Model Profile before the next action is ready", async () => {
+    renderRoute("/translate");
+
+    expect(
+      await screen.findByRole("option", { name: "Test profile" }),
+    ).toBeInTheDocument();
+    await selectExternalSubtitle();
+    fireEvent.change(screen.getByLabelText("Common target language"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(await screen.findByLabelText("Target language code"), {
+      target: { value: "zh-Hans" },
+    });
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
+    expect(screen.getByText("Next: choose a Model Profile.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Model Profile" }), {
+      target: { value: "profile-1" },
+    });
+
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
+    expect(
+      screen.getByText("Starting will create 1 background Job."),
+    ).toBeInTheDocument();
+  });
+
   it("shows a local retry state when Model Profiles fail to load", async () => {
     let profileLoads = 0;
     const fetchMock = translateFetchWithProfiles(async () => {

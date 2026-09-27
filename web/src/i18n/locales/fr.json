@@ -105,6 +105,7 @@
   "translate.nextChooseSubtitleForMedia_other": "Étape suivante : choisissez un sous-titre pour les {count} médias sélectionnés.",
   "translate.nextChooseSubtitle": "Étape suivante : choisissez une source de sous-titres.",
   "translate.nextChooseLanguage": "Étape suivante : choisissez une langue cible.",
+  "translate.nextChooseModelProfile": "Étape suivante : choisissez un profil de modèle.",
   "translate.nextReady_one": "Le démarrage créera {count} {unit} en arrière-plan.",
   "translate.nextReady_other": "Le démarrage créera {count} {unit} en arrière-plan.",
   "translate.chooseMedia": "Choisir un média",

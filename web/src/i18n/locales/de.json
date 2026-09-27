@@ -105,6 +105,7 @@
   "translate.nextChooseSubtitleForMedia_other": "Nächster Schritt: Wählen Sie einen Untertitel für die {count} ausgewählten Medien-Elemente aus.",
   "translate.nextChooseSubtitle": "Nächster Schritt: Wählen Sie eine Untertitelquelle aus.",
   "translate.nextChooseLanguage": "Nächster Schritt: Wählen Sie eine Zielsprache aus.",
+  "translate.nextChooseModelProfile": "Nächster Schritt: Wählen Sie ein Modellprofil aus.",
   "translate.nextReady_one": "Beim Start wird {count} Hintergrund-{unit} erstellt.",
   "translate.nextReady_other": "Beim Start werden {count} Hintergrund-{unit} erstellt.",
   "translate.chooseMedia": "Medien auswählen",

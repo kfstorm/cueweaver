@@ -105,6 +105,7 @@
   "translate.nextChooseSubtitleForMedia_other": "下一步：为已选的{count}个媒体选择字幕。",
   "translate.nextChooseSubtitle": "下一步：选择一个字幕来源。",
   "translate.nextChooseLanguage": "下一步：选择目标语言。",
+  "translate.nextChooseModelProfile": "下一步：选择模型配置。",
   "translate.nextReady_one": "启动后将创建{count}个后台{unit}。",
   "translate.nextReady_other": "启动后将创建{count}个后台{unit}。",
   "translate.chooseMedia": "选择媒体",

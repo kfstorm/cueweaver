@@ -105,6 +105,7 @@
   "translate.nextChooseSubtitleForMedia_other": "Siguiente paso: elige un subtítulo para los {count} elementos de medios seleccionados.",
   "translate.nextChooseSubtitle": "Siguiente paso: elige un origen de subtítulos.",
   "translate.nextChooseLanguage": "Siguiente paso: elige un idioma de destino.",
+  "translate.nextChooseModelProfile": "Siguiente paso: elige un perfil de modelo.",
   "translate.nextReady_one": "Al iniciar se creará {count} {unit} en segundo plano.",
   "translate.nextReady_other": "Al iniciar se crearán {count} {unit} en segundo plano.",
   "translate.chooseMedia": "Elegir medios",

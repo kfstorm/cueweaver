@@ -105,6 +105,7 @@
   "translate.nextChooseSubtitleForMedia_other": "次へ：選択した{count}件のメディアの字幕を選択します。",
   "translate.nextChooseSubtitle": "次へ：字幕ソースを1つ選択します。",
   "translate.nextChooseLanguage": "次へ：翻訳先言語を選択します。",
+  "translate.nextChooseModelProfile": "次へ：モデルプロファイルを選択します。",
   "translate.nextReady_one": "開始するとバックグラウンドで{count}{unit}を作成します。",
   "translate.nextReady_other": "開始するとバックグラウンドで{count}{unit}を作成します。",
   "translate.chooseMedia": "メディアを選択",

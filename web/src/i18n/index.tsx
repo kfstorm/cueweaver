@@ -172,6 +172,7 @@ const ENGLISH = {
     "Next: choose a subtitle for {count} selected Media.",
   "translate.nextChooseSubtitle": "Next: choose one subtitle source.",
   "translate.nextChooseLanguage": "Next: choose a target language.",
+  "translate.nextChooseModelProfile": "Next: choose a Model Profile.",
   "translate.nextReady_one": "Starting will create {count} background {unit}.",
   "translate.nextReady_other": "Starting will create {count} background {unit}.",
   "translate.chooseMedia": "Choose media",
