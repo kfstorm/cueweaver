@@ -251,9 +251,20 @@ function ProfileForm({
     const key = newKey.trim();
     if (!key || keys.includes(key)) return;
     const settingReference = providerSettings.find((item) => item.key === key);
-    const type = key === "provider" ? "string" : settingReference?.type;
-    const value = initialSettingValue(type, Boolean(settingReference?.choices?.length));
-    change({ key, kind: "literal", value });
+    const settingType = key === "provider" ? "string" : settingReference?.type;
+    change({ key, kind: "literal", value: "" });
+    if (
+      settingReference?.choices?.length ||
+      (settingType !== null && settingType !== undefined && settingType !== "string")
+    ) {
+      setParseError(
+        key,
+        t("modelProfiles.invalidValue", {
+          type: referenceTypeLabel(settingType) ?? settingType ?? "string",
+          key,
+        }),
+      );
+    }
     setNewKey("");
   };
   return (
@@ -572,10 +583,16 @@ function LiteralEditor({
           {t("modelProfiles.value")}
           <Select
             value={String(entry.value)}
-            onChange={(event) =>
-              onChange({ ...entry, value: event.target.value === "true" })
-            }
+            onChange={(event) => {
+              onError("");
+              onChange({ ...entry, value: event.target.value === "true" });
+            }}
           >
+            {String(entry.value) === "" && (
+              <option value="" disabled>
+                {t("modelProfiles.chooseValue")}
+              </option>
+            )}
             <option value="true">{t("modelProfiles.true")}</option>
             <option value="false">{t("modelProfiles.false")}</option>
           </Select>
@@ -586,7 +603,10 @@ function LiteralEditor({
           {reference?.choices?.length ? (
             <Select
               value={String(entry.value)}
-              onChange={(event) => onChange({ ...entry, value: event.target.value })}
+              onChange={(event) => {
+                onError("");
+                onChange({ ...entry, value: event.target.value });
+              }}
             >
               {String(entry.value) === "" ? (
                 <option value="" disabled>
@@ -610,15 +630,4 @@ function LiteralEditor({
       )}
     </div>
   );
-}
-
-function initialSettingValue(
-  type: string | null | undefined,
-  hasChoices: boolean,
-): unknown {
-  if (hasChoices) return "";
-  if (type === "boolean") return false;
-  if (type === "integer" || type === "number") return 0;
-  if (type === "array") return [];
-  return "";
 }

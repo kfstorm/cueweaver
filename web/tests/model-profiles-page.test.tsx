@@ -265,7 +265,11 @@ describe("Model Profile setting references", () => {
       row.textContent?.includes("temperature"),
     )!;
     expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("number");
-    expect(within(temperatureRow).getByLabelText("Value").tagName).toBe("INPUT");
+    const temperatureValue = within(temperatureRow).getByLabelText("Value");
+    expect(temperatureValue.tagName).toBe("INPUT");
+    expect(temperatureValue).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+    fireEvent.change(temperatureValue, { target: { value: "0.5" } });
 
     await addSetting("reasoning_effort");
     rows = [...document.querySelectorAll(".profile-setting")];
