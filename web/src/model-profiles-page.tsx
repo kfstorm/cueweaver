@@ -49,7 +49,8 @@ const editorTypeForReference = (type: string | null | undefined): string => {
     ? label!
     : "string";
 };
-// A fractional seed keeps JSON-backed number values distinct from integers.
+// For explicit type changes, seed number with a fraction to distinguish it
+// from integer.
 const initialValueForType = (type: string | null | undefined): unknown =>
   type === "integer"
     ? 0
