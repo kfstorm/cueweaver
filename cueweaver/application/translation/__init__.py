@@ -24,6 +24,7 @@ class TranslateRequest:
     dynamic_terminology_enabled: bool = True
     subtitle_terminology_filter_enabled: bool = True
     overwrite: bool = False
+    settings: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -34,14 +35,12 @@ class TranslateResult:
 
 
 class Translator(Protocol):
-    @property
-    def available(self) -> bool: ...
-
     def translate(
         self,
         source: Path,
         target_language: str,
         *,
+        settings: Mapping[str, object] | None = None,
         user_overrides: Mapping[str, str] | None = None,
         work_directory: Path,
         dynamic_terminology_enabled: bool = True,
@@ -67,9 +66,13 @@ class Translation:
         _create_work_directory(request.work_directory)
         term_map = _load_term_map(request.term_map_path)
         try:
+            settings_arg = (
+                {"settings": request.settings} if request.settings is not None else {}
+            )
             content = self._translator.translate(
                 request.subtitle_path,
                 request.target_language_code,
+                **settings_arg,
                 user_overrides=term_map,
                 work_directory=request.work_directory,
                 dynamic_terminology_enabled=request.dynamic_terminology_enabled,

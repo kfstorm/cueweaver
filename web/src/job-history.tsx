@@ -27,6 +27,7 @@ import {
   type OutputConflictPolicy,
 } from "./jobs";
 import { cn, formatLocalTimestamp, formatRelativeTimestamp } from "./lib/utils";
+import { useModelProfiles } from "./model-profiles";
 import { getErrorDetail, useI18n, type TranslationKey } from "./i18n";
 
 type ClearFeedback = {
@@ -35,6 +36,12 @@ type ClearFeedback = {
   message: string;
   role: "status" | "alert";
 };
+
+function ProfileName({ id }: { id: string }) {
+  const profiles = useModelProfiles();
+  const profile = profiles.data?.find((item) => item.id === id);
+  return <>{profile?.name ?? id}</>;
+}
 
 export function JobNotificationRegion({
   notifications,
@@ -475,6 +482,11 @@ function JobListItem({
           {t("jobs.termMapLabel", { name: job.request.term_map.name })}
         </span>
       )}
+      {job.request.model_profile_id && (
+        <span className="job-queue">
+          {t("modelProfiles.title")}: <ProfileName id={job.request.model_profile_id} />
+        </span>
+      )}
       {isRunningJob(job.status) && (
         <span className="job-action-note">{t("jobs.runningCannotCancel")}</span>
       )}
@@ -660,6 +672,14 @@ function JobDetail({
             label={t("translate.targetLanguage")}
             value={job.request.target_language_code}
           />
+          {job.request.model_profile_id && (
+            <div className="job-summary-profile">
+              <dt>{t("modelProfiles.title")}</dt>
+              <dd>
+                <ProfileName id={job.request.model_profile_id} />
+              </dd>
+            </div>
+          )}
           <SummaryItem
             label={t("jobs.outputFormat")}
             value={job.request.source_format.toUpperCase()}

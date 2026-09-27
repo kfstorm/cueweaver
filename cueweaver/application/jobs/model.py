@@ -96,6 +96,7 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
             "subtitle_path",
             "stream_index",
             "target_language_code",
+            "model_profile_id",
             "term_map_mode",
             "output_path",
             "source_format",
@@ -288,6 +289,7 @@ def _valid_term_map_selection(request: dict[str, object], term_map: object) -> b
 def valid_request(request: dict[str, object]) -> bool:
     required_request_fields = {
         "media_path",
+        "model_profile_id",
         "target_language_code",
         "term_map_mode",
         "term_map",

@@ -1,0 +1,47 @@
+"""HTTP CRUD for Model Profiles."""
+
+from typing import Any, Protocol
+
+from fastapi import FastAPI
+from pydantic import BaseModel, ConfigDict
+
+from ..application.model_profiles import ModelProfiles
+
+
+class ProfileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    parent_id: str | None
+    selectable: bool
+    settings: list[dict[str, Any]]
+
+
+class ProfileApplication(Protocol):
+    @property
+    def model_profiles(self) -> ModelProfiles: ...
+
+
+def register_model_profiles(app: FastAPI, application: ProfileApplication) -> None:
+    @app.get("/api/model-profiles")
+    def list_profiles() -> dict[str, object]:
+        return {"model_profiles": application.model_profiles.list()}
+
+    @app.post("/api/model-profiles")
+    def create_profile(body: ProfileBody) -> dict[str, object]:
+        return application.model_profiles.create(
+            body.name, body.parent_id, body.selectable, body.settings
+        )
+
+    @app.get("/api/model-profiles/{profile_id}")
+    def get_profile(profile_id: str) -> dict[str, object]:
+        return application.model_profiles.get(profile_id)
+
+    @app.put("/api/model-profiles/{profile_id}")
+    def replace_profile(profile_id: str, body: ProfileBody) -> dict[str, object]:
+        return application.model_profiles.replace(
+            profile_id, body.name, body.parent_id, body.selectable, body.settings
+        )
+
+    @app.delete("/api/model-profiles/{profile_id}")
+    def delete_profile(profile_id: str) -> dict[str, object]:
+        return application.model_profiles.delete(profile_id)

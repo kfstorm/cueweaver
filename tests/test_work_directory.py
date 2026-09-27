@@ -104,6 +104,8 @@ import threading
 import time
 from pathlib import Path
 from cueweaver.application.jobs import CreateJobRequest, Jobs
+from cueweaver.application.database import SqliteDatabase
+from cueweaver.application.model_profiles import ModelProfiles
 
 started = threading.Event()
 
@@ -116,8 +118,11 @@ class Translator:
         while True:
             time.sleep(1)
 
-jobs = Jobs(Translator(), Path(sys.argv[1]), Path(sys.argv[2]))
-job = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none"))
+work_root = Path(sys.argv[2])
+profiles = ModelProfiles(SqliteDatabase(work_root / "cueweaver.sqlite3"))
+profile = profiles.create("Test profile", None, True, [{"key": "provider", "kind": "literal", "value": "OpenAI"}])
+jobs = Jobs(Translator(), Path(sys.argv[1]), work_root)
+job = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none", profile["id"]))
 print(job["id"], flush=True)
 started.set()
 time.sleep(30)

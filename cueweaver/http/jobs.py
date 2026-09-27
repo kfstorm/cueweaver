@@ -12,6 +12,7 @@ from ..application.jobs.model import project_job_detail
 class JobOptionsBody(BaseModel):
     model_config = {"extra": "forbid"}
     target_language_code: str = Field(min_length=1)
+    model_profile_id: str = Field(min_length=1)
     output_suffix: str | None = None
     output_conflict_policy: Literal["append-number", "overwrite", "skip"] = "skip"
     term_map_mode: Literal["follow", "selected", "none"]
@@ -93,42 +94,11 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
 
     @app.post("/api/jobs")
     def create_job(body: CreateJobBody) -> dict[str, object]:
-        return _project_detail(
-            application.jobs.create(
-                CreateJobRequest(
-                    media_path=body.media_path,
-                    subtitle_path=body.subtitle_path,
-                    target_language_code=body.target_language_code,
-                    term_map_mode=body.term_map_mode,
-                    term_map_id=body.term_map_id,
-                    dynamic_terminology_enabled=body.dynamic_terminology_enabled,
-                    subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,
-                    output_suffix=body.output_suffix,
-                    output_conflict_policy=body.output_conflict_policy,
-                    stream_index=body.stream_index,
-                    source_format=body.source_format,
-                )
-            )
-        )
+        return _project_detail(application.jobs.create(_create_request(body, body)))
 
     @app.post("/api/jobs/batch")
     def create_batch(body: CreateBatchBody) -> dict[str, object]:
-        requests = [
-            CreateJobRequest(
-                media_path=cast(str, item.media_path),
-                subtitle_path=cast(str | None, item.subtitle_path),
-                target_language_code=body.target_language_code,
-                term_map_mode=body.term_map_mode,
-                term_map_id=body.term_map_id,
-                dynamic_terminology_enabled=body.dynamic_terminology_enabled,
-                subtitle_terminology_filter_enabled=body.subtitle_terminology_filter_enabled,
-                output_suffix=body.output_suffix,
-                output_conflict_policy=body.output_conflict_policy,
-                stream_index=cast(int | None, item.stream_index),
-                source_format=cast(str | None, item.source_format),
-            )
-            for item in body.items
-        ]
+        requests = [_create_request(body, item) for item in body.items]
         results = application.jobs.create_batch(requests)
         return {"results": [_batch_result(result) for result in results]}
 
@@ -160,6 +130,25 @@ def register_jobs(app: FastAPI, application: JobsApplication) -> None:
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str) -> dict[str, object]:
         return _project_detail(application.jobs.cancel(job_id))
+
+
+def _create_request(
+    options: JobOptionsBody, source: SubtitleSourceBody | CreateBatchItem
+) -> CreateJobRequest:
+    return CreateJobRequest(
+        media_path=cast(str, source.media_path),
+        subtitle_path=cast(str | None, source.subtitle_path),
+        target_language_code=options.target_language_code,
+        model_profile_id=options.model_profile_id,
+        term_map_mode=options.term_map_mode,
+        term_map_id=options.term_map_id,
+        dynamic_terminology_enabled=options.dynamic_terminology_enabled,
+        subtitle_terminology_filter_enabled=options.subtitle_terminology_filter_enabled,
+        output_suffix=options.output_suffix,
+        output_conflict_policy=options.output_conflict_policy,
+        stream_index=cast(int | None, source.stream_index),
+        source_format=cast(str | None, source.source_format),
+    )
 
 
 def _project_detail(job: dict[str, object]) -> dict[str, object]:

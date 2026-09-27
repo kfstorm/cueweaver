@@ -60,6 +60,7 @@ export interface Job {
     subtitle_path?: string;
     stream_index?: number;
     target_language_code: string;
+    model_profile_id: string;
     term_map_mode: TermMapMode;
     term_map: {
       id: string;
@@ -402,6 +403,7 @@ export function useCreateJob() {
       media_path: string;
       subtitle_path?: string;
       target_language_code: string;
+      model_profile_id: string;
       term_map_mode: TermMapMode;
       term_map_id: string | null;
       dynamic_terminology_enabled: boolean;
@@ -435,6 +437,7 @@ export function useCreateBatchJobs() {
         source_format?: string;
       }>;
       target_language_code: string;
+      model_profile_id: string;
       term_map_mode: TermMapMode;
       term_map_id: string | null;
       dynamic_terminology_enabled: boolean;

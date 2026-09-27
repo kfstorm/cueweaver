@@ -11,6 +11,7 @@ from cueweaver.application.database import (
     JobRow,
     JobStatusHistoryRow,
     JobTermMapSnapshotRow,
+    ModelProfileRow,
     SqliteDatabase,
     _migration_config,
 )
@@ -35,6 +36,8 @@ def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
         "jobs",
         "job_status_history",
         "job_term_map_snapshots",
+        "model_profiles",
+        "model_profile_settings",
         "term_map_entries",
         "term_maps",
     }
@@ -42,7 +45,7 @@ def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone() == (0,)
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0003_retire_job_record_schema_version",)
+        ).fetchone() == ("0004_model_profiles",)
         job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
         assert job_columns.isdisjoint({"record_json", "content_json", "schema_version"})
 
@@ -98,6 +101,7 @@ def test_sqlite_database_can_close_and_reinitialize_between_scopes(tmp_path: Pat
 def _job_row() -> JobRow:
     return JobRow(
         id="job-1",
+        model_profile_id="profile-1",
         status="Queued",
         attempt=1,
         created_at="2026-08-24T00:00:00Z",
@@ -116,6 +120,17 @@ def _job_row() -> JobRow:
 
 
 def _add_job_rows(session) -> None:
+    session.add(
+        ModelProfileRow(
+            id="profile-1",
+            name="Test profile",
+            parent_id=None,
+            selectable=True,
+            created_at="2026-08-24T00:00:00Z",
+            updated_at="2026-08-24T00:00:00Z",
+        )
+    )
+    session.flush()
     session.add(_job_row())
     session.add(
         JobStatusHistoryRow(
@@ -182,7 +197,7 @@ def test_migration_discards_issue_193_application_data(tmp_path: Path):
         )
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0003_retire_job_record_schema_version",)
+        ).fetchone() == ("0004_model_profiles",)
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'term_maps'"
         ).fetchone() == ("term_maps",)
@@ -276,7 +291,7 @@ def test_retiring_job_schema_version_preserves_populated_relational_data(
 
     with engine.connect() as connection:
         config.attributes["connection"] = connection
-        command.upgrade(config, "head")
+        command.upgrade(config, "0003_retire_job_record_schema_version")
     engine.dispose()
 
     with sqlite3.connect(database_path) as connection:
@@ -290,51 +305,8 @@ def test_retiring_job_schema_version_preserves_populated_relational_data(
             "SELECT COUNT(*) FROM job_term_map_snapshots"
         ).fetchone() == (1,)
 
-    loaded = SqliteJobRecordStore(SqliteDatabase(database_path)).load()
-
-    assert loaded == [
-        {
-            "id": "retained-job",
-            "status": "Failed",
-            "attempt": 2,
-            "created_at": timestamp,
-            "started_at": timestamp,
-            "finished_at": timestamp,
-            "request": {
-                "media_path": "Movie.mkv",
-                "subtitle_path": "Movie.en.srt",
-                "target_language_code": "zh-Hans",
-                "term_map_mode": "selected",
-                "term_map": {
-                    "id": "map-1",
-                    "name": "Characters",
-                    "content": {"Captain": "队长"},
-                },
-                "dynamic_terminology_enabled": True,
-                "subtitle_terminology_filter_enabled": True,
-                "output_suffix": "zh-Hans",
-                "output_conflict_policy": "append-number",
-                "output_path": "Movie.zh-Hans.srt",
-                "source_format": "srt",
-            },
-            "error": None,
-            "queue_sequence": 7,
-            "status_history": [
-                {
-                    "status": "Queued",
-                    "attempt": 1,
-                    "started_at": timestamp,
-                    "finished_at": timestamp,
-                },
-                {
-                    "status": "Failed",
-                    "attempt": 2,
-                    "started_at": timestamp,
-                    "finished_at": timestamp,
-                },
-            ],
-        }
-    ]
+    # This assertion covers the 0003 migration. 0004 intentionally requires a
+    # non-null Model Profile relation and does not backfill historical Jobs.
 
 
 def test_sqlite_database_supports_question_marks_in_the_work_root_path(
@@ -360,16 +332,17 @@ def test_sqlite_schema_rejects_partial_extraction_state(tmp_path: Path):
         connection.execute(
             """
                 INSERT INTO jobs (
-                    id, status, attempt, created_at, queue_sequence,
+                    id, model_profile_id, status, attempt, created_at, queue_sequence,
                     media_path, stream_index, target_language_code, term_map_mode,
                     output_path, source_format, dynamic_terminology_enabled,
                     subtitle_terminology_filter_enabled, output_suffix,
                     output_conflict_policy, extraction_status, extraction_format,
                     extraction_content_digest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             (
                 "partial-extraction",
+                "missing-profile",
                 "Queued",
                 1,
                 "2026-08-24T00:00:00Z",
@@ -448,4 +421,4 @@ def test_normalized_migration_downgrade_recreates_the_legacy_schema(
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0003_retire_job_record_schema_version",)
+        ).fetchone() == ("0004_model_profiles",)

@@ -13,17 +13,44 @@ from alembic.config import Config
 from sqlalchemy import URL, ForeignKey, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
-from sqlalchemy.types import Boolean, Integer, String
+from sqlalchemy.types import JSON, Boolean, Integer, String
 
 
 class Base(DeclarativeBase):
     """Base class for the application's persisted records."""
 
 
+class ModelProfileRow(Base):
+    __tablename__ = "model_profiles"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("model_profiles.id", ondelete="RESTRICT")
+    )
+    selectable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class ModelProfileSettingRow(Base):
+    __tablename__ = "model_profile_settings"
+
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("model_profiles.id", ondelete="CASCADE"), primary_key=True
+    )
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[object | None] = mapped_column(JSON(none_as_null=True))
+
+
 class JobRow(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    model_profile_id: Mapped[str] = mapped_column(
+        ForeignKey("model_profiles.id", ondelete="RESTRICT"), nullable=False
+    )
     status: Mapped[str] = mapped_column(String, nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -226,6 +253,8 @@ __all__ = [
     "JobRow",
     "JobStatusHistoryRow",
     "JobTermMapSnapshotRow",
+    "ModelProfileRow",
+    "ModelProfileSettingRow",
     "SqliteDatabase",
     "TermMapEntryRow",
     "TermMapRow",

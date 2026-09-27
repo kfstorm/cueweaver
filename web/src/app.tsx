@@ -4,6 +4,7 @@ import {
   CheckCircleIcon,
   ListChecksIcon,
   MagnifyingGlassIcon,
+  SlidersHorizontalIcon,
   SpinnerGapIcon,
   TranslateIcon,
   UploadSimpleIcon,
@@ -64,6 +65,8 @@ import {
   type TermMapMode,
 } from "./jobs";
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
+import { ModelProfilesPage, ModelProfileEditor } from "./model-profiles-page";
+import { useModelProfiles } from "./model-profiles";
 import { ThemeProvider } from "./theme-provider";
 import { ThemeToggle } from "./theme-toggle";
 import {
@@ -88,13 +91,22 @@ import {
 } from "./term-maps";
 
 const routes: Array<{
-  labelKey: "navigation.translate" | "navigation.jobs" | "navigation.termMaps";
+  labelKey:
+    | "navigation.translate"
+    | "navigation.jobs"
+    | "navigation.termMaps"
+    | "navigation.modelProfiles";
   path: string;
   icon: Icon;
 }> = [
   { labelKey: "navigation.translate", path: "/translate", icon: TranslateIcon },
   { labelKey: "navigation.jobs", path: "/jobs", icon: BriefcaseIcon },
   { labelKey: "navigation.termMaps", path: "/term-maps", icon: ListChecksIcon },
+  {
+    labelKey: "navigation.modelProfiles",
+    path: "/model-profiles",
+    icon: SlidersHorizontalIcon,
+  },
 ];
 const DIRECTORY_TERM_MAP_VALUE = "__directory_default__";
 const TARGET_LANGUAGE_STORAGE_KEY = "cueweaver.target-language";
@@ -360,6 +372,11 @@ function Translate() {
   const createBatchJobs = useCreateBatchJobs();
   const navigate = useNavigate();
   const status = useProductStatus();
+  const profiles = useModelProfiles();
+  const [modelProfileId, setModelProfileId] = useState("");
+  const selectedProfile = profiles.data?.find(
+    (profile) => profile.id === modelProfileId && profile.selectable,
+  );
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
   const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
@@ -499,7 +516,9 @@ function Translate() {
     : null;
   const outputSuffixError = validateOutputSuffix(outputSuffix, t);
   const providerReady =
-    !status.isError && status.data?.translation_provider.ready === true;
+    !status.isError &&
+    status.data?.translation_provider.ready === true &&
+    !!selectedProfile;
   const runtimeReady =
     !status.isError &&
     status.data?.api.ready === true &&
@@ -521,7 +540,7 @@ function Translate() {
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
     runtimeReady &&
-    (outputConflictPolicy === "skip" || providerReady) &&
+    providerReady &&
     !createJob.isSuccess &&
     !createBatchJobs.isSuccess &&
     !createJob.isPending &&
@@ -536,8 +555,8 @@ function Translate() {
     selectedCandidate,
     targetLanguage,
     outputSuffixError,
-    providerReady: outputConflictPolicy === "skip" || providerReady,
-    providerPending: status.isPending,
+    providerReady,
+    providerPending: status.isPending || profiles.isPending,
     runtimeReady,
     runtimeError: status.isError,
     t,
@@ -829,6 +848,29 @@ function Translate() {
         <div className="step-content">
           <h2 id="configure-title">{t("translate.configure")}</h2>
           <p>{t("translate.configureDetail")}</p>
+          <label htmlFor="model-profile-select">
+            {t("modelProfiles.title")}
+            <Select
+              id="model-profile-select"
+              value={selectedProfile?.id ?? ""}
+              onChange={(event) => setModelProfileId(event.target.value)}
+            >
+              <option value="">{t("modelProfiles.choose")}</option>
+              {profiles.data
+                ?.filter((profile) => profile.selectable)
+                .map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+            </Select>
+          </label>
+          {profiles.data?.every((profile) => !profile.selectable) && (
+            <p className="field-help">
+              <Link to="/model-profiles">{t("modelProfiles.createFirst")}</Link>
+            </p>
+          )}
+          {profiles.isError && <p role="alert">{profiles.error.message}</p>}
           <label htmlFor="common-target-language">
             {t("translate.commonTargetLanguage")}
             <Select
@@ -1089,6 +1131,7 @@ function Translate() {
                     {
                       items: batchItems,
                       target_language_code: targetLanguage,
+                      model_profile_id: selectedProfile!.id,
                       output_suffix: outputSuffix,
                       output_conflict_policy: outputConflictPolicy,
                       term_map_mode: submissionTermMapMode,
@@ -1118,6 +1161,7 @@ function Translate() {
                           source_format: selectedCandidate.format,
                         }),
                     target_language_code: targetLanguage,
+                    model_profile_id: selectedProfile!.id,
                     output_suffix: outputSuffix,
                     output_conflict_policy: outputConflictPolicy,
                     term_map_mode: submissionTermMapMode,
@@ -2800,6 +2844,8 @@ export function App() {
             <Route path="jobs" element={<JobsPage />} />
             <Route path="jobs/:jobId" element={<JobsPage />} />
             <Route path="term-maps" element={<TermMapsPage />} />
+            <Route path="model-profiles" element={<ModelProfilesPage />} />
+            <Route path="model-profiles/:profileId" element={<ModelProfileEditor />} />
             <Route path="*" element={<Navigate to="/translate" replace />} />
           </Route>
         </Routes>

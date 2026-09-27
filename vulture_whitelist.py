@@ -35,6 +35,14 @@ retry_job
 cancel_job
 clear_completed_jobs
 delete_job
+list_profiles
+create_profile
+get_profile
+replace_profile
+delete_profile
+
+# Pytest discovers autouse fixtures by name.
+profile_for_direct_store
 
 # Pydantic reads request-model configuration dynamically.
 RequestBody.model_config

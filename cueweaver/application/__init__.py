@@ -17,6 +17,7 @@ from .discovery import Discovery
 from .errors import ServiceError
 from .extraction import Extraction
 from .jobs import Jobs
+from .model_profiles import ModelProfiles
 from .term_maps import TermMaps
 from .translation import Translator
 
@@ -56,6 +57,7 @@ class CueWeaverApplication:
         self._database = database
         try:
             database.initialize()
+            self.model_profiles = ModelProfiles(database)
             term_map_store = SqliteTermMapStore(database)
             directory_term_map_store = SqliteDirectoryTermMapStore(database)
             self.term_maps = TermMaps(term_map_store)
@@ -71,6 +73,7 @@ class CueWeaverApplication:
                     self.term_maps,
                     self.extraction,
                     self.directory_term_maps,
+                    model_profiles=self.model_profiles,
                     database=database,
                 )
         except DatabasePathError as error:

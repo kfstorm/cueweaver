@@ -20,104 +20,6 @@ _SUPPORTED_PROVIDERS = {
     "OpenRouter",
 }
 
-_PROVIDER_ENVIRONMENT = {
-    "Azure": {
-        "AZURE_API_KEY": "azure-key",
-        "AZURE_API_BASE": "https://azure.example.test",
-        "AZURE_API_VERSION": "2024-10-21",
-        "AZURE_DEPLOYMENT_NAME": "translation",
-    },
-    "Bedrock": {
-        "AWS_ACCESS_KEY_ID": "access-key",
-        "AWS_SECRET_ACCESS_KEY": "secret-key",
-        "AWS_REGION": "us-east-1",
-        "BEDROCK_MODEL": "amazon.nova-lite-v1:0",
-    },
-    "Claude": {"CLAUDE_API_KEY": "claude-key"},
-    "Custom Server": {"CUSTOM_SERVER_ADDRESS": "http://server.example.test"},
-    "DeepSeek": {"DEEPSEEK_API_KEY": "deepseek-key"},
-    "Gemini": {"GEMINI_API_KEY": "gemini-key"},
-    "Mistral": {"MISTRAL_API_KEY": "mistral-key"},
-    "OpenAI": {"OPENAI_API_KEY": "openai-key"},
-    "OpenRouter": {"OPENROUTER_API_KEY": "openrouter-key"},
-}
-
-_PROVIDER_ENVIRONMENT_KEYS = {
-    key for values in _PROVIDER_ENVIRONMENT.values() for key in values
-}
-_OPTIONAL_PROVIDER_ENVIRONMENT_KEYS = {
-    "AZURE_PROXY",
-    "BEDROCK_MAX_TOKENS",
-    "BEDROCK_TEMPERATURE",
-    "BEDROCK_RATE_LIMIT",
-    "BEDROCK_PROXY",
-    "CLAUDE_MODEL",
-    "CLAUDE_STREAM_RESPONSES",
-    "CLAUDE_THINKING",
-    "CLAUDE_MAX_TOKENS",
-    "CLAUDE_MAX_THINKING_TOKENS",
-    "CLAUDE_TEMPERATURE",
-    "CLAUDE_RATE_LIMIT",
-    "CLAUDE_PROXY",
-    "CUSTOM_ENDPOINT",
-    "CUSTOM_SUPPORTS_CONVERSATION",
-    "CUSTOM_SUPPORTS_SYSTEM_MESSAGES",
-    "CUSTOM_PROMPT_TEMPLATE",
-    "CUSTOM_TEMPERATURE",
-    "CUSTOM_MAX_TOKENS",
-    "CUSTOM_MAX_COMPLETION_TOKENS",
-    "CUSTOM_TIMEOUT",
-    "CUSTOM_API_KEY",
-    "CUSTOM_MODEL",
-    "CUSTOM_SUPPORTS_PARALLEL_THREADS",
-    "CUSTOM_REPETITION_PENALTY",
-    "CUSTOM_MIN_P",
-    "DEEPSEEK_API_BASE",
-    "DEEPSEEK_MODEL",
-    "DEEPSEEK_MAX_TOKENS",
-    "DEEPSEEK_TEMPERATURE",
-    "DEEPSEEK_RATE_LIMIT",
-    "DEEPSEEK_PROXY",
-    "GEMINI_MODEL",
-    "GEMINI_STREAM_RESPONSES",
-    "GEMINI_ENABLE_THINKING",
-    "GEMINI_THINKING_BUDGET",
-    "GEMINI_TEMPERATURE",
-    "GEMINI_RATE_LIMIT",
-    "GEMINI_PROXY",
-    "MISTRAL_SERVER_URL",
-    "MISTRAL_MODEL",
-    "MISTRAL_TEMPERATURE",
-    "MISTRAL_RATE_LIMIT",
-    "MISTRAL_PROXY",
-    "OPENAI_API_BASE",
-    "OPENAI_MODEL",
-    "OPENAI_TEMPERATURE",
-    "OPENAI_RATE_LIMIT",
-    "OPENAI_FREE_PLAN",
-    "MAX_INSTRUCT_TOKENS",
-    "OPENAI_USE_HTTPX",
-    "OPENAI_REASONING_EFFORT",
-    "OPENAI_STREAM_RESPONSES",
-    "OPENAI_PROXY",
-    "OPENROUTER_SERVER_ADDRESS",
-    "OPENROUTER_MODEL",
-    "OPENROUTER_MODEL_FAMILY",
-    "OPENROUTER_STREAM_RESPONSES",
-    "OPENROUTER_MAX_TOKENS",
-    "OPENROUTER_TEMPERATURE",
-    "OPENROUTER_RATE_LIMIT",
-    "OPENROUTER_PROXY",
-}
-_PROVIDER_CONFIGURATION_KEYS = (
-    _PROVIDER_ENVIRONMENT_KEYS | _OPTIONAL_PROVIDER_ENVIRONMENT_KEYS
-)
-_PROVIDER_ENVIRONMENT_WITH_REQUIRED_VALUES = {
-    provider: values
-    for provider, values in _PROVIDER_ENVIRONMENT.items()
-    if values and provider != "Custom Server"
-}
-
 
 class Event:
     def connect(self, *_args, **_kwargs) -> None:
@@ -141,72 +43,7 @@ def test_all_pysubtrans_provider_extras_are_registered():
     assert set(TranslationProvider.get_providers()) == _SUPPORTED_PROVIDERS
 
 
-@pytest.mark.parametrize("provider_name", sorted(_PROVIDER_ENVIRONMENT))
-def test_provider_is_available_with_complete_local_configuration(
-    monkeypatch, provider_name
-):
-    for key in _PROVIDER_CONFIGURATION_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("PROVIDER", provider_name)
-    for key, value in _PROVIDER_ENVIRONMENT[provider_name].items():
-        monkeypatch.setenv(key, value)
-
-    translator = PySubtransTranslator()
-
-    assert translator.available is True
-    assert translator.availability_message is None
-
-
-def test_custom_server_accepts_pysubtrans_default_address(monkeypatch):
-    for key in _PROVIDER_CONFIGURATION_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("PROVIDER", "Custom Server")
-
-    translator = PySubtransTranslator()
-
-    assert translator.available is True
-
-
-@pytest.mark.parametrize(
-    ("provider_name", "missing_key"),
-    [
-        (provider_name, next(iter(environment)))
-        for provider_name, environment in _PROVIDER_ENVIRONMENT_WITH_REQUIRED_VALUES.items()
-    ],
-)
-def test_provider_is_unavailable_when_required_local_configuration_is_missing(
-    monkeypatch, provider_name, missing_key
-):
-    for key in _PROVIDER_CONFIGURATION_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("PROVIDER", provider_name)
-    for key, value in _PROVIDER_ENVIRONMENT[provider_name].items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.delenv(missing_key)
-
-    translator = PySubtransTranslator()
-
-    assert translator.available is False
-    assert missing_key in translator.availability_message
-
-
-@pytest.mark.parametrize("provider_name", ["", "Not a provider"])
-def test_unknown_or_missing_provider_is_unavailable(monkeypatch, provider_name):
-    monkeypatch.setenv("PROVIDER", provider_name)
-
-    translator = PySubtransTranslator()
-
-    assert translator.available is False
-    assert translator.availability_message
-
-
-def test_bedrock_environment_settings_are_passed_to_pysubtrans(tmp_path, monkeypatch):
-    monkeypatch.setenv("PROVIDER", "Bedrock")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "access-key")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
-    monkeypatch.setenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
-    monkeypatch.setenv("BEDROCK_MAX_TOKENS", "4096")
+def test_typed_profile_settings_are_passed_to_pysubtrans(tmp_path, monkeypatch):
     source = tmp_path / "source.srt"
     source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
     captured: dict[str, object] = {}
@@ -223,7 +60,11 @@ def test_bedrock_environment_settings_are_passed_to_pysubtrans(tmp_path, monkeyp
 
     def init_translation_provider(provider, options):
         captured["provider"] = provider
-        captured["settings"] = dict(options.provider_settings["Bedrock"])
+        options.InitialiseProviderSettings(
+            "OpenAI", SettingsType({"model": "", "api_key": "", "temperature": 0.0})
+        )
+        captured["settings"] = dict(options.provider_settings["OpenAI"])
+        captured["max_threads"] = options.get("max_threads")
         return object()
 
     def save_translation(path: str) -> None:
@@ -241,18 +82,26 @@ def test_bedrock_environment_settings_are_passed_to_pysubtrans(tmp_path, monkeyp
     monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", MinimalEngine)
 
     PySubtransTranslator().translate(
-        source, "zh-Hans", work_directory=tmp_path / "work"
+        source,
+        "zh-Hans",
+        work_directory=tmp_path / "work",
+        settings={
+            "provider": "OpenAI",
+            "model": "synthetic-model",
+            "api_key": "synthetic-key",
+            "max_threads": 2,
+            "temperature": 0.5,
+        },
     )
 
     assert captured == {
-        "provider": "Bedrock",
+        "provider": "OpenAI",
         "settings": {
-            "access_key": "access-key",
-            "secret_access_key": "secret-key",
-            "aws_region": "us-east-1",
-            "model": "amazon.nova-lite-v1:0",
-            "max_tokens": "4096",
+            "model": "synthetic-model",
+            "api_key": "synthetic-key",
+            "temperature": 0.5,
         },
+        "max_threads": 2,
     }
 
 
@@ -366,13 +215,15 @@ def test_translation_uses_provider_specific_thinking_policy(
     result = PySubtransTranslator().translate(
         source,
         "zh-Hans",
+        settings={"provider": provider_name, "max_threads": 2},
         user_overrides={"Jon": "琼恩", "Absent": "忽略"},
         work_directory=work_directory,
     )
 
     assert result == source.read_bytes()
     assert captured["settings"] == {
-        "provider": "",
+        "provider": provider_name,
+        "max_threads": 2,
         "target_language": "zh-Hans",
         "prompt": "Translate these subtitles to Chinese (Simplified)",
         "preprocess_subtitles": False,

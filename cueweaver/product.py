@@ -18,10 +18,6 @@ from .work import WorkRoot
 MEDIA_ROOT_ENV = "CUEWEAVER_MEDIA_ROOT"
 WORK_ROOT_ENV = "CUEWEAVER_WORK_ROOT"
 STATIC_ROOT = Path(__file__).parent / "static"
-PROVIDER_MESSAGE = (
-    "Set PROVIDER and the matching provider environment variables, then restart "
-    "CueWeaver."
-)
 
 
 def create_product_app(
@@ -76,16 +72,15 @@ def _create_api_app(
     )
     app = create_app(application, media_root)
     app.add_exception_handler(404, api_not_found_handler)
-    provider_ready = _provider_available(translator)
 
     @app.get("/api/status")
     def product_status() -> dict[str, object]:
+        provider_ready = any(
+            profile["selectable"] for profile in application.model_profiles.list()
+        )
         provider: dict[str, object] = {"ready": provider_ready}
         if not provider_ready:
-            message = getattr(translator, "availability_message", None)
-            provider["message"] = (
-                message if isinstance(message, str) else PROVIDER_MESSAGE
-            )
+            provider["message"] = "Create a selectable Model Profile to translate."
         return {
             "api": {"ready": True},
             "roots": {"ready": _roots_ready(media_root, work_root)},
@@ -186,10 +181,6 @@ def _validate_static_root(static_root: Path) -> Path:
     if not (static_root / "index.html").is_file():
         raise ValueError("Built Web product is missing")
     return static_root
-
-
-def _provider_available(translator: Translator) -> bool:
-    return translator.available
 
 
 __all__ = [

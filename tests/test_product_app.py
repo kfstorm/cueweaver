@@ -222,6 +222,19 @@ def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Pat
         )
     )
 
+    created = client.post(
+        "/api/model-profiles",
+        json={
+            "name": "Test provider",
+            "parent_id": None,
+            "selectable": True,
+            "settings": [
+                {"key": "provider", "kind": "literal", "value": "OpenAI"},
+                {"key": "api_key", "kind": "literal", "value": "synthetic-key"},
+            ],
+        },
+    )
+    assert created.status_code == 200
     response = client.get("/api/status")
 
     assert response.status_code == 200
@@ -235,6 +248,7 @@ def test_product_status_is_ready_and_redacts_runtime_configuration(tmp_path: Pat
     assert str(media_root) not in serialized
     assert str(work_root) not in serialized
     assert translator.secret not in serialized
+    assert "synthetic-key" not in serialized
 
 
 @pytest.mark.parametrize("root_name", ["media", "work"])
@@ -263,38 +277,31 @@ def test_product_status_rechecks_root_health_after_startup(
     assert response.json()["roots"] == {"ready": False}
 
 
-def test_unconfigured_provider_keeps_product_available_with_actionable_status(
+def test_no_model_profile_keeps_product_available_with_actionable_status(
     tmp_path: Path,
 ):
-    client = TestClient(product_app(tmp_path, TranslatorFixture(available=False)))
+    client = TestClient(product_app(tmp_path))
 
     response = client.get("/api/status")
 
     assert response.status_code == 200
     assert response.json()["translation_provider"] == {
         "ready": False,
-        "message": (
-            "Set PROVIDER and the matching provider environment variables, then "
-            "restart CueWeaver."
-        ),
+        "message": "Create a selectable Model Profile to translate.",
     }
     assert response.json()["api"] == {"ready": True}
 
 
-def test_provider_status_exposes_specific_local_configuration_message(tmp_path: Path):
-    client = TestClient(
-        product_app(
-            tmp_path,
-            TranslatorFixture(
-                available=False,
-                availability_message="Set GEMINI_API_KEY for PROVIDER=Gemini, then restart CueWeaver.",
-            ),
-        )
+def test_base_profile_does_not_report_translation_ready(tmp_path: Path):
+    client = TestClient(product_app(tmp_path))
+    client.post(
+        "/api/model-profiles",
+        json={"name": "Base", "parent_id": None, "selectable": False, "settings": []},
     )
 
     assert client.get("/api/status").json()["translation_provider"] == {
         "ready": False,
-        "message": "Set GEMINI_API_KEY for PROVIDER=Gemini, then restart CueWeaver.",
+        "message": "Create a selectable Model Profile to translate.",
     }
 
 
