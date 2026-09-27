@@ -217,7 +217,7 @@ function ProfileForm({
     typeof providerValue === "string" ? providerValue : undefined;
   const providerNames = Object.keys(reference?.providers ?? {});
   const providerSettings = effectiveProvider
-    ? (reference?.providers[effectiveProvider] ?? [])
+    ? (reference?.providers?.[effectiveProvider] ?? [])
     : [];
   const addableSettings = providerSettings.filter((item) => !keys.includes(item.key));
   if (!effectiveProvider && !keys.includes("provider")) {
@@ -252,7 +252,7 @@ function ProfileForm({
     if (!key || keys.includes(key)) return;
     const settingReference = providerSettings.find((item) => item.key === key);
     const type = key === "provider" ? "string" : settingReference?.type;
-    const value = initialSettingValue(type, settingReference?.choices ?? null);
+    const value = initialSettingValue(type, Boolean(settingReference?.choices?.length));
     change({ key, kind: "literal", value });
     setNewKey("");
   };
@@ -476,8 +476,7 @@ function LiteralEditor({
 }) {
   const { t } = useI18n();
   const isKnownProvider = entry.key === "provider" && providerNames.length > 0;
-  const type =
-    reference?.type === "array" ? "string list" : (reference?.type ?? valueType(entry));
+  const type = referenceTypeLabel(reference?.type) ?? valueType(entry);
   const [raw, setRaw] = useState(inputValue(entry.value));
   const [editorType, setEditorType] = useState(type);
   const changeType = (next: string) => {
@@ -589,9 +588,13 @@ function LiteralEditor({
               value={String(entry.value)}
               onChange={(event) => onChange({ ...entry, value: event.target.value })}
             >
-              {!reference.choices.includes(String(entry.value)) && (
+              {String(entry.value) === "" ? (
+                <option value="" disabled>
+                  {t("modelProfiles.chooseValue")}
+                </option>
+              ) : !reference.choices.includes(String(entry.value)) ? (
                 <option value={String(entry.value)}>{String(entry.value)}</option>
-              )}
+              ) : null}
               {reference.choices.map((choice) => (
                 <option key={choice} value={choice}>
                   {choice}
@@ -611,9 +614,9 @@ function LiteralEditor({
 
 function initialSettingValue(
   type: string | null | undefined,
-  choices: string[] | null,
+  hasChoices: boolean,
 ): unknown {
-  if (choices?.length) return choices[0];
+  if (hasChoices) return "";
   if (type === "boolean") return false;
   if (type === "integer" || type === "number") return 0;
   if (type === "array") return [];

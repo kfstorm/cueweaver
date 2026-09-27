@@ -57,6 +57,7 @@
   "modelProfiles.value": "Valeur",
   "modelProfiles.providerValue": "Fournisseur",
   "modelProfiles.chooseProvider": "Choisir un fournisseur",
+  "modelProfiles.chooseValue": "Choisir une valeur",
   "modelProfiles.settingSuggestionHelp": "Les suggestions suivent le fournisseur effectif. Les clés personnalisées restent possibles.",
   "modelProfiles.true": "Vrai",
   "modelProfiles.false": "Faux",

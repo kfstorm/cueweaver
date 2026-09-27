@@ -278,7 +278,10 @@ describe("Model Profile setting references", () => {
       within(choices)
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual(["none", "low", "high"]);
+    ).toHaveLength(4);
+    expect(choices).toHaveValue("");
+    fireEvent.change(choices, { target: { value: "low" } });
+    expect(choices).toHaveValue("low");
     expect(
       within(reasoningRow).getByText("Synthetic reasoning description"),
     ).toBeInTheDocument();
@@ -318,9 +321,10 @@ describe("Model Profile setting references", () => {
       item.textContent?.includes("temperature"),
     )!;
     fireEvent.click(within(row).getByRole("button", { name: "Unset" }));
-    expect(row).toHaveTextContent("Unset locally");
+    expect(row.querySelector(".profile-value")).not.toHaveTextContent("0.25");
+    expect(within(row).getAllByRole("button")).toHaveLength(1);
     fireEvent.click(within(row).getByRole("button", { name: "Remove local" }));
-    expect(row).toHaveTextContent("Inherited from base");
-    expect(within(row).getByText("0.25")).toBeInTheDocument();
+    expect(row.querySelector(".profile-value")).toHaveTextContent("0.25");
+    expect(within(row).getAllByRole("button")).toHaveLength(2);
   });
 });

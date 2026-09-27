@@ -299,9 +299,7 @@ def _record_option(
             and description not in metadata["descriptions"]
         ):
             metadata["descriptions"].append(description)
-    choices = _static_choices(value.elts[0])
-    if choices is not None:
-        metadata["choices"] = choices
+    metadata["choices"] = _static_choices(value.elts[0])
 
 
 def _static_choices(node: ast.expr) -> list[str] | None:

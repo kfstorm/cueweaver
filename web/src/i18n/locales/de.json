@@ -57,6 +57,7 @@
   "modelProfiles.value": "Wert",
   "modelProfiles.providerValue": "Anbieter",
   "modelProfiles.chooseProvider": "Anbieter auswählen",
+  "modelProfiles.chooseValue": "Wert auswählen",
   "modelProfiles.settingSuggestionHelp": "Vorschläge richten sich nach dem wirksamen Anbieter. Benutzerdefinierte Schlüssel sind möglich.",
   "modelProfiles.true": "Wahr",
   "modelProfiles.false": "Falsch",

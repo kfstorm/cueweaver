@@ -34,6 +34,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
                     "models": settings.get_str("models"),
                     "status": settings.get_str("status"),
                     "advanced": settings.get_str("advanced"),
+                    "changing": settings.get_str("changing"),
                     "complex": build_setting(),
                 }))
 
@@ -51,6 +52,8 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
                     "status": (["Unable to retrieve models"], "Status text"),
                 })
                 options["advanced"] = (["basic", "advanced"], "Advanced description")
+                options["changing"] = (["one", "two"], "Static description")
+                options["changing"] = (models, "Dynamic description")
                 return options
         """
     )
@@ -70,6 +73,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
         "models": "string",
         "status": "string",
         "advanced": "string",
+        "changing": "string",
         "complex": None,
     }
     assert provider.settings["api_key"].description == "Synthetic API key description"
@@ -77,6 +81,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
     assert provider.settings["advanced"].choices == ["basic", "advanced"]
     assert provider.settings["models"].choices is None
     assert provider.settings["status"].choices is None
+    assert provider.settings["changing"].choices is None
 
 
 def test_installed_provider_contract_is_complete_without_runtime_discovery(monkeypatch):

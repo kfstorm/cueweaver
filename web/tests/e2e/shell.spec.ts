@@ -48,7 +48,8 @@ test("adds a provider setting from the bundled reference", async ({ page }) => {
     .filter({ hasText: "reasoning_effort" });
   const valueControls = setting.getByRole("combobox");
   await expect(valueControls.nth(0)).toHaveValue("string");
-  await expect(valueControls.nth(1)).toHaveValue("none");
+  await expect(valueControls.nth(1)).toHaveValue("");
+  await valueControls.nth(1).selectOption("low");
 
   await page.getByRole("button", { name: "Save Model Profile" }).click();
   await expect(page.getByRole("heading", { name: "Model Profiles" })).toBeVisible();

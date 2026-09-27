@@ -57,6 +57,7 @@
   "modelProfiles.value": "值",
   "modelProfiles.providerValue": "服务商",
   "modelProfiles.chooseProvider": "选择服务商",
+  "modelProfiles.chooseValue": "选择一个值",
   "modelProfiles.settingSuggestionHelp": "建议项根据生效的服务商显示。仍可添加自定义键。",
   "modelProfiles.true": "是",
   "modelProfiles.false": "否",

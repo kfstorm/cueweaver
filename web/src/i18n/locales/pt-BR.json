@@ -57,6 +57,7 @@
   "modelProfiles.value": "Valor",
   "modelProfiles.providerValue": "Provedor",
   "modelProfiles.chooseProvider": "Escolha um provedor",
+  "modelProfiles.chooseValue": "Escolha um valor",
   "modelProfiles.settingSuggestionHelp": "As sugestões seguem o provedor efetivo. Chaves personalizadas continuam permitidas.",
   "modelProfiles.true": "Verdadeiro",
   "modelProfiles.false": "Falso",

@@ -107,6 +107,7 @@ const ENGLISH = {
   "modelProfiles.value": "Value",
   "modelProfiles.providerValue": "Provider",
   "modelProfiles.chooseProvider": "Choose a provider",
+  "modelProfiles.chooseValue": "Choose a value",
   "modelProfiles.settingSuggestionHelp":
     "Suggestions follow the effective provider. Custom keys are allowed.",
   "modelProfiles.true": "True",
