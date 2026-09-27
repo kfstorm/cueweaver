@@ -5,10 +5,9 @@ from __future__ import annotations
 import ast
 import importlib.metadata
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +44,14 @@ class SettingReference:
             "description": self.description,
             "choices": self.choices,
         }
+
+
+@dataclass
+class _OptionMetadata:
+    descriptions: list[str] = field(default_factory=list)
+    choice_candidates: list[list[str] | None] = field(default_factory=list)
+    dynamic_value: bool = False
+    choices: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -84,17 +91,17 @@ def parse_provider_source(source: str) -> ProviderReference | None:
         }
         keys = _constructor_settings(methods.get("__init__"))
         options = _get_options(methods.get("GetOptions"))
-        settings = {
-            key: SettingReference(
+        settings: dict[str, SettingReference] = {}
+        for key, setting_type in keys.items():
+            option = options.get(key)
+            settings[key] = SettingReference(
                 key=key,
                 type=setting_type,
                 description=_choose_description(
-                    options.get(key, {}).get("descriptions", [])
+                    option.descriptions if option is not None else []
                 ),
-                choices=options.get(key, {}).get("choices"),
+                choices=option.choices if option is not None else None,
             )
-            for key, setting_type in keys.items()
-        }
         return ProviderReference(name=name, settings=settings)
     return None
 
@@ -235,8 +242,8 @@ def _constructor_settings(
 
 def _get_options(
     method: ast.FunctionDef | ast.AsyncFunctionDef | None,
-) -> dict[str, dict[str, Any]]:
-    options: dict[str, dict[str, Any]] = {}
+) -> dict[str, _OptionMetadata]:
+    options: dict[str, _OptionMetadata] = {}
     if method is None:
         return options
     has_unknown_option_write = False
@@ -293,7 +300,7 @@ def _is_options_update(node: ast.Call) -> bool:
     )
 
 
-def _record_option_dict(options: dict[str, dict[str, Any]], values: ast.Dict) -> bool:
+def _record_option_dict(options: dict[str, _OptionMetadata], values: ast.Dict) -> bool:
     has_unknown_key = False
     for key_node, value_node in zip(values.keys, values.values, strict=True):
         key = _literal_string(key_node)
@@ -319,39 +326,36 @@ def _direct_option_assignment(
 
 
 def _finalize_options(
-    options: dict[str, dict[str, Any]], has_unknown_option_write: bool
+    options: dict[str, _OptionMetadata], has_unknown_option_write: bool
 ) -> None:
     for metadata in options.values():
-        candidates = metadata.pop("choice_candidates")
-        dynamic_value = metadata.pop("dynamic_value") or has_unknown_option_write
+        candidates = metadata.choice_candidates
+        dynamic_value = metadata.dynamic_value or has_unknown_option_write
         first = candidates[0] if candidates else None
-        metadata["choices"] = None
+        metadata.choices = None
         if dynamic_value:
-            metadata["descriptions"].clear()
+            metadata.descriptions.clear()
         elif first is not None and all(candidate == first for candidate in candidates):
-            metadata["choices"] = first
+            metadata.choices = first
 
 
 def _record_option(
-    options: dict[str, dict[str, Any]], key: str, value: ast.expr
+    options: dict[str, _OptionMetadata], key: str, value: ast.expr
 ) -> None:
-    metadata = options.setdefault(
-        key,
-        {"descriptions": [], "choice_candidates": [], "dynamic_value": False},
-    )
+    metadata = options.setdefault(key, _OptionMetadata())
     if (
         not isinstance(value, (ast.Tuple, ast.List))
         or len(value.elts) < _OPTION_TUPLE_LENGTH
     ):
-        metadata["dynamic_value"] = True
+        metadata.dynamic_value = True
         return
     for description in _description_strings(value.elts[1]):
         if (
             not _is_placeholder_text(description)
-            and description not in metadata["descriptions"]
+            and description not in metadata.descriptions
         ):
-            metadata["descriptions"].append(description)
-    metadata["choice_candidates"].append(_static_choices(value.elts[0]))
+            metadata.descriptions.append(description)
+    metadata.choice_candidates.append(_static_choices(value.elts[0]))
 
 
 def _static_choices(node: ast.expr) -> list[str] | None:
