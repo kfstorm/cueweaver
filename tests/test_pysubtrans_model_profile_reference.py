@@ -55,6 +55,7 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
                 options["advanced"] = (["basic", "advanced"], "Advanced description")
                 options["changing"] = (["one", "two"], "Static description")
                 options["changing"] = (models, "Dynamic description")
+                options["changing"] = dynamic_option
                 if settings.get_bool("dynamic"):
                     options["branch"] = (models, "Dynamic branch")
                 else:
@@ -88,7 +89,35 @@ def test_parser_extracts_supported_shapes_and_ignores_dynamic_choices():
     assert provider.settings["models"].choices is None
     assert provider.settings["status"].choices is None
     assert provider.settings["changing"].choices is None
+    assert provider.settings["changing"].description is None
     assert provider.settings["branch"].choices is None
+
+
+def test_dynamic_option_mapping_invalidates_static_metadata():
+    source = dedent(
+        """\
+        class SyntheticProvider(TranslationProvider):
+            name = "Synthetic"
+
+            def __init__(self, settings):
+                super().__init__(self.name, SettingsType({
+                    "reasoning": settings.get_str("reasoning"),
+                }))
+
+            def GetOptions(self, settings):
+                options = {
+                    "reasoning": (["none", "low"], "Reasoning description"),
+                }
+                options.update(dynamic_options)
+                return options
+        """
+    )
+
+    provider = parse_provider_source(source)
+
+    assert provider is not None
+    assert provider.settings["reasoning"].description is None
+    assert provider.settings["reasoning"].choices is None
 
 
 def test_installed_provider_contract_is_complete_without_runtime_discovery(monkeypatch):

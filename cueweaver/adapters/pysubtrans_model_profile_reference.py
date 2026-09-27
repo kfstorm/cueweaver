@@ -239,68 +239,112 @@ def _get_options(
     options: dict[str, dict[str, Any]] = {}
     if method is None:
         return options
+    has_unknown_option_write = False
     nodes = sorted(ast.walk(method), key=lambda node: getattr(node, "lineno", 0))
     for node in nodes:
-        option_dict: ast.Dict | None = None
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
-            node.value, ast.Dict
-        ):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(target, ast.Name) and target.id == "options"
-                for target in targets
-            ):
-                option_dict = node.value
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "update"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "options"
-            and node.args
-            and isinstance(node.args[0], ast.Dict)
-        ):
-            option_dict = node.args[0]
-
+        option_dict, unknown_write = _option_dictionary(node)
+        has_unknown_option_write = has_unknown_option_write or unknown_write
         if option_dict is not None:
-            for key_node, value_node in zip(
-                option_dict.keys, option_dict.values, strict=True
-            ):
-                key = _literal_string(key_node)
-                if key is not None:
-                    _record_option(options, key, value_node)
+            has_unknown_option_write = (
+                _record_option_dict(options, option_dict) or has_unknown_option_write
+            )
+        direct_assignment = _direct_option_assignment(node)
+        if direct_assignment is not None:
+            key, value = direct_assignment
+            if key is None:
+                has_unknown_option_write = True
+            else:
+                _record_option(options, key, value)
 
-        if (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, (ast.Tuple, ast.List))
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Subscript)
-            and isinstance(node.targets[0].value, ast.Name)
-            and node.targets[0].value.id == "options"
+    _finalize_options(options, has_unknown_option_write)
+    return options
+
+
+def _option_dictionary(node: ast.AST) -> tuple[ast.Dict | None, bool]:
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(
+            isinstance(target, ast.Name) and target.id == "options"
+            for target in targets
         ):
-            key = _literal_string(node.targets[0].slice)
-            if key is not None:
-                _record_option(options, key, node.value)
+            return None, False
+        if isinstance(node.value, ast.Dict):
+            return node.value, False
+        return None, True
+    if not isinstance(node, ast.Call) or not _is_options_update(node):
+        return None, False
+    if (
+        node.args
+        and isinstance(node.args[0], ast.Dict)
+        and not node.keywords
+        and all(key is not None for key in node.args[0].keys)
+    ):
+        return node.args[0], False
+    return None, True
+
+
+def _is_options_update(node: ast.Call) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "update"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "options"
+    )
+
+
+def _record_option_dict(options: dict[str, dict[str, Any]], values: ast.Dict) -> bool:
+    has_unknown_key = False
+    for key_node, value_node in zip(values.keys, values.values, strict=True):
+        key = _literal_string(key_node)
+        if key is None:
+            has_unknown_key = True
+        else:
+            _record_option(options, key, value_node)
+    return has_unknown_key
+
+
+def _direct_option_assignment(
+    node: ast.AST,
+) -> tuple[str | None, ast.expr] | None:
+    if not (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Subscript)
+        and isinstance(node.targets[0].value, ast.Name)
+        and node.targets[0].value.id == "options"
+    ):
+        return None
+    return _literal_string(node.targets[0].slice), node.value
+
+
+def _finalize_options(
+    options: dict[str, dict[str, Any]], has_unknown_option_write: bool
+) -> None:
     for metadata in options.values():
         candidates = metadata.pop("choice_candidates")
+        dynamic_value = metadata.pop("dynamic_value") or has_unknown_option_write
         first = candidates[0] if candidates else None
-        metadata["choices"] = (
-            first
-            if first is not None and all(candidate == first for candidate in candidates)
-            else None
-        )
-    return options
+        metadata["choices"] = None
+        if dynamic_value:
+            metadata["descriptions"].clear()
+        elif first is not None and all(candidate == first for candidate in candidates):
+            metadata["choices"] = first
 
 
 def _record_option(
     options: dict[str, dict[str, Any]], key: str, value: ast.expr
 ) -> None:
+    metadata = options.setdefault(
+        key,
+        {"descriptions": [], "choice_candidates": [], "dynamic_value": False},
+    )
     if (
         not isinstance(value, (ast.Tuple, ast.List))
         or len(value.elts) < _OPTION_TUPLE_LENGTH
     ):
+        metadata["dynamic_value"] = True
         return
-    metadata = options.setdefault(key, {"descriptions": [], "choice_candidates": []})
     for description in _description_strings(value.elts[1]):
         if (
             not _is_placeholder_text(description)
