@@ -261,6 +261,8 @@ function ProfileForm({
   const effectiveProvider =
     typeof providerValue === "string" ? providerValue : undefined;
   const providerNames = Object.keys(reference?.providers ?? {}).sort();
+  const hasKnownProvider =
+    !!effectiveProvider && !!reference?.providers?.[effectiveProvider];
   const providerSettings = effectiveProvider
     ? (reference?.providers?.[effectiveProvider] ?? [])
     : [];
@@ -302,8 +304,10 @@ function ProfileForm({
           item.selectable && !providerNames.includes(String(providerFor(item.id))),
       )),
   );
+  const requiresKnownProvider =
+    draft.selectable || affected.some((item) => item.selectable);
   const providerNotReady =
-    draft.selectable && (!reference || referencePending || !!referenceError);
+    requiresKnownProvider && (!reference || referencePending || !!referenceError);
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
     setPendingEditorTypes((previous) => {
@@ -348,7 +352,7 @@ function ProfileForm({
       !reference ||
       referencePending ||
       referenceError ||
-      !effectiveProvider
+      !hasKnownProvider
     )
       return;
     setPendingEditorTypes((previous) =>
@@ -681,7 +685,7 @@ function ProfileForm({
               aria-autocomplete="list"
               aria-expanded={
                 listOpen &&
-                !!effectiveProvider &&
+                hasKnownProvider &&
                 !!reference &&
                 !referencePending &&
                 !referenceError
@@ -694,7 +698,7 @@ function ProfileForm({
               }
               autoComplete="off"
               disabled={
-                !reference || referencePending || !!referenceError || !effectiveProvider
+                !reference || referencePending || !!referenceError || !hasKnownProvider
               }
               value={search}
               onFocus={() => setListOpen(true)}
@@ -731,7 +735,7 @@ function ProfileForm({
               !!reference &&
               !referencePending &&
               !referenceError &&
-              !!effectiveProvider && (
+              hasKnownProvider && (
                 <ul id={listId} role="listbox" className="profile-setting-options">
                   {matches.map((item, index) => (
                     <li
@@ -769,7 +773,7 @@ function ProfileForm({
               )}
             <span id="model-profile-setting-help" className="field-help">
               {t(
-                !effectiveProvider
+                !hasKnownProvider
                   ? "modelProfiles.chooseProviderFirst"
                   : "modelProfiles.settingSuggestionHelp",
               )}
@@ -783,7 +787,7 @@ function ProfileForm({
               !reference ||
               referencePending ||
               !!referenceError ||
-              !effectiveProvider
+              !hasKnownProvider
             }
             onClick={addSetting}
           >

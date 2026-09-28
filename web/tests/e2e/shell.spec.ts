@@ -31,17 +31,13 @@ test("adds a provider setting from the bundled reference", async ({ page }) => {
   await page.goto("/model-profiles/new");
   await page.getByLabel("Name").fill("Reference profile");
 
-  const keyInput = page.getByLabel(/New setting key/);
-  await keyInput.fill("provider");
-  await page.getByRole("button", { name: "Add setting" }).click();
   await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption({
     label: "OpenAI",
   });
 
-  await keyInput.fill("reasoning_effort");
-  await expect(
-    page.locator('#model-profile-setting-reference option[value="reasoning_effort"]'),
-  ).toBeAttached();
+  const settingSearch = page.getByRole("combobox", { name: "Search settings" });
+  await settingSearch.fill("reasoning_effort");
+  await page.getByRole("option", { name: /reasoning_effort/ }).click();
   await page.getByRole("button", { name: "Add setting" }).click();
   const setting = page
     .locator(".profile-setting")

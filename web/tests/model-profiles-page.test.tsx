@@ -141,6 +141,20 @@ const inheritedModel = {
   source: { id: "base", name: "base" },
 };
 
+function baseWithSelectableChild(): ModelProfile[] {
+  const base = profile(
+    "base",
+    null,
+    [{ key: "provider", kind: "literal", value: "OpenAI" }],
+    [inheritedOpenAiProvider],
+  );
+  const child = {
+    ...profile("child", "base", [], [inheritedOpenAiProvider]),
+    selectable: true,
+  };
+  return [base, child];
+}
+
 function renderEditor(
   path: string,
   profiles: ModelProfile[] = [],
@@ -542,6 +556,10 @@ describe("Model Profile setting references", () => {
     expect(
       [...provider.querySelectorAll("option")].map((item) => item.value),
     ).not.toContain("OldCustomProvider");
+    expect(screen.getByRole("combobox", { name: "Search settings" })).toBeDisabled();
+    expect(
+      screen.getByText("Choose or override a provider to add settings."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
@@ -722,17 +740,7 @@ describe("Model Profile setting references", () => {
   });
 
   it("shows a selectable provider problem before Save and honors inherited unset/remove", async () => {
-    const base = profile(
-      "base",
-      null,
-      [{ key: "provider", kind: "literal", value: "OpenAI" }],
-      [inheritedOpenAiProvider],
-    );
-    const child = {
-      ...profile("child", "base", [], [inheritedOpenAiProvider]),
-      selectable: true,
-    };
-    const { saves } = renderEditor("/model-profiles/child", [base, child]);
+    const { saves } = renderEditor("/model-profiles/child", baseWithSelectableChild());
     await screen.findByRole("combobox", { name: "Provider" });
     const providerArea = document.querySelector(".profile-provider") as HTMLElement;
     fireEvent.click(within(providerArea).getByRole("button", { name: "Unset" }));
@@ -749,6 +757,32 @@ describe("Model Profile setting references", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
     await expectSavedLiteralSetting(saves, "provider", "DeepSeek");
   });
+
+  it.each(["loading", "error"])(
+    "blocks saving an unset base provider with a selectable descendant while reference is %s",
+    async (state) => {
+      const referenceResponse =
+        state === "error"
+          ? Promise.reject(new Error("unavailable"))
+          : new Promise<ModelProfileReference>(() => {});
+      const { saves } = renderEditor(
+        "/model-profiles/base",
+        baseWithSelectableChild(),
+        referenceResponse,
+      );
+      if (state === "error") {
+        await screen.findByRole("alert");
+      } else {
+        await screen.findByRole("combobox", { name: "Provider" });
+      }
+      const providerArea = document.querySelector(".profile-provider") as HTMLElement;
+      fireEvent.click(within(providerArea).getByRole("button", { name: "Unset" }));
+      const save = screen.getByRole("button", { name: "Save Model Profile" });
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(saves).toHaveLength(0);
+    },
+  );
 
   it("keeps inherited override, unset and remove-local controls available", async () => {
     const inheritedTemperature = {
