@@ -219,6 +219,67 @@ def test_options_reconciles_missing_or_invalid_models_without_materializing_defa
         application.close()
 
 
+def test_options_does_not_expose_model_discovery_failure_as_a_choice(
+    tmp_path, monkeypatch
+):
+    class UnavailableProvider:
+        name = "Unavailable"
+
+        def __init__(self, settings):
+            self.settings = SettingsType({"model": settings.get("model", "gpt-5-mini")})
+            self.refresh_when_changed = []
+            self._available_models = []
+
+        def GetCombinedSettings(self, overrides):
+            return SettingsType({**self.settings, **overrides})
+
+        def ResetAvailableModels(self):
+            self._available_models = []
+
+        def UpdateSettings(self, settings):
+            self.settings.update(settings)
+
+        @property
+        def selected_model(self):
+            return self.settings.get("model")
+
+        @property
+        def available_models(self):
+            return self._available_models
+
+        def GetOptions(self, _settings):
+            return {
+                "model": (
+                    ["Unable to retrieve models"],
+                    "Check API key and base URL and try again",
+                )
+            }
+
+    monkeypatch.setattr(
+        TranslationProvider,
+        "get_providers",
+        lambda: {UnavailableProvider.name: UnavailableProvider},
+    )
+    application = CueWeaverApplication(Translator(), tmp_path / "work")
+    try:
+        with TestClient(create_app(application)) as client:
+            response = client.post(
+                "/api/model-profile-options",
+                json={"provider": "Unavailable", "settings": {"model": "gpt-5-mini"}},
+            )
+    finally:
+        application.close()
+
+    assert response.status_code == 200
+    assert response.json()["options"][0] == {
+        "key": "model",
+        "type": "string",
+        "description": "Check API key and base URL and try again",
+        "choices": None,
+        "value": "gpt-5-mini",
+    }
+
+
 def test_options_endpoint_reports_unknown_unsupported_and_runtime_errors_safely(
     tmp_path, monkeypatch
 ):

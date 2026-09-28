@@ -19,6 +19,7 @@ _OPTION_TYPES = {
     bool: "boolean",
 }
 _OPTION_TUPLE_LENGTH = 2
+_MODEL_DISCOVERY_FAILURE = "Unable to retrieve models"
 
 
 def pysubtrans_model_profile_reference() -> dict[str, object]:
@@ -38,6 +39,13 @@ def pysubtrans_model_profile_options(
     provider: str, settings: Mapping[str, object]
 ) -> dict[str, object]:
     """Run the selected provider's real option discovery."""
+    discovered, _ = _discover_model_profile_options(provider, settings)
+    return discovered
+
+
+def _discover_model_profile_options(
+    provider: str, settings: Mapping[str, object]
+) -> tuple[dict[str, object], list[str]]:
     try:
         providers = TranslationProvider.get_providers()
     except Exception as error:
@@ -75,7 +83,13 @@ def pysubtrans_model_profile_options(
             setting_updates["model"] = model
             runtime_options = runtime_provider.GetOptions(combined)
         options = [
-            _convert_option(key, option, combined)
+            _convert_option(
+                key,
+                _as_text_option_if_model_discovery_failed(
+                    key, option, available_models
+                ),
+                combined,
+            )
             for key, option in runtime_options.items()
         ]
         refresh_when_changed = list(runtime_provider.refresh_when_changed)
@@ -87,32 +101,53 @@ def pysubtrans_model_profile_options(
             f"Could not load options for provider {provider}",
             field="provider",
         ) from error
-    return {
-        "provider": provider,
-        "options": options,
-        "refresh_when_changed": refresh_when_changed,
-        "setting_updates": setting_updates,
-    }
+    return (
+        {
+            "provider": provider,
+            "options": options,
+            "refresh_when_changed": refresh_when_changed,
+            "setting_updates": setting_updates,
+        },
+        list(available_models),
+    )
 
 
 def validate_model_profile_options(
     provider: str, settings: Mapping[str, object]
 ) -> dict[str, object]:
     """Validate explicit values against this complete draft's runtime options."""
-    discovered = pysubtrans_model_profile_options(provider, settings)
+    discovered, available_models = _discover_model_profile_options(provider, settings)
     options = {
         option["key"]: option
         for option in cast(list[dict[str, object]], discovered["options"])
     }
     for key, value in settings.items():
         option = options.get(key)
-        if option is None or not _valid_option_value(option, value):
+        valid_model = key != "model" or (
+            value != _MODEL_DISCOVERY_FAILURE
+            and (not available_models or value in available_models)
+        )
+        if option is None or not valid_model or not _valid_option_value(option, value):
             raise ServiceError(
                 "invalid_model_profile",
                 f"Setting {key} is not a valid current provider option",
                 field="settings",
             )
     return cast(dict[str, object], discovered["setting_updates"])
+
+
+def _as_text_option_if_model_discovery_failed(
+    key: object, option: object, available_models: list[str]
+) -> object:
+    if (
+        key == "model"
+        and not available_models
+        and isinstance(option, tuple)
+        and len(option) == _OPTION_TUPLE_LENGTH
+        and option[0] == [_MODEL_DISCOVERY_FAILURE]
+    ):
+        return (str, option[1])
+    return option
 
 
 def _valid_option_value(option: dict[str, object], value: object) -> bool:

@@ -90,6 +90,66 @@ def test_save_validates_current_runtime_options_and_keeps_valid_values(tmp_path)
         assert profiles.get(profile["id"])["settings"] == profile["settings"]
 
 
+def test_save_preserves_existing_model_when_model_discovery_fails(
+    tmp_path, monkeypatch
+):
+    class AvailableProvider:
+        def __init__(self, settings):
+            self.settings = SettingsType({"model": settings.get("model", "gpt-5-mini")})
+            self.refresh_when_changed = []
+            self.selected_model = self.settings.get("model")
+            self.available_models = ["gpt-5-mini"]
+
+        def GetCombinedSettings(self, overrides):
+            return SettingsType({**self.settings, **overrides})
+
+        def ResetAvailableModels(self):
+            pass
+
+        def UpdateSettings(self, settings):
+            self.settings.update(settings)
+
+        def GetOptions(self, _settings):
+            return {"model": (self.available_models, "Model")}
+
+    class UnavailableProvider(AvailableProvider):
+        def __init__(self, settings):
+            super().__init__(settings)
+            self.available_models = []
+
+        def GetOptions(self, _settings):
+            return {
+                "model": (
+                    ["Unable to retrieve models"],
+                    "Check API key and base URL and try again",
+                )
+            }
+
+    monkeypatch.setattr(
+        TranslationProvider, "get_providers", lambda: {"Synthetic": AvailableProvider}
+    )
+    profiles = ModelProfiles(SqliteDatabase(tmp_path / "app.sqlite3"))
+    profile = profiles.create("Original", "Synthetic", [setting("model", "gpt-5-mini")])
+
+    monkeypatch.setattr(
+        TranslationProvider, "get_providers", lambda: {"Synthetic": UnavailableProvider}
+    )
+    updated = profiles.replace(
+        profile["id"], "Renamed", "Synthetic", [setting("model", "gpt-5-mini")]
+    )
+    assert updated["name"] == "Renamed"
+    assert updated["settings"] == [setting("model", "gpt-5-mini")]
+
+    with pytest.raises(ServiceError) as error:
+        profiles.replace(
+            profile["id"],
+            "Renamed",
+            "Synthetic",
+            [setting("model", "Unable to retrieve models")],
+        )
+    assert error.value.error_code == "invalid_model_profile"
+
+
 def test_profile_api_reconciles_model_and_translation_uses_the_saved_selection(
     tmp_path, runtime_provider, monkeypatch
 ):

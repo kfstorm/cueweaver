@@ -75,6 +75,16 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function optionsWithPendingSecondRequest(
+  pending: ReturnType<typeof deferred<ReturnType<typeof response>>>,
+) {
+  let calls = 0;
+  return async () => {
+    calls += 1;
+    return calls === 2 ? pending.promise : response(options());
+  };
+}
+
 function renderEditor({
   path = "/model-profiles/new",
   profiles = [],
@@ -459,8 +469,7 @@ describe("standalone Model Profile editor", () => {
     const { saves } = renderEditor({
       optionsHandler: async () => {
         calls += 1;
-        if (calls === 2) return pending.promise;
-        return response(options());
+        return calls === 2 ? pending.promise : response(options());
       },
     });
     await selectProvider();
@@ -476,5 +485,50 @@ describe("standalone Model Profile editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].settings).toEqual([{ key: "model", value: "second" }]);
+  });
+
+  it("applies a model refresh after a non-refresh setting changes", async () => {
+    const pending = deferred<ReturnType<typeof response>>();
+    const { saves } = renderEditor({
+      optionsHandler: optionsWithPendingSecondRequest(pending),
+    });
+    await selectProvider();
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Updated profile" },
+    });
+
+    fireEvent.change(screen.getByLabelText("model"), {
+      target: { value: "model-b" },
+    });
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() =>
+      expect(screen.getByText("Refreshing provider options…")).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("temperature"), {
+      target: { value: "0.25" },
+    });
+
+    const modelBOptions = options();
+    modelBOptions.options = modelBOptions.options.filter(
+      (option) => option.key !== "effort",
+    );
+    modelBOptions.options.push({
+      key: "model_b_detail",
+      type: "string",
+      description: null,
+      choices: null,
+      value: "visible for model B",
+    });
+    pending.resolve(response(modelBOptions));
+
+    expect(await screen.findByLabelText("model_b_detail")).toBeInTheDocument();
+    expect(screen.queryByLabelText("effort")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("temperature")).toHaveValue(0.25);
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([
+      { key: "model", value: "model-b" },
+      { key: "temperature", value: 0.25 },
+    ]);
   });
 });
