@@ -25,6 +25,7 @@ BUSINESS_ROUTES = frozenset(
     {
         "/api/term-maps",
         "/api/model-profiles",
+        "/api/model-profile-options",
         "/api/term-maps/directory",
         "/api/media/browse",
         "/api/media/discover",

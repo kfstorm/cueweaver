@@ -61,14 +61,12 @@ Translation.
 _Avoid_: request, task
 
 **Model Profile**:
-An inheritable set of PySubtrans settings. A Job stores its selected Model
-Profile ID and resolves the current settings when each translation attempt
-starts. A non-selectable Model Profile may be used as an incomplete base for
-inheritance; selectable only controls selection for new Jobs.
+An independently named PySubtrans provider configuration. A Job stores its
+selected Model Profile ID and resolves the current provider and settings when
+each translation attempt starts.
 
-The Model Profile editor offers provider setting references extracted from the
-installed PySubtrans source. References suggest keys and types without
-restricting custom settings.
+The Model Profile editor obtains provider names from the installed PySubtrans
+registry and loads settings by running the selected provider's option discovery.
 
 **Job persistence**:
 The application composition owns the SQLite database at
@@ -76,8 +74,8 @@ The application composition owns the SQLite database at
 `<work-root>/.cueweaver.lease`. SQLAlchemy ORM models and versioned Alembic
 migrations define a relational schema. Jobs use scalar request and lifecycle
 columns with relational status history, a required Model Profile reference,
-and immutable Term map snapshot entries. Model Profiles contain typed settings
-and inherit through one parent; `unset` removes an inherited top-level key.
+and immutable Term map snapshot entries. Model Profiles contain a provider and
+non-null JSON setting values.
 Term maps use metadata and ordered relational entries; directory bindings remain
 relational records. Queued Jobs are
 restored in queue order; Jobs already in Extracting or Translating are marked

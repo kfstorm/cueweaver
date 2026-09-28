@@ -18,6 +18,12 @@ from cueweaver.application.database import (
 from cueweaver.application.jobs.store import SqliteJobRecordStore
 
 
+def _upgrade(engine, config: Config, revision: str) -> None:
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, revision)
+
+
 def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
     database = SqliteDatabase(tmp_path / "nested" / "cueweaver.sqlite3")
 
@@ -45,9 +51,24 @@ def test_sqlite_database_bootstraps_the_application_schema(tmp_path: Path):
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone() == (0,)
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0004_model_profiles",)
+        ).fetchone() == ("0005_standalone_model_profiles",)
         job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
         assert job_columns.isdisjoint({"record_json", "content_json", "schema_version"})
+        profile_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(model_profiles)")
+        }
+        setting_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(model_profile_settings)")
+        }
+        assert profile_columns == {
+            "id",
+            "name",
+            "provider",
+            "created_at",
+            "updated_at",
+        }
+        assert setting_columns == {"profile_id", "key", "value"}
 
     with database.read_session() as session:
         assert session.connection().exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
@@ -63,6 +84,40 @@ def test_write_transaction_commits_a_multi_table_change(tmp_path: Path):
         assert session.get(JobRow, "job-1") is not None
         assert session.get(JobStatusHistoryRow, {"job_id": "job-1", "sequence": 0})
         assert session.get(JobTermMapSnapshotRow, {"job_id": "job-1", "position": 0})
+
+
+def test_empty_inheritable_profile_schema_upgrades_to_standalone(tmp_path: Path):
+    database_path = tmp_path / "cueweaver.sqlite3"
+    engine = create_engine(URL.create("sqlite+pysqlite", database=str(database_path)))
+    config: Config = _migration_config()
+    _upgrade(engine, config, "0004_model_profiles")
+
+    with sqlite3.connect(database_path) as connection:
+        assert {
+            row[1] for row in connection.execute("PRAGMA table_info(model_profiles)")
+        } == {
+            "id",
+            "name",
+            "parent_id",
+            "selectable",
+            "created_at",
+            "updated_at",
+        }
+
+    _upgrade(engine, config, "head")
+    engine.dispose()
+
+    with sqlite3.connect(database_path) as connection:
+        assert {
+            row[1] for row in connection.execute("PRAGMA table_info(model_profiles)")
+        } == {"id", "name", "provider", "created_at", "updated_at"}
+        assert {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(model_profile_settings)")
+        } == {"profile_id", "key", "value"}
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0005_standalone_model_profiles",)
 
 
 def test_write_transaction_rolls_back_when_the_scope_fails(tmp_path: Path):
@@ -124,8 +179,7 @@ def _add_job_rows(session) -> None:
         ModelProfileRow(
             id="profile-1",
             name="Test profile",
-            parent_id=None,
-            selectable=True,
+            provider="OpenAI",
             created_at="2026-08-24T00:00:00Z",
             updated_at="2026-08-24T00:00:00Z",
         )
@@ -197,7 +251,7 @@ def test_migration_discards_issue_193_application_data(tmp_path: Path):
         )
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0004_model_profiles",)
+        ).fetchone() == ("0005_standalone_model_profiles",)
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'term_maps'"
         ).fetchone() == ("term_maps",)
@@ -211,9 +265,7 @@ def test_retiring_job_schema_version_preserves_populated_relational_data(
     database_path = tmp_path / "cueweaver.sqlite3"
     engine = create_engine(URL.create("sqlite+pysqlite", database=str(database_path)))
     config: Config = _migration_config()
-    with engine.connect() as connection:
-        config.attributes["connection"] = connection
-        command.upgrade(config, "0002_normalize_relational_storage")
+    _upgrade(engine, config, "0002_normalize_relational_storage")
 
     timestamp = "2026-08-24T00:00:00Z"
     with sqlite3.connect(database_path) as connection:
@@ -289,9 +341,7 @@ def test_retiring_job_schema_version_preserves_populated_relational_data(
             ("retained-job", 0, "Captain", "captain", "队长"),
         )
 
-    with engine.connect() as connection:
-        config.attributes["connection"] = connection
-        command.upgrade(config, "0003_retire_job_record_schema_version")
+    _upgrade(engine, config, "0003_retire_job_record_schema_version")
     engine.dispose()
 
     with sqlite3.connect(database_path) as connection:
@@ -413,12 +463,10 @@ def test_normalized_migration_downgrade_recreates_the_legacy_schema(
             "SELECT version_num FROM alembic_version"
         ).fetchone() == ("0001_application_schema",)
 
-    with engine.connect() as connection:
-        config.attributes["connection"] = connection
-        command.upgrade(config, "head")
+    _upgrade(engine, config, "head")
     engine.dispose()
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0004_model_profiles",)
+        ).fetchone() == ("0005_standalone_model_profiles",)

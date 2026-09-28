@@ -171,7 +171,7 @@ type TranslationStepState = {
   outputSuffixError: string | null;
   profilesPending: boolean;
   profilesError: boolean;
-  hasSelectableProfile: boolean;
+  hasModelProfiles: boolean;
   hasSelectedProfile: boolean;
 };
 
@@ -185,7 +185,7 @@ function getNextTranslationStep({
   outputSuffixError,
   profilesPending,
   profilesError,
-  hasSelectableProfile,
+  hasModelProfiles,
   hasSelectedProfile,
   t,
 }: TranslationStepState & { t: ReturnType<typeof useI18n>["t"] }): string {
@@ -204,7 +204,7 @@ function getNextTranslationStep({
   if (outputSuffixError) return outputSuffixError;
   if (profilesPending) return t("modelProfiles.loading");
   if (profilesError) return t("modelProfiles.loadFailed");
-  if (!hasSelectableProfile) return t("modelProfiles.noSelectableProfiles");
+  if (!hasModelProfiles) return t("modelProfiles.noProfiles");
   if (!hasSelectedProfile) return t("translate.nextChooseModelProfile");
   const count = batchMode ? batchMediaCount : 1;
   return t("translate.nextReady", {
@@ -296,12 +296,11 @@ function Translate() {
   const createBatchJobs = useCreateBatchJobs();
   const navigate = useNavigate();
   const profiles = useModelProfiles();
-  const selectableProfiles =
-    profiles.data?.filter((profile) => profile.selectable) ?? [];
-  const hasSelectableProfile = profiles.isSuccess && selectableProfiles.length > 0;
+  const modelProfiles = profiles.data ?? [];
+  const hasModelProfiles = profiles.isSuccess && modelProfiles.length > 0;
   const [modelProfileId, setModelProfileId] = useState("");
   const selectedProfile = profiles.data?.find(
-    (profile) => profile.id === modelProfileId && profile.selectable,
+    (profile) => profile.id === modelProfileId,
   );
   const [directory, setDirectory] = useState("");
   const [filter, setFilter] = useState("");
@@ -457,7 +456,7 @@ function Translate() {
         selectedCandidate.format !== undefined)) &&
     targetLanguage.trim() !== "" &&
     outputSuffixError === null &&
-    hasSelectableProfile &&
+    hasModelProfiles &&
     !!selectedProfile &&
     !createJob.isSuccess &&
     !createBatchJobs.isSuccess &&
@@ -475,7 +474,7 @@ function Translate() {
     outputSuffixError,
     profilesPending: profiles.isPending,
     profilesError: profiles.isError,
-    hasSelectableProfile,
+    hasModelProfiles,
     hasSelectedProfile: selectedProfile !== undefined,
     t,
   });
@@ -784,7 +783,7 @@ function Translate() {
             <Select
               id="model-profile-select"
               value={selectedProfile?.id ?? ""}
-              disabled={!hasSelectableProfile || profiles.isError}
+              disabled={!hasModelProfiles || profiles.isError}
               onChange={(event) => setModelProfileId(event.target.value)}
             >
               <option value="">
@@ -792,11 +791,11 @@ function Translate() {
                   ? t("modelProfiles.loading")
                   : profiles.isError
                     ? t("modelProfiles.loadFailed")
-                    : !hasSelectableProfile
-                      ? t("modelProfiles.noSelectableProfiles")
+                    : !hasModelProfiles
+                      ? t("modelProfiles.noProfiles")
                       : t("modelProfiles.choose")}
               </option>
-              {selectableProfiles.map((profile) => (
+              {modelProfiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
                   {profile.name}
                 </option>
@@ -821,9 +820,9 @@ function Translate() {
                 </Button>
               </div>
             )}
-            {profiles.isSuccess && !hasSelectableProfile && (
+            {profiles.isSuccess && !hasModelProfiles && (
               <p className="field-help" role="status">
-                {t("modelProfiles.noSelectableProfilesDetail")}
+                {t("modelProfiles.noProfilesDetail")}
               </p>
             )}
           </div>

@@ -36,7 +36,7 @@ docker run --rm \
 
 Open [http://localhost:8000](http://localhost:8000) in your browser.
 
-Open **Settings → Model Profiles**, create a selectable profile, and add literal settings such as `provider` = `DeepSeek`, `model` = `deepseek-chat`, and `api_key` = your key. Select that profile on **Translate** before creating a Job.
+Open **Settings → Model Profiles**, create a profile, and choose a provider. CueWeaver loads that provider's settings from PySubtrans. Enter the credentials and model settings you need, save the profile, then select it on **Translate** before creating a Job.
 
 The `media` directory is the library shown in CueWeaver. Replace it with an existing directory if your media is stored elsewhere. Keep the `cueweaver-work` volume: it contains job history and in-progress translation state.
 
@@ -70,17 +70,15 @@ preserve the entire Work volume before restoring or inspecting a backup.
 
 ## Model Profiles
 
-Create Model Profiles in **Settings → Model Profiles**. A selectable profile can be chosen for a new Job and must resolve to a `provider` from the local PySubtrans provider registry; `model` is optional. A non-selectable profile may be incomplete and used as a base for inheritance. CueWeaver starts without a selectable profile, but new translations require one.
+Create Model Profiles in **Settings → Model Profiles**. Each profile is a standalone configuration with a name, a provider from the installed PySubtrans registry, and settings for that provider. CueWeaver starts without a profile, and new translations require one.
 
-The editor uses the bundled PySubtrans source to suggest provider settings, types, descriptions, and static choices. Suggestions do not restrict custom setting keys.
+The editor calls the selected provider's PySubtrans runtime APIs to load the available fields, descriptions, types, and choices. Providers can refresh these options after fields such as an API key or model change, including through network-backed model discovery. CueWeaver does not offer custom setting keys or values outside a provider's choices.
 
-Use **Create derived** to inherit from one parent. Settings merge by top-level key: a local literal overrides the inherited value, including a nested JSON object as a whole. **Unset** removes a key from the effective profile without suppressing PySubtrans defaults or environment fallbacks. **Remove local** removes a local override or unset and restores inheritance.
-
-Literal values retain their types: string, integer, number, boolean, string list, or nested JSON. For example, a non-selectable profile can define `provider` = `OpenRouter` and `api_key` = your key, while a selectable child defines `model` = `deepseek/deepseek-v3.2` and `max_threads` = `2` (integer). CueWeaver owns `target_language`, `prompt`, subtitle processing, terminology, error behavior, and project checkpoint settings; these cannot be profile entries.
+Runtime defaults and environment fallbacks appear in the form without being copied into the profile. CueWeaver saves only values you explicitly change. Clear a value or choose **Use default** to remove that setting from the profile and return control to PySubtrans.
 
 Model Profile values, including API keys and tokens, are stored in SQLite as ordinary values and are readable through the UI and API. CueWeaver does not mask or encrypt them as secrets. Limit access to the deployment accordingly.
 
-For its Model Profile configuration, a Job stores only `model_profile_id`. CueWeaver resolves the current profile once at the start of each attempt and uses those settings throughout that attempt. Editing a profile or ancestor affects queued Jobs and future retries, including retries of an existing PySubtrans project, but not an active attempt. Making a profile non-selectable prevents new Jobs from selecting it without blocking existing Jobs or retries. Profiles referenced by a Job or child cannot be deleted.
+For its Model Profile configuration, a Job stores only `model_profile_id`. CueWeaver reads the current standalone profile once at the start of each attempt and uses those settings throughout that attempt. Editing a profile affects queued Jobs and future retries, including retries of an existing PySubtrans project, but not an active attempt. A profile referenced by a Job cannot be deleted.
 
 PySubtrans may still read its own environment defaults and fallbacks. Model Profiles are the recommended way to configure CueWeaver; mixing both approaches makes the effective configuration harder to understand.
 

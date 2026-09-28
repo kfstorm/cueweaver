@@ -1,35 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-export type ProfileSetting = { key: string; kind: "literal" | "unset"; value: unknown };
-export type EffectiveSetting = {
-  key: string;
-  value: unknown;
-  source: { id: string; name: string };
-};
+export type ProfileSetting = { key: string; value: unknown };
 export type ModelProfile = {
   id: string;
   name: string;
-  parent_id: string | null;
-  selectable: boolean;
+  provider: string;
   deletable: boolean;
   created_at: string;
   updated_at: string;
   settings: ProfileSetting[];
-  effective_settings: EffectiveSetting[];
 };
-export type ProfileInput = Pick<
-  ModelProfile,
-  "name" | "parent_id" | "selectable" | "settings"
->;
-export type SettingReference = {
+export type ProfileInput = Pick<ModelProfile, "name" | "provider" | "settings">;
+export type ModelProfileOption = {
   key: string;
-  type: string | null;
+  type: "string" | "multiline" | "integer" | "number" | "boolean" | "choice";
   description: string | null;
   choices: string[] | null;
+  value: unknown;
 };
 export type ModelProfileReference = {
   pysubtrans_version: string;
-  providers: Record<string, SettingReference[]>;
+  providers: string[];
+};
+export type ModelProfileOptions = {
+  provider: string;
+  options: ModelProfileOption[];
+  refresh_when_changed: string[];
 };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -54,6 +50,19 @@ export function useModelProfileReference() {
     queryKey: ["model-profile-reference"],
     staleTime: 60_000,
     queryFn: () => request<ModelProfileReference>("/api/model-profile-reference"),
+  });
+}
+
+export function requestModelProfileOptions(
+  provider: string,
+  settings: Record<string, unknown>,
+  signal: AbortSignal,
+) {
+  return request<ModelProfileOptions>("/api/model-profile-options", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider, settings }),
+    signal,
   });
 }
 
