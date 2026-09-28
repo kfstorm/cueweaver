@@ -33,30 +33,26 @@ const options = (provider = "OpenAI"): ModelProfileOptions => ({
       type: "string",
       description: "Model name",
       choices: null,
-      value: "default-model",
     },
-    { key: "retries", type: "integer", description: null, choices: null, value: 2 },
+    { key: "retries", type: "integer", description: null, choices: null },
     {
       key: "temperature",
       type: "number",
       description: null,
       choices: null,
-      value: 0.7,
     },
-    { key: "stream", type: "boolean", description: null, choices: null, value: true },
+    { key: "stream", type: "boolean", description: null, choices: null },
     {
       key: "effort",
       type: "choice",
       description: null,
       choices: ["low", "high"],
-      value: "low",
     },
     {
       key: "prompt_template",
       type: "multiline",
       description: null,
       choices: null,
-      value: "{prompt}\n{context}",
     },
   ],
   refresh_when_changed: ["model", "stream", "effort"],
@@ -190,7 +186,7 @@ describe("standalone Model Profile editor", () => {
     expect(await screen.findByLabelText("model")).toHaveAttribute("type", "text");
     expect(screen.getByLabelText("retries")).toHaveAttribute("type", "number");
     expect(screen.getByLabelText("temperature")).toHaveAttribute("step", "any");
-    expect(screen.getByLabelText("stream")).toHaveAttribute("type", "checkbox");
+    expect(screen.getByLabelText("stream").tagName).toBe("SELECT");
     expect(screen.getByLabelText("effort").tagName).toBe("SELECT");
     expect(screen.getByLabelText("prompt_template").tagName).toBe("TEXTAREA");
     expect(screen.getByRole("link", { name: "Provider guide" })).toHaveAttribute(
@@ -208,7 +204,12 @@ describe("standalone Model Profile editor", () => {
       target: { value: "New profile" },
     });
     await selectProvider();
-    expect(screen.getByLabelText("model")).toHaveValue("default-model");
+    expect(screen.getByLabelText("model")).toHaveValue("");
+    expect(screen.getByLabelText("retries")).toHaveValue(null);
+    expect(screen.getByLabelText("temperature")).toHaveValue(null);
+    expect(screen.getByLabelText("prompt_template")).toHaveValue("");
+    expect(screen.getByLabelText("effort")).toHaveValue("");
+    expect(screen.getByLabelText("stream")).toHaveValue("");
     expect(
       screen.queryByRole("button", { name: "Use default" }),
     ).not.toBeInTheDocument();
@@ -218,11 +219,12 @@ describe("standalone Model Profile editor", () => {
     });
     expect(screen.getByRole("button", { name: "Use default" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("model"), { target: { value: "" } });
-    fireEvent.click(screen.getByLabelText("stream"));
-    const streamRow = screen.getByLabelText("stream").closest(".profile-option");
-    fireEvent.click(
-      within(streamRow as HTMLElement).getByRole("button", { name: "Use default" }),
-    );
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "true" },
+    });
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "" },
+    });
     fireEvent.change(screen.getByLabelText("temperature"), {
       target: { value: "0.25" },
     });
@@ -237,6 +239,55 @@ describe("standalone Model Profile editor", () => {
       settings: [{ key: "temperature", value: 0.25 }],
     });
   });
+
+  it("keeps an explicit choice that is absent from runtime choices", async () => {
+    const profile: ModelProfile = {
+      ...existing,
+      settings: [{ key: "effort", value: "retired-choice" }],
+    };
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [profile],
+    });
+
+    expect(await screen.findByLabelText("effort")).toHaveValue("retired-choice");
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "effort", value: "retired-choice" }]);
+  });
+
+  it("loads and saves existing explicit settings without option value echoes", async () => {
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [existing],
+    });
+
+    expect(await screen.findByLabelText("temperature")).toHaveValue(0.4);
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "temperature", value: 0.4 }]);
+  });
+
+  it.each([
+    ["true", true],
+    ["false", false],
+  ])(
+    "persists an explicit boolean %s separately from runtime default",
+    async (selection, expected) => {
+      const { saves } = renderEditor();
+      fireEvent.change(await screen.findByLabelText("Name"), {
+        target: { value: "Boolean profile" },
+      });
+      await selectProvider();
+      fireEvent.change(screen.getByLabelText("stream"), {
+        target: { value: selection },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+
+      await waitFor(() => expect(saves).toHaveLength(1));
+      expect(saves[0].settings).toEqual([{ key: "stream", value: expected }]);
+    },
+  );
 
   it("refreshes text on blur or Enter and boolean or choice immediately", async () => {
     const { optionRequests } = renderEditor();
@@ -264,7 +315,9 @@ describe("standalone Model Profile editor", () => {
       settings: { model: "entered-model" },
     });
 
-    fireEvent.click(screen.getByLabelText("stream"));
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "false" },
+    });
     await waitFor(() => expect(optionRequests).toHaveLength(4));
     expect(optionRequests[3]).toMatchObject({
       settings: { model: "entered-model", stream: false },
@@ -291,7 +344,6 @@ describe("standalone Model Profile editor", () => {
               type: "string",
               description: null,
               choices: null,
-              value: "deepseek-chat",
             },
           ],
           refresh_when_changed: [],
@@ -309,7 +361,7 @@ describe("standalone Model Profile editor", () => {
     await waitFor(() =>
       expect(screen.queryByLabelText("model")).not.toBeInTheDocument(),
     );
-    expect(screen.getByLabelText("deepseek_model")).toHaveValue("deepseek-chat");
+    expect(screen.getByLabelText("deepseek_model")).toHaveValue("");
   });
 
   it("confirms provider changes and clears explicit settings only when accepted", async () => {
@@ -390,7 +442,9 @@ describe("standalone Model Profile editor", () => {
       },
     });
     await screen.findByLabelText("temperature");
-    fireEvent.click(screen.getByLabelText("stream"));
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "false" },
+    });
     await waitFor(() =>
       expect(screen.queryByLabelText("temperature")).not.toBeInTheDocument(),
     );
@@ -409,7 +463,6 @@ describe("standalone Model Profile editor", () => {
               ...options().options[0],
               type: "choice",
               choices: ["model-a", "model-b"],
-              value: "model-a",
             },
             ...options().options.slice(1),
             {
@@ -417,7 +470,6 @@ describe("standalone Model Profile editor", () => {
               type: "string",
               description: null,
               choices: null,
-              value: "visible after selection",
             },
           ],
           setting_updates: { model: "model-a" },
@@ -428,9 +480,7 @@ describe("standalone Model Profile editor", () => {
     });
     await selectProvider();
     await waitFor(() => expect(screen.getByLabelText("model")).toHaveValue("model-a"));
-    expect(screen.getByLabelText("model_a_detail")).toHaveValue(
-      "visible after selection",
-    );
+    expect(screen.getByLabelText("model_a_detail")).toHaveValue("");
     expect(optionRequests).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
     await waitFor(() => expect(saves).toHaveLength(1));
@@ -517,7 +567,6 @@ describe("standalone Model Profile editor", () => {
       type: "string",
       description: null,
       choices: null,
-      value: "visible for model B",
     });
     pending.resolve(response(modelBOptions));
 

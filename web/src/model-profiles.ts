@@ -16,7 +16,6 @@ export type ModelProfileOption = {
   type: "string" | "multiline" | "integer" | "number" | "boolean" | "choice";
   description: string | null;
   choices: string[] | null;
-  value: unknown;
 };
 export type ModelProfileReference = {
   pysubtrans_version: string;

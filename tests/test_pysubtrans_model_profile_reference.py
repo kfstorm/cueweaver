@@ -53,7 +53,7 @@ def test_options_endpoint_invokes_real_combination_and_dynamic_discovery(
             calls.append(("init", dict(settings)))
             self.settings = SettingsType(
                 {
-                    "api_key": settings.get("api_key"),
+                    "api_key": settings.get("api_key", "server-secret"),
                     "mode": settings.get("mode", "simple"),
                     "count": settings.get("count", 2),
                     "ratio": settings.get("ratio", 0.5),
@@ -77,6 +77,7 @@ def test_options_endpoint_invokes_real_combination_and_dynamic_discovery(
             calls.append(("options", dict(settings)))
             modes = ["simple", "advanced"] if settings["api_key"] else ["simple"]
             return {
+                "api_key": (str, "API key"),
                 "mode": (modes, "Mode"),
                 "count": (int, "Count"),
                 "ratio": (float, "Ratio"),
@@ -96,20 +97,21 @@ def test_options_endpoint_invokes_real_combination_and_dynamic_discovery(
                 "/api/model-profile-options",
                 json={
                     "provider": "Synthetic",
-                    "settings": {"api_key": "synthetic-secret", "mode": "advanced"},
+                    "settings": {"mode": "advanced"},
                 },
             )
     finally:
         application.close()
 
     assert response.status_code == 200
+    assert "server-secret" not in response.text
     assert calls == [
-        ("init", {"api_key": "synthetic-secret", "mode": "advanced"}),
-        ("combined", {"api_key": "synthetic-secret", "mode": "advanced"}),
+        ("init", {"mode": "advanced"}),
+        ("combined", {"mode": "advanced"}),
         (
             "options",
             {
-                "api_key": "synthetic-secret",
+                "api_key": "server-secret",
                 "mode": "advanced",
                 "count": 2,
                 "ratio": 0.5,
@@ -122,39 +124,40 @@ def test_options_endpoint_invokes_real_combination_and_dynamic_discovery(
         "provider": "Synthetic",
         "options": [
             {
+                "key": "api_key",
+                "type": "string",
+                "description": "API key",
+                "choices": None,
+            },
+            {
                 "key": "mode",
                 "type": "choice",
                 "description": "Mode",
                 "choices": ["simple", "advanced"],
-                "value": "advanced",
             },
             {
                 "key": "count",
                 "type": "integer",
                 "description": "Count",
                 "choices": None,
-                "value": 2,
             },
             {
                 "key": "ratio",
                 "type": "number",
                 "description": "Ratio",
                 "choices": None,
-                "value": 0.5,
             },
             {
                 "key": "enabled",
                 "type": "boolean",
                 "description": "Enabled",
                 "choices": None,
-                "value": False,
             },
             {
                 "key": "notes",
                 "type": "multiline",
                 "description": "Notes",
                 "choices": None,
-                "value": None,
             },
         ],
         "refresh_when_changed": ["api_key", "mode"],
@@ -209,13 +212,11 @@ def test_options_reconciles_missing_or_invalid_models_without_materializing_defa
                 assert result.status_code == 200
                 body = result.json()
                 assert body["setting_updates"] == expected_updates
-                assert body["options"][0]["value"] == (
-                    expected_updates.get("model") or settings["model"]
-                )
-                assert body["options"][1]["value"] == 2
+                assert all("value" not in option for option in body["options"])
+                reconciled_model = expected_updates.get("model", settings.get("model"))
                 assert (
                     "model_a_detail" in {option["key"] for option in body["options"]}
-                ) == (body["options"][0]["value"] == "model-a")
+                ) == (reconciled_model == "model-a")
     finally:
         application.close()
 

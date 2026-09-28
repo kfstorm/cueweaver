@@ -386,7 +386,7 @@ function OptionField({
   onRefresh: (value?: unknown) => void;
 }) {
   const { t } = useI18n();
-  const displayed = isExplicit ? explicitValue : option.value;
+  const displayed = isExplicit ? explicitValue : undefined;
   const clearEmpty = (value: string) => {
     if (value === "") onClear();
     else
@@ -410,30 +410,42 @@ function OptionField({
       <label htmlFor={`profile-option-${option.key}`}>{option.key}</label>
       {option.description && <p className="field-help">{option.description}</p>}
       <div className="profile-option-control">
-        {option.type === "boolean" ? (
-          <input
-            id={`profile-option-${option.key}`}
-            type="checkbox"
-            checked={Boolean(displayed)}
-            onChange={(event) => {
-              onChange(event.target.checked);
-              onRefresh(event.target.checked);
-            }}
-          />
-        ) : option.type === "choice" ? (
+        {option.type === "boolean" || option.type === "choice" ? (
           <Select
             id={`profile-option-${option.key}`}
-            value={String(displayed ?? "")}
+            value={isExplicit ? String(explicitValue) : ""}
             onChange={(event) => {
-              onChange(event.target.value);
-              onRefresh(event.target.value);
+              const selected = event.target.value;
+              if (selected === "") {
+                onClear();
+                onRefresh();
+                return;
+              }
+              const value = option.type === "boolean" ? selected === "true" : selected;
+              onChange(value);
+              onRefresh(value);
             }}
           >
-            {(option.choices ?? []).map((choice) => (
-              <option value={choice} key={choice}>
-                {choice}
-              </option>
-            ))}
+            <option value="">{t("modelProfiles.useDefault")}</option>
+            {option.type === "boolean" ? (
+              <>
+                <option value="true">{t("jobs.enabled")}</option>
+                <option value="false">{t("jobs.disabled")}</option>
+              </>
+            ) : (
+              <>
+                {isExplicit &&
+                  typeof explicitValue === "string" &&
+                  !(option.choices ?? []).includes(explicitValue) && (
+                    <option value={explicitValue}>{explicitValue}</option>
+                  )}
+                {(option.choices ?? []).map((choice) => (
+                  <option value={choice} key={choice}>
+                    {choice}
+                  </option>
+                ))}
+              </>
+            )}
           </Select>
         ) : option.type === "multiline" ? (
           <Textarea
@@ -459,7 +471,7 @@ function OptionField({
             onKeyDown={refreshOnEnter}
           />
         )}
-        {isExplicit && (
+        {isExplicit && option.type !== "boolean" && option.type !== "choice" && (
           <Button type="button" variant="outline" onClick={onClear}>
             {t("modelProfiles.useDefault")}
           </Button>

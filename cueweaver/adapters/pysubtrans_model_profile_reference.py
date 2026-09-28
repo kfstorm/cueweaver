@@ -82,8 +82,7 @@ def _discover_model_profile_options(
             setting_updates["model"] = model
             runtime_options = runtime_provider.GetOptions(combined)
         options = [
-            _convert_option(key, option, combined)
-            for key, option in runtime_options.items()
+            _convert_option(key, option) for key, option in runtime_options.items()
         ]
         refresh_when_changed = list(runtime_provider.refresh_when_changed)
     except ServiceError:
@@ -137,9 +136,7 @@ def _valid_option_value(option: dict[str, object], value: object) -> bool:
     return False
 
 
-def _convert_option(
-    key: object, option: object, combined: SettingsType
-) -> dict[str, object]:
+def _convert_option(key: object, option: object) -> dict[str, object]:
     if (
         not isinstance(key, str)
         or not isinstance(option, tuple)
@@ -177,5 +174,4 @@ def _convert_option(
         "type": option_type,
         "description": description,
         "choices": choices,
-        "value": combined.get(key),
     }
