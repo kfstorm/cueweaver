@@ -8,6 +8,8 @@ import type { ModelProfile } from "../src/model-profiles";
 import { ThemeProvider } from "../src/theme-provider";
 import { I18nProvider } from "../src/i18n";
 
+const reference = { pysubtrans_version: "synthetic", providers: { OpenAI: [] } };
+
 const parent: ModelProfile = {
   id: "profile-parent",
   name: "Shared",
@@ -55,6 +57,8 @@ function renderProfiles(initialEntry = "/settings/model-profiles") {
 
 it("creates a derived Model Profile without copying inherited settings", async () => {
   const fetchMock = vi.fn(async (input: string, options?: RequestInit) => {
+    if (input === "/api/model-profile-reference")
+      return { ok: true, json: async () => reference };
     if (input === "/api/model-profiles" && options?.method === "POST") {
       return {
         ok: true,
@@ -75,6 +79,9 @@ it("creates a derived Model Profile without copying inherited settings", async (
     target: { value: "Derived" },
   });
   fireEvent.click(screen.getByRole("checkbox", { name: /Base profile/ }));
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Provider" })).toBeEnabled(),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
@@ -106,9 +113,11 @@ async function openEditableProfile() {
   const fetchMock = vi.fn(async (input: string, options?: RequestInit) => ({
     ok: true,
     json: async () =>
-      input === `/api/model-profiles/${editable.id}` && options?.method === "PUT"
-        ? editable
-        : { model_profiles: [editable] },
+      input === "/api/model-profile-reference"
+        ? reference
+        : input === `/api/model-profiles/${editable.id}` && options?.method === "PUT"
+          ? editable
+          : { model_profiles: [editable] },
   }));
   vi.stubGlobal("fetch", fetchMock);
   renderProfiles(`/settings/model-profiles/${editable.id}`);

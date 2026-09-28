@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from PySubtrans.SettingsType import SettingsType
 from PySubtrans.TranslationProvider import TranslationProvider
 
+from cueweaver.adapters import pysubtrans_model_profile_reference as reference_module
 from cueweaver.adapters.pysubtrans_model_profile_reference import (
     parse_provider_source,
     pysubtrans_model_profile_reference,
@@ -121,7 +122,6 @@ def test_dynamic_option_mapping_invalidates_static_metadata():
 
 
 def test_installed_provider_contract_is_complete_without_runtime_discovery(monkeypatch):
-    pysubtrans_model_profile_reference.cache_clear()
     providers = TranslationProvider.get_providers()
     network_attempts: list[str] = []
 
@@ -166,6 +166,22 @@ def test_installed_provider_contract_is_complete_without_runtime_discovery(monke
     assert reference.providers["DeepSeek"].settings["model"].choices is None
     assert reference.providers["OpenRouter"].settings["model_family"].choices is None
     assert reference.providers["OpenRouter"].settings["proxy"].description is None
+
+
+def test_reference_never_offers_unregistered_source_providers(monkeypatch):
+    monkeypatch.setattr(
+        reference_module, "_registered_provider_names", lambda: ["OpenAI"]
+    )
+    assert set(pysubtrans_model_profile_reference().providers) == {"OpenAI"}
+
+
+def test_reference_recovers_when_registry_becomes_available(monkeypatch):
+    names: list[str] = []
+    monkeypatch.setattr(reference_module, "_registered_provider_names", lambda: names)
+    assert pysubtrans_model_profile_reference().providers == {}
+
+    names.append("OpenAI")
+    assert set(pysubtrans_model_profile_reference().providers) == {"OpenAI"}
 
 
 def test_model_profile_reference_endpoint_returns_only_static_metadata(tmp_path):

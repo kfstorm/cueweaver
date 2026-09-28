@@ -42,9 +42,59 @@
   align-items: end;
   gap: var(--space-3);
 }
-.profile-add > label {
+.profile-provider {
+  display: grid;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-3);
+}
+.profile-provider-select {
+  display: grid;
+}
+.profile-provider .field-help {
+  margin: 0;
+}
+.profile-reference-error {
+  color: var(--error);
+}
+.profile-setting-search {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
   flex: 1 1 240px;
   min-width: 0;
+}
+.profile-setting-search > label {
+  font-size: var(--font-label);
+  line-height: 1.5;
+}
+.profile-setting-options {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% - var(--space-4));
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+.profile-setting-options li {
+  padding: var(--space-2);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.profile-setting-options li[aria-selected="true"],
+.profile-setting-options li:hover {
+  background: var(--surface-selected);
+}
+.profile-option-description {
+  display: block;
 }
 .profile-setting > div:first-child {
   flex: 1 1 180px;

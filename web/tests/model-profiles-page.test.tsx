@@ -195,21 +195,21 @@ function jsonResponse(body: unknown, ok = true) {
 }
 
 async function addSetting(key: string) {
-  const keyInput = await screen.findByLabelText(/New setting key/);
+  const keyInput = await screen.findByRole("combobox", { name: "Search settings" });
   fireEvent.change(keyInput, { target: { value: key } });
+  fireEvent.click(await screen.findByRole("option", { name: new RegExp(key) }));
   fireEvent.click(screen.getByRole("button", { name: "Add setting" }));
   return keyInput;
 }
 
 async function addProvider(name: string) {
-  await addSetting("provider");
   fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
     target: { value: name },
   });
 }
 
 async function settingRow(key: string): Promise<HTMLElement> {
-  await screen.findByLabelText(/New setting key/);
+  await screen.findByRole("combobox", { name: "Search settings" });
   const row = [...document.querySelectorAll<HTMLElement>(".profile-setting")].find(
     (item) => item.textContent?.includes(key),
   );
@@ -235,18 +235,14 @@ afterEach(() => {
 });
 
 describe("Model Profile setting references", () => {
-  it("adds provider, reference and custom settings, then saves the existing schema", async () => {
+  it("selects a provider directly and adds a known setting with the existing schema", async () => {
     const { saves } = renderEditor("/model-profiles/new");
-    const keyInput = await screen.findByLabelText(/New setting key/);
-    const suggestions = document.getElementById("model-profile-setting-reference");
-    expect(suggestions?.querySelector('option[value="provider"]')).toBeInTheDocument();
+    const keyInput = await screen.findByRole("combobox", { name: "Search settings" });
+    expect(keyInput).toBeDisabled();
 
     await addProvider("OpenAI");
-    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("provider"),
-    )!;
-    expect(within(providerRow).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(providerRow).getByLabelText("Value type")).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Provider" })).toHaveValue("OpenAI");
+    expect(document.querySelectorAll(".profile-setting")).toHaveLength(0);
     expect(keyInput).toHaveValue("");
 
     await addSetting("api_key");
@@ -265,15 +261,6 @@ describe("Model Profile setting references", () => {
       target: { value: "synthetic-key" },
     });
 
-    await addSetting("custom_flag");
-    const customRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("custom_flag"),
-    );
-    expect(customRow).toBeTruthy();
-    fireEvent.change(within(customRow as HTMLElement).getByLabelText("Value type"), {
-      target: { value: "boolean" },
-    });
-
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Synthetic profile" },
     });
@@ -285,7 +272,6 @@ describe("Model Profile setting references", () => {
       settings: expect.arrayContaining([
         { key: "provider", kind: "literal", value: "OpenAI" },
         { key: "api_key", kind: "literal", value: "synthetic-key" },
-        { key: "custom_flag", kind: "literal", value: false },
       ]),
     });
   });
@@ -300,32 +286,32 @@ describe("Model Profile setting references", () => {
     );
     renderEditor("/model-profiles/child", [base, child]);
 
-    const keyInput = await screen.findByLabelText(/New setting key/);
-    const datalist = document.getElementById("model-profile-setting-reference")!;
-    await waitFor(() => {
-      expect(
-        [...datalist.querySelectorAll("option")].map((option) => option.value),
-      ).toContain("reasoning_effort");
-    });
+    const keyInput = await screen.findByRole("combobox", { name: "Search settings" });
     expect(
-      [...datalist.querySelectorAll("option")].map((option) => option.value),
-    ).not.toContain("model");
+      within(document.querySelector(".profile-provider") as HTMLElement).getByText(
+        "Inherited from base",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.focus(keyInput);
+    expect(
+      await screen.findByRole("option", { name: /reasoning_effort/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /model ·/ })).not.toBeInTheDocument();
 
-    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("provider"),
-    )!;
-    fireEvent.click(within(providerRow).getByRole("button", { name: "Override" }));
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
+    fireEvent.click(
+      within(document.querySelector(".profile-provider") as HTMLElement).getByRole(
+        "button",
+        { name: "Override" },
+      ),
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
       target: { value: "DeepSeek" },
     });
-    await waitFor(() => {
-      expect(
-        [...datalist.querySelectorAll("option")].map((option) => option.value),
-      ).toContain("temperature");
-    });
+    fireEvent.focus(keyInput);
+    expect(screen.getByRole("option", { name: /deepseek_limit/ })).toBeInTheDocument();
     expect(
-      [...datalist.querySelectorAll("option")].map((option) => option.value),
-    ).not.toContain("reasoning_effort");
+      screen.queryByRole("option", { name: /reasoning_effort/ }),
+    ).not.toBeInTheDocument();
     expect(keyInput).toHaveValue("");
   });
 
@@ -391,13 +377,22 @@ describe("Model Profile setting references", () => {
   });
 
   it("updates reference hints without changing an existing setting", async () => {
-    renderEditor("/model-profiles/new");
-    await addProvider("OpenAI");
-    await addSetting("deepseek_limit");
+    const source = { id: "existing", name: "existing" };
+    renderEditor("/model-profiles/existing", [
+      profile(
+        "existing",
+        null,
+        [
+          { key: "provider", kind: "literal", value: "OpenAI" },
+          { key: "deepseek_limit", kind: "literal", value: "manual value" },
+        ],
+        [
+          { key: "provider", value: "OpenAI", source },
+          { key: "deepseek_limit", value: "manual value", source },
+        ],
+      ),
+    ]);
     const row = await settingRow("deepseek_limit");
-    fireEvent.change(within(row).getByLabelText("Value"), {
-      target: { value: "manual value" },
-    });
 
     fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
       target: { value: "DeepSeek" },
@@ -412,9 +407,21 @@ describe("Model Profile setting references", () => {
   });
 
   it("keeps custom editor input and parse state when the provider changes", async () => {
-    renderEditor("/model-profiles/new");
-    await addProvider("OpenAI");
-    await addSetting("foo");
+    const source = { id: "existing", name: "existing" };
+    renderEditor("/model-profiles/existing", [
+      profile(
+        "existing",
+        null,
+        [
+          { key: "provider", kind: "literal", value: "OpenAI" },
+          { key: "foo", kind: "literal", value: "seed" },
+        ],
+        [
+          { key: "provider", value: "OpenAI", source },
+          { key: "foo", value: "seed", source },
+        ],
+      ),
+    ]);
     const row = await settingRow("foo");
     fireEvent.change(within(row).getByLabelText("Value type"), {
       target: { value: "number" },
@@ -436,36 +443,30 @@ describe("Model Profile setting references", () => {
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
 
-  it("preserves a legacy non-string provider until the user changes its type", async () => {
+  it("preserves a legacy non-string provider without exposing type editing", async () => {
     const current = existingIntegerProviderProfile();
     const { saves } = renderEditor("/model-profiles/base", [current]);
-    const row = await settingRow("provider");
-    expect(row).toHaveTextContent("· integer");
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "string" }),
-    );
-    expect(within(row).getByLabelText("Value type")).toHaveValue("integer");
-    expect(within(row).getByLabelText("Value type")).toBeEnabled();
-    expect(within(row).getByLabelText("Value")).toHaveValue("123");
+    const provider = await screen.findByRole("combobox", { name: "Provider" });
+    expect(await screen.findByText(/Existing provider: 123/)).toBeInTheDocument();
+    expect(provider).toHaveValue("");
+    expect(screen.queryByLabelText("Value type")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
     await expectSavedLiteralSetting(saves, "provider", 123);
   });
 
-  it("offers a provider dropdown when adding a provider setting", async () => {
+  it("offers a registry-only provider dropdown directly in the form", async () => {
     const { saves } = renderEditor("/model-profiles/new");
     fireEvent.change(await screen.findByLabelText("Name"), {
       target: { value: "Synthetic profile" },
     });
-    await addSetting("provider");
-
-    const row = await settingRow("provider");
-    const provider = within(row).getByRole("combobox", { name: "Provider" });
+    const provider = await screen.findByRole("combobox", { name: "Provider" });
     const save = screen.getByRole("button", { name: "Save Model Profile" });
     expect(provider).toHaveValue("");
     expect(
       [...provider.querySelectorAll("option")].map((option) => option.value),
     ).toEqual(["", "DeepSeek", "OpenAI"]);
     expect(provider.querySelector('option[value=""]')).toBeDisabled();
+    fireEvent.click(screen.getByLabelText(/Base profile/));
     expect(save).toBeDisabled();
 
     fireEvent.change(provider, { target: { value: "OpenAI" } });
@@ -498,7 +499,7 @@ describe("Model Profile setting references", () => {
     const { saves } = renderEditor("/model-profiles/child", [base, child]);
 
     let row = await settingRow("temperature");
-    expect(row).toHaveTextContent("· string");
+    expect(row).toHaveTextContent("Value type: string");
     expect(row).toHaveTextContent(
       translate("modelProfiles.pysubtransType", { type: "number" }),
     );
@@ -513,44 +514,34 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "temperature", "0.5");
   });
 
-  it("keeps the generic type for a key added before reference metadata arrives", async () => {
+  it("disables provider and setting selection while the reference loads", async () => {
     let resolveReference!: (value: ModelProfileReference) => void;
     const referenceResponse = new Promise<ModelProfileReference>((resolve) => {
       resolveReference = resolve;
     });
     renderEditor("/model-profiles/new", [], referenceResponse);
 
-    await addSetting("provider");
-    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("provider"),
-    )!;
-    fireEvent.change(within(providerRow).getByLabelText("Value"), {
-      target: { value: "OpenAI" },
-    });
-    await addSetting("temperature");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+    const provider = await screen.findByRole("combobox", { name: "Provider" });
+    expect(provider).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Search settings" })).toBeDisabled();
+    expect(screen.getByRole("status", { name: "" })).toBeInTheDocument();
 
     resolveReference(REFERENCE);
-
-    const temperatureRow = await screen.findByText("Synthetic temperature description");
-    const row = temperatureRow.closest(".profile-setting")!;
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(row).getByLabelText("Value")).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
-    );
+    await waitFor(() => expect(provider).toBeEnabled());
+    expect(screen.getByRole("combobox", { name: "Search settings" })).toBeDisabled();
   });
 
   it("allows an untouched legacy provider string outside the current registry", async () => {
     const current = existingCustomStringProviderProfile();
     const { saves } = renderEditor("/model-profiles/base", [current]);
-    const row = await settingRow("provider");
-
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(row).getByRole("combobox", { name: "Provider" })).toHaveValue(
-      "OldCustomProvider",
-    );
+    const provider = await screen.findByRole("combobox", { name: "Provider" });
+    expect(
+      await screen.findByText(/Existing provider: OldCustomProvider/),
+    ).toBeInTheDocument();
+    expect(provider).toHaveValue("");
+    expect(
+      [...provider.querySelectorAll("option")].map((item) => item.value),
+    ).not.toContain("OldCustomProvider");
     expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
@@ -621,39 +612,142 @@ describe("Model Profile setting references", () => {
     });
   });
 
-  it("uses generic provider editing when provider reference data is unavailable", async () => {
-    const { saves } = renderEditor(
+  it("reports reference failures and retries without offering free-text input", async () => {
+    const { fetchMock } = renderEditor(
       "/model-profiles/new",
       [],
       Promise.reject(new Error("unavailable")),
     );
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
-    });
-    await addSetting("provider");
+    expect(await screen.findByRole("alert")).toHaveTextContent("unavailable");
+    expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Search settings" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) => url === "/api/model-profile-reference"),
+      ).toHaveLength(2),
+    );
+  });
 
-    const row = await settingRow("provider");
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    const provider = within(row).getByLabelText("Value");
-    expect(provider.tagName).toBe("INPUT");
-    fireEvent.change(provider, { target: { value: "UnlistedProvider" } });
-    await addSetting("custom_option");
-    const customRow = await settingRow("custom_option");
-    fireEvent.change(within(customRow).getByLabelText("Value type"), {
-      target: { value: "number" },
-    });
-    fireEvent.change(within(customRow).getByLabelText("Value"), {
-      target: { value: "2.5" },
-    });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+  it("reports an empty provider registry instead of allowing provider entry", async () => {
+    renderEditor(
+      "/model-profiles/new",
+      [],
+      Promise.resolve({ ...REFERENCE, providers: {} }),
+    );
+    expect(
+      await screen.findByText(/No registered providers were found/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
 
+  it("requires a selected known candidate and searches descriptions", async () => {
+    renderEditor("/model-profiles/new");
+    const search = await screen.findByRole("combobox", { name: "Search settings" });
+    expect(search).toBeDisabled();
+    expect(
+      screen.getByText("Choose or override a provider to add settings."),
+    ).toBeInTheDocument();
+    await addProvider("OpenAI");
+    fireEvent.change(search, { target: { value: "reasoning description" } });
+    const option = screen.getByRole("option", { name: /reasoning_effort/ });
+    expect(option).toHaveTextContent("Synthetic reasoning description");
+    expect(screen.getByRole("button", { name: "Add setting" })).toBeDisabled();
+    fireEvent.click(option);
+    expect(screen.getByRole("button", { name: "Add setting" })).toBeEnabled();
+    fireEvent.change(search, { target: { value: "unknown_key" } });
+    expect(screen.getByText("No matching settings")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add setting" })).toBeDisabled();
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(document.querySelectorAll(".profile-setting")).toHaveLength(0);
+  });
+
+  it("supports keyboard selection in the setting combobox", async () => {
+    renderEditor("/model-profiles/new");
+    await addProvider("OpenAI");
+    const search = screen.getByRole("combobox", { name: "Search settings" });
+    fireEvent.change(search, { target: { value: "temperature" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(search).toHaveValue("temperature");
+    expect(screen.getByRole("button", { name: "Add setting" })).toBeEnabled();
+    fireEvent.keyDown(search, { key: "Enter" });
+    const row = await settingRow("temperature");
+    expect(row).toHaveTextContent("Synthetic temperature description");
+  });
+
+  it("preserves unknown local settings across provider changes and edits", async () => {
+    const source = { id: "existing", name: "existing" };
+    const current = profile(
+      "existing",
+      null,
+      [
+        { key: "provider", kind: "literal", value: "OpenAI" },
+        { key: "custom_option", kind: "literal", value: "old" },
+      ],
+      [
+        { key: "provider", value: "OpenAI", source },
+        { key: "custom_option", value: "old", source },
+      ],
+    );
+    const { saves } = renderEditor("/model-profiles/existing", [current]);
+    const row = await settingRow("custom_option");
+    fireEvent.change(within(row).getByLabelText("Value"), {
+      target: { value: "updated" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+      target: { value: "DeepSeek" },
+    });
+    expect(within(row).getByLabelText("Value")).toHaveValue("updated");
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "provider", "UnlistedProvider");
+    await expectSavedLiteralSetting(saves, "custom_option", "updated");
     expect(saves[0].body.settings).toContainEqual({
-      key: "custom_option",
+      key: "provider",
       kind: "literal",
-      value: 2.5,
+      value: "DeepSeek",
     });
+  });
+
+  it("links to upstream provider configuration accessibly", async () => {
+    renderEditor("/model-profiles/new");
+    const link = await screen.findByRole("link", {
+      name: /Provider configuration guide.*opens in a new window/,
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "https://github.com/machinewrapped/llm-subtrans#translation-providers",
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("shows a selectable provider problem before Save and honors inherited unset/remove", async () => {
+    const base = profile(
+      "base",
+      null,
+      [{ key: "provider", kind: "literal", value: "OpenAI" }],
+      [inheritedOpenAiProvider],
+    );
+    const child = {
+      ...profile("child", "base", [], [inheritedOpenAiProvider]),
+      selectable: true,
+    };
+    const { saves } = renderEditor("/model-profiles/child", [base, child]);
+    await screen.findByRole("combobox", { name: "Provider" });
+    const providerArea = document.querySelector(".profile-provider") as HTMLElement;
+    fireEvent.click(within(providerArea).getByRole("button", { name: "Unset" }));
+    expect(within(providerArea).getByRole("alert")).toHaveTextContent(
+      "needs an available provider",
+    );
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+    fireEvent.click(within(providerArea).getByRole("button", { name: "Remove local" }));
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+    fireEvent.click(within(providerArea).getByRole("button", { name: "Override" }));
+    fireEvent.change(within(providerArea).getByRole("combobox", { name: "Provider" }), {
+      target: { value: "DeepSeek" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "provider", "DeepSeek");
   });
 
   it("keeps inherited override, unset and remove-local controls available", async () => {

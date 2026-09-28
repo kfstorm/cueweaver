@@ -106,9 +106,16 @@ def parse_provider_source(source: str) -> ProviderReference | None:
     return None
 
 
-@lru_cache(maxsize=1)
 def pysubtrans_model_profile_reference() -> PySubtransModelProfileReference:
-    """Read the installed source once and return metadata for local providers."""
+    """Return metadata for the currently registered local providers."""
+    return _cached_reference(tuple(_registered_provider_names()))
+
+
+@lru_cache(maxsize=1)
+def _cached_reference(
+    registered_names: tuple[str, ...],
+) -> PySubtransModelProfileReference:
+    """Extract the installed source once per registry snapshot."""
     version = "unknown"
     extracted: dict[str, ProviderReference] = {}
     try:
@@ -156,10 +163,8 @@ def pysubtrans_model_profile_reference() -> PySubtransModelProfileReference:
             type(error).__name__,
         )
 
-    registered_names = _registered_provider_names()
-    provider_names = registered_names or sorted(extracted)
     providers: dict[str, ProviderReference] = {}
-    for name in provider_names:
+    for name in registered_names:
         reference = extracted.get(name)
         if reference is None:
             logger.warning(

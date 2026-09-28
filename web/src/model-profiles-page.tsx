@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useId, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { PageHeader } from "./components/page-header";
@@ -63,12 +63,8 @@ const initialValueForType = (type: string | null | undefined): unknown =>
           : type === "object" || type === "JSON"
             ? {}
             : "";
-const PROVIDER_REFERENCE: SettingReference = {
-  key: "provider",
-  type: "string",
-  description: null,
-  choices: null,
-};
+const PROVIDER_DOCS =
+  "https://github.com/machinewrapped/llm-subtrans#translation-providers";
 
 export function ModelProfilesPage() {
   const { t } = useI18n();
@@ -181,6 +177,9 @@ export function ModelProfileEditor() {
       }
       profiles={profiles.data ?? []}
       reference={reference.data}
+      referencePending={reference.isFetching}
+      referenceError={reference.isError ? reference.error.message : undefined}
+      retryReference={() => void reference.refetch()}
       onSave={(input) =>
         save.mutate(
           { id: current?.id, input },
@@ -198,6 +197,9 @@ function ProfileForm({
   initial,
   profiles,
   reference,
+  referencePending,
+  referenceError,
+  retryReference,
   onSave,
   pending,
   error,
@@ -206,13 +208,20 @@ function ProfileForm({
   initial: ProfileInput;
   profiles: ModelProfile[];
   reference?: ModelProfileReference;
+  referencePending: boolean;
+  referenceError?: string;
+  retryReference: () => void;
   onSave: (input: ProfileInput) => void;
   pending: boolean;
   error?: string;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(initial);
-  const [newKey, setNewKey] = useState("");
+  const [search, setSearch] = useState("");
+  const [selectedKey, setSelectedKey] = useState("");
+  const [listOpen, setListOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listId = useId();
   const [pendingEditorTypes, setPendingEditorTypes] = useState<Map<string, string>>(
     () => new Map(),
   );
@@ -239,7 +248,9 @@ function ProfileForm({
   const local = new Map(draft.settings.map((item) => [item.key, item]));
   const keys = [
     ...new Set([...inherited.keys(), ...local.keys(), ...pendingEditorTypes.keys()]),
-  ].sort();
+  ]
+    .filter((key) => key !== "provider")
+    .sort();
   const localProvider = local.get("provider");
   const providerValue =
     localProvider?.kind === "unset"
@@ -249,20 +260,50 @@ function ProfileForm({
         : inherited.get("provider")?.value;
   const effectiveProvider =
     typeof providerValue === "string" ? providerValue : undefined;
-  const providerNames = Object.keys(reference?.providers ?? {});
+  const providerNames = Object.keys(reference?.providers ?? {}).sort();
   const providerSettings = effectiveProvider
     ? (reference?.providers?.[effectiveProvider] ?? [])
     : [];
-  const addableSettings = providerSettings.filter((item) => !keys.includes(item.key));
-  if (!effectiveProvider && !keys.includes("provider")) {
-    addableSettings.unshift({
-      key: "provider",
-      type: "string",
-      description: null,
-      choices: null,
-    });
-  }
-  const selectedReference = addableSettings.find((item) => item.key === newKey.trim());
+  const addableSettings = providerSettings.filter(
+    (item) => item.key !== "provider" && !keys.includes(item.key),
+  );
+  const selectedReference = addableSettings.find((item) => item.key === selectedKey);
+  const matches = addableSettings.filter((item) =>
+    `${item.key} ${item.description ?? ""}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
+  // Preview inheritance for selectable descendants before submitting a parent edit.
+  const providerFor = (id: string, visited = new Set<string>()): unknown => {
+    if (visited.has(id)) return undefined;
+    visited.add(id);
+    const profile = profiles.find((item) => item.id === id);
+    const settings = id === current?.id ? draft.settings : (profile?.settings ?? []);
+    const parentId = id === current?.id ? draft.parent_id : profile?.parent_id;
+    const own = settings.find((item) => item.key === "provider");
+    if (own) return own.kind === "unset" ? undefined : own.value;
+    return parentId ? providerFor(parentId, visited) : undefined;
+  };
+  const affected = profiles.filter((item) => {
+    let ancestor = item.parent_id;
+    const seen = new Set<string>();
+    while (ancestor && !seen.has(ancestor)) {
+      if (ancestor === current?.id) return true;
+      seen.add(ancestor);
+      ancestor = profiles.find((profile) => profile.id === ancestor)?.parent_id ?? null;
+    }
+    return false;
+  });
+  const invalidProvider = Boolean(
+    reference &&
+    ((draft.selectable && !providerNames.includes(String(providerValue))) ||
+      affected.some(
+        (item) =>
+          item.selectable && !providerNames.includes(String(providerFor(item.id))),
+      )),
+  );
+  const providerNotReady =
+    draft.selectable && (!reference || referencePending || !!referenceError);
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
     setPendingEditorTypes((previous) => {
@@ -291,24 +332,47 @@ function ProfileForm({
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pending || parseErrors.size > 0 || pendingEditorTypes.size > 0) return;
+    if (
+      pending ||
+      invalidProvider ||
+      providerNotReady ||
+      parseErrors.size > 0 ||
+      pendingEditorTypes.size > 0
+    )
+      return;
     onSave(draft);
   };
   const addSetting = () => {
-    const key = newKey.trim();
-    if (!key || keys.includes(key)) return;
-    const settingReference =
-      key === "provider"
-        ? PROVIDER_REFERENCE
-        : providerSettings.find((item) => item.key === key);
-    if (settingReference) {
-      setPendingEditorTypes((previous) =>
-        new Map(previous).set(key, editorTypeForReference(settingReference.type)),
-      );
-    } else {
-      change({ key, kind: "literal", value: "" });
-    }
-    setNewKey("");
+    if (
+      !selectedReference ||
+      !reference ||
+      referencePending ||
+      referenceError ||
+      !effectiveProvider
+    )
+      return;
+    setPendingEditorTypes((previous) =>
+      new Map(previous).set(
+        selectedReference.key,
+        editorTypeForReference(selectedReference.type),
+      ),
+    );
+    setSearch("");
+    setSelectedKey("");
+    setListOpen(false);
+  };
+  const selectProvider = (value: string) => {
+    if (!providerNames.includes(value)) return;
+    change({ key: "provider", kind: "literal", value });
+    setSearch("");
+    setSelectedKey("");
+    setListOpen(false);
+  };
+  const selectParent = (value: string) => {
+    setDraft({ ...draft, parent_id: value || null });
+    setSearch("");
+    setSelectedKey("");
+    setListOpen(false);
   };
   return (
     <>
@@ -333,9 +397,7 @@ function ProfileForm({
           {t("modelProfiles.parentField")}
           <Select
             value={draft.parent_id ?? ""}
-            onChange={(event) =>
-              setDraft({ ...draft, parent_id: event.target.value || null })
-            }
+            onChange={(event) => selectParent(event.target.value)}
           >
             <option value="">{t("modelProfiles.none")}</option>
             {profiles
@@ -347,6 +409,137 @@ function ProfileForm({
               ))}
           </Select>
         </label>
+        <div className="profile-provider">
+          <div className="selector-heading">
+            <strong>{t("modelProfiles.providerValue")}</strong>
+            <a href={PROVIDER_DOCS} target="_blank" rel="noopener noreferrer">
+              {t("modelProfiles.providerDocs")}
+              <span className="sr-only"> {t("modelProfiles.opensNewWindow")}</span>
+            </a>
+          </div>
+          {localProvider?.kind === "unset" ? (
+            <p className="field-help">{t("modelProfiles.unsetLocally")}</p>
+          ) : localProvider ? (
+            <p className="field-help">{t("modelProfiles.local")}</p>
+          ) : inherited.has("provider") ? (
+            <p className="field-help">
+              {t("modelProfiles.inheritedFrom", {
+                name: inherited.get("provider")!.source.name,
+              })}
+            </p>
+          ) : null}
+          {providerValue !== undefined &&
+            reference &&
+            (typeof providerValue !== "string" ||
+              !providerNames.includes(providerValue)) && (
+              <p className="field-help" role="status">
+                {t("modelProfiles.legacyProvider", {
+                  value: displayValue(providerValue),
+                })}
+              </p>
+            )}
+          {providerValue !== undefined && !reference && (
+            <p className="field-help">
+              {t("modelProfiles.provider", { value: displayValue(providerValue) })}
+            </p>
+          )}
+          <label className="profile-provider-select">
+            <span className="sr-only">{t("modelProfiles.providerValue")}</span>
+            <Select
+              value={
+                typeof providerValue === "string" &&
+                providerNames.includes(providerValue)
+                  ? providerValue
+                  : ""
+              }
+              disabled={
+                !reference ||
+                referencePending ||
+                providerNames.length === 0 ||
+                !!referenceError
+              }
+              onChange={(event) => selectProvider(event.target.value)}
+            >
+              <option value="" disabled>
+                {t(
+                  referencePending
+                    ? "modelProfiles.referenceLoading"
+                    : "modelProfiles.chooseProvider",
+                )}
+              </option>
+              {providerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </Select>
+          </label>
+          {referenceError && (
+            <div role="alert" className="profile-reference-error">
+              {t("modelProfiles.referenceError", { message: referenceError })}{" "}
+              <Button type="button" variant="outline" onClick={retryReference}>
+                {t("common.tryAgain")}
+              </Button>
+            </div>
+          )}
+          {reference && providerNames.length === 0 && (
+            <div role="alert" className="profile-reference-error">
+              {t("modelProfiles.noProviders")}{" "}
+              <Button type="button" variant="outline" onClick={retryReference}>
+                {t("common.tryAgain")}
+              </Button>
+            </div>
+          )}
+          {referencePending && (
+            <p role="status" className="field-help">
+              {t("modelProfiles.referenceLoading")}
+            </p>
+          )}
+          <div className="profile-actions">
+            {localProvider && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => remove("provider")}
+              >
+                {t("modelProfiles.removeLocal")}
+              </Button>
+            )}
+            {(localProvider?.kind === "literal" ||
+              (!localProvider && inherited.has("provider"))) && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => change({ key: "provider", kind: "unset", value: null })}
+              >
+                {t("modelProfiles.unset")}
+              </Button>
+            )}
+            {!localProvider && inherited.has("provider") && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  !reference ||
+                  referencePending ||
+                  !!referenceError ||
+                  !providerNames.includes(String(inherited.get("provider")?.value))
+                }
+                onClick={() => {
+                  const value = inherited.get("provider")?.value;
+                  if (typeof value === "string") selectProvider(value);
+                }}
+              >
+                {t("modelProfiles.override")}
+              </Button>
+            )}
+          </div>
+          {invalidProvider && (
+            <p role="alert" className="form-error">
+              {t("modelProfiles.invalidProvider")}
+            </p>
+          )}
+        </div>
         <label className="checkbox-field">
           <input
             type="checkbox"
@@ -363,10 +556,7 @@ function ProfileForm({
           const entry = local.get(key);
           const parentEntry = inherited.get(key);
           const pendingEditorType = pendingEditorTypes.get(key);
-          const settingReference =
-            key === "provider"
-              ? PROVIDER_REFERENCE
-              : providerSettings.find((item) => item.key === key);
+          const settingReference = providerSettings.find((item) => item.key === key);
           const typeEntry =
             entry?.kind === "literal"
               ? entry
@@ -392,29 +582,26 @@ function ProfileForm({
                       ? t("modelProfiles.local")
                       : t("modelProfiles.inheritedFrom", {
                           name: parentEntry?.source.name ?? "",
-                        })}{" "}
-                  ·{" "}
-                  {pendingEditorType ??
-                    (typeEntry
-                      ? valueType(typeEntry)
-                      : entry?.kind === "unset"
-                        ? "unset"
-                        : "")}
+                        })}
                 </span>
                 {settingReference?.description && (
                   <p className="field-help profile-setting-description">
                     {settingReference.description}
                   </p>
                 )}
-                {settingReference?.type && (
-                  <p className="field-help">
-                    {t("modelProfiles.pysubtransType", {
-                      type:
-                        referenceTypeLabel(settingReference.type) ??
-                        settingReference.type,
-                    })}
-                  </p>
-                )}
+                <p className="field-help">
+                  {t("modelProfiles.settingType", {
+                    type:
+                      pendingEditorType ??
+                      (typeEntry
+                        ? valueType(typeEntry)
+                        : entry?.kind === "unset"
+                          ? "unset"
+                          : ""),
+                  })}
+                  {settingReference?.type &&
+                    ` · ${t("modelProfiles.pysubtransType", { type: referenceTypeLabel(settingReference.type) ?? settingReference.type })}`}
+                </p>
               </div>
               <span className="profile-value">
                 {pendingEditorType !== undefined
@@ -471,7 +658,6 @@ function ProfileForm({
                   }
                   pendingType={pendingEditorType}
                   reference={settingReference}
-                  providerNames={providerNames}
                   onChange={change}
                   onError={setParseError}
                   onPendingTypeChange={(settingKey, type) =>
@@ -485,47 +671,120 @@ function ProfileForm({
           );
         })}
         <div className="profile-add">
-          <label>
-            {t("modelProfiles.newKey")}
+          <div className="profile-setting-search">
+            <label htmlFor={`${listId}-input`}>
+              {t("modelProfiles.searchSetting")}
+            </label>
             <Input
-              list="model-profile-setting-reference"
+              id={`${listId}-input`}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={
+                listOpen &&
+                !!effectiveProvider &&
+                !!reference &&
+                !referencePending &&
+                !referenceError
+              }
+              aria-controls={listId}
+              aria-activedescendant={
+                listOpen && matches[activeIndex]
+                  ? `${listId}-${activeIndex}`
+                  : undefined
+              }
               autoComplete="off"
-              value={newKey}
-              onChange={(event) => setNewKey(event.target.value)}
+              disabled={
+                !reference || referencePending || !!referenceError || !effectiveProvider
+              }
+              value={search}
+              onFocus={() => setListOpen(true)}
+              onBlur={() => setListOpen(false)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setSelectedKey("");
+                setActiveIndex(0);
+                setListOpen(true);
+              }}
               onKeyDown={(event) => {
-                if (event.key === "Enter") {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
-                  addSetting();
+                  setListOpen(true);
+                  setActiveIndex(
+                    (index) =>
+                      (index + (event.key === "ArrowDown" ? 1 : -1) + matches.length) %
+                      (matches.length || 1),
+                  );
+                } else if (event.key === "Escape") {
+                  setListOpen(false);
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (listOpen && matches[activeIndex]) {
+                    setSelectedKey(matches[activeIndex].key);
+                    setSearch(matches[activeIndex].key);
+                    setListOpen(false);
+                  } else if (selectedReference) addSetting();
                 }
               }}
               aria-describedby="model-profile-setting-help"
             />
-            <datalist id="model-profile-setting-reference">
-              {addableSettings.map((item) => (
-                <option
-                  key={item.key}
-                  value={item.key}
-                  label={`${item.type ?? ""}${item.description ? ` · ${item.description}` : ""}`}
-                />
-              ))}
-            </datalist>
-            {selectedReference && (
-              <span className="field-help" role="status">
-                {referenceTypeLabel(selectedReference.type) ??
-                  t("modelProfiles.valueType")}
-                {selectedReference.description
-                  ? ` · ${selectedReference.description}`
-                  : ""}
-              </span>
-            )}
+            {listOpen &&
+              !!reference &&
+              !referencePending &&
+              !referenceError &&
+              !!effectiveProvider && (
+                <ul id={listId} role="listbox" className="profile-setting-options">
+                  {matches.map((item, index) => (
+                    <li
+                      key={item.key}
+                      id={`${listId}-${index}`}
+                      role="option"
+                      aria-selected={index === activeIndex}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setSelectedKey(item.key);
+                        setSearch(item.key);
+                        setListOpen(false);
+                      }}
+                    >
+                      <strong>{item.key}</strong>
+                      {item.type && (
+                        <span className="field-help">
+                          {" "}
+                          · {referenceTypeLabel(item.type) ?? item.type}
+                        </span>
+                      )}
+                      {item.description && (
+                        <span className="field-help profile-option-description">
+                          {item.description}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                  {matches.length === 0 && (
+                    <li className="field-help">
+                      {t("modelProfiles.noMatchingSettings")}
+                    </li>
+                  )}
+                </ul>
+              )}
             <span id="model-profile-setting-help" className="field-help">
-              {t("modelProfiles.settingSuggestionHelp")}
+              {t(
+                !effectiveProvider
+                  ? "modelProfiles.chooseProviderFirst"
+                  : "modelProfiles.settingSuggestionHelp",
+              )}
             </span>
-          </label>
+          </div>
           <Button
             type="button"
             variant="outline"
-            disabled={!newKey.trim() || keys.includes(newKey.trim())}
+            disabled={
+              !selectedReference ||
+              !reference ||
+              referencePending ||
+              !!referenceError ||
+              !effectiveProvider
+            }
             onClick={addSetting}
           >
             {t("modelProfiles.addSetting")}
@@ -544,7 +803,13 @@ function ProfileForm({
         <div className="profile-actions">
           <Button
             type="submit"
-            disabled={pending || parseErrors.size > 0 || pendingEditorTypes.size > 0}
+            disabled={
+              pending ||
+              invalidProvider ||
+              providerNotReady ||
+              parseErrors.size > 0 ||
+              pendingEditorTypes.size > 0
+            }
           >
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
@@ -559,7 +824,6 @@ function LiteralEditor({
   entry,
   pendingType,
   reference,
-  providerNames,
   onChange,
   onError,
   onPendingTypeChange,
@@ -567,7 +831,6 @@ function LiteralEditor({
   entry: ProfileSetting;
   pendingType?: string;
   reference?: SettingReference;
-  providerNames: string[];
   onChange: (entry: ProfileSetting) => void;
   onError: (key: string, message: string) => void;
   onPendingTypeChange: (key: string, type: string) => void;
@@ -575,8 +838,6 @@ function LiteralEditor({
   const { t } = useI18n();
   const [raw, setRaw] = useState(inputValue(entry.value));
   const [editorType, setEditorType] = useState(() => pendingType ?? valueType(entry));
-  const isKnownProvider =
-    entry.key === "provider" && providerNames.length > 0 && editorType === "string";
   const choices = reference?.choices?.length ? reference.choices : undefined;
   const changeType = (next: string) => {
     setEditorType(next);
@@ -638,32 +899,7 @@ function LiteralEditor({
           )}
         </Select>
       </label>
-      {isKnownProvider ? (
-        <label>
-          {t("modelProfiles.providerValue")}
-          <Select
-            value={typeof entry.value === "string" ? entry.value : ""}
-            onChange={(event) => {
-              onError(entry.key, "");
-              onChange({ ...entry, value: event.target.value });
-            }}
-          >
-            <option value="" disabled>
-              {t("modelProfiles.chooseProvider")}
-            </option>
-            {typeof entry.value === "string" &&
-              entry.value &&
-              !providerNames.includes(entry.value) && (
-                <option value={entry.value}>{entry.value}</option>
-              )}
-            {providerNames.map((provider) => (
-              <option key={provider} value={provider}>
-                {provider}
-              </option>
-            ))}
-          </Select>
-        </label>
-      ) : editorType === "boolean" ? (
+      {editorType === "boolean" ? (
         <label>
           {t("modelProfiles.value")}
           <Select

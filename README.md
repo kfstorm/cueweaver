@@ -72,7 +72,7 @@ preserve the entire Work volume before restoring or inspecting a backup.
 
 Create Model Profiles in **Settings → Model Profiles**. A selectable profile can be chosen for a new Job and must resolve to a `provider` from the local PySubtrans provider registry; `model` is optional. A non-selectable profile may be incomplete and used as a base for inheritance. CueWeaver starts without a selectable profile, but new translations require one.
 
-The editor uses the bundled PySubtrans source to suggest provider settings, types, descriptions, and static choices. Suggestions do not restrict custom setting keys.
+The editor lists providers registered by the installed PySubtrans package. After selecting a provider, search its known settings by key or description; static choices are suggestions for values, not restrictions. Existing custom settings remain editable, but the editor only adds keys listed for the selected provider. See the [upstream provider configuration guide](https://github.com/machinewrapped/llm-subtrans#translation-providers) for details.
 
 Use **Create derived** to inherit from one parent. Settings merge by top-level key: a local literal overrides the inherited value, including a nested JSON object as a whole. **Unset** removes a key from the effective profile without suppressing PySubtrans defaults or environment fallbacks. **Remove local** removes a local override or unset and restores inheritance.
 

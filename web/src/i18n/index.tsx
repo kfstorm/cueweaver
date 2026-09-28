@@ -108,11 +108,25 @@ const ENGLISH = {
   "modelProfiles.value": "Value",
   "modelProfiles.providerValue": "Provider",
   "modelProfiles.chooseProvider": "Choose a provider",
+  "modelProfiles.providerDocs": "Provider configuration guide",
+  "modelProfiles.opensNewWindow": "(opens in a new window)",
+  "modelProfiles.referenceLoading": "Loading available providers…",
+  "modelProfiles.referenceError": "Could not load providers: {message}",
+  "modelProfiles.noProviders":
+    "No registered providers were found. Check the PySubtrans installation and try again.",
+  "modelProfiles.legacyProvider":
+    "Existing provider: {value} (not available in the current registry). Select a listed provider to replace it.",
+  "modelProfiles.invalidProvider":
+    "A selectable profile in this inheritance chain needs an available provider. Choose or override a provider before saving.",
+  "modelProfiles.searchSetting": "Search settings",
+  "modelProfiles.noMatchingSettings": "No matching settings",
+  "modelProfiles.chooseProviderFirst": "Choose or override a provider to add settings.",
+  "modelProfiles.settingType": "Value type: {type}",
   "modelProfiles.chooseValue": "Choose a value",
   "modelProfiles.staticChoicesHelp":
     "Suggested values: {values}. Availability can depend on the model or runtime.",
   "modelProfiles.settingSuggestionHelp":
-    "Suggestions follow the effective provider. Custom keys are allowed.",
+    "Select a setting from the current provider's list to add it.",
   "modelProfiles.true": "True",
   "modelProfiles.false": "False",
   "modelProfiles.invalidValue": "Invalid {type} value for {key}",
