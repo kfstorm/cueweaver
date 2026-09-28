@@ -117,7 +117,7 @@ const ENGLISH = {
   "modelProfiles.legacyProvider":
     "Existing provider: {value} (not available in the current registry). Select a listed provider to replace it.",
   "modelProfiles.invalidProvider":
-    "A selectable profile in this inheritance chain needs an available provider. Choose or override a provider before saving.",
+    "This selectable profile needs an available provider. Choose or override a provider before saving.",
   "modelProfiles.searchSetting": "Search settings",
   "modelProfiles.noMatchingSettings": "No matching settings",
   "modelProfiles.chooseProviderFirst": "Choose or override a provider to add settings.",

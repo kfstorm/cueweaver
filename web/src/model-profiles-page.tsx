@@ -286,39 +286,11 @@ function ProfileForm({
       .toLowerCase()
       .includes(search.toLowerCase()),
   );
-  // Preview inheritance for selectable descendants before submitting a parent edit.
-  const providerFor = (id: string, visited = new Set<string>()): unknown => {
-    if (visited.has(id)) return undefined;
-    visited.add(id);
-    const profile = profiles.find((item) => item.id === id);
-    const settings = id === current?.id ? draft.settings : (profile?.settings ?? []);
-    const parentId = id === current?.id ? draft.parent_id : profile?.parent_id;
-    const own = settings.find((item) => item.key === "provider");
-    if (own) return own.kind === "unset" ? undefined : own.value;
-    return parentId ? providerFor(parentId, visited) : undefined;
-  };
-  const affected = profiles.filter((item) => {
-    let ancestor = item.parent_id;
-    const seen = new Set<string>();
-    while (ancestor && !seen.has(ancestor)) {
-      if (ancestor === current?.id) return true;
-      seen.add(ancestor);
-      ancestor = profiles.find((profile) => profile.id === ancestor)?.parent_id ?? null;
-    }
-    return false;
-  });
   const invalidProvider = Boolean(
-    reference &&
-    ((draft.selectable && !providerNames.includes(String(providerValue))) ||
-      affected.some(
-        (item) =>
-          item.selectable && !providerNames.includes(String(providerFor(item.id))),
-      )),
+    reference && draft.selectable && !providerNames.includes(String(providerValue)),
   );
-  const requiresKnownProvider =
-    draft.selectable || affected.some((item) => item.selectable);
   const providerNotReady =
-    requiresKnownProvider && (!reference || referencePending || !!referenceError);
+    draft.selectable && (!reference || referencePending || !!referenceError);
   const updateDraft = (next: ProfileInput) => {
     const nextProvider = providerForDraft(next);
     if (nextProvider !== providerValue) {

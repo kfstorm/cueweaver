@@ -64,7 +64,7 @@
   "modelProfiles.referenceError": "无法加载服务商：{message}",
   "modelProfiles.noProviders": "没有找到已注册的服务商。请检查 PySubtrans 安装并重试。",
   "modelProfiles.legacyProvider": "现有服务商：{value}（当前列表中不可用）。选择列表中的服务商即可替换。",
-  "modelProfiles.invalidProvider": "此继承链中可选的配置需要可用服务商。请先选择或覆盖服务商。",
+  "modelProfiles.invalidProvider": "当前可选配置需要可用服务商。请先选择或覆盖服务商。",
   "modelProfiles.searchSetting": "搜索设置",
   "modelProfiles.noMatchingSettings": "没有匹配的设置",
   "modelProfiles.chooseProviderFirst": "先选择或覆盖服务商，再添加设置。",

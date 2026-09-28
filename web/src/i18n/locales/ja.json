@@ -64,7 +64,7 @@
   "modelProfiles.referenceError": "プロバイダーを読み込めませんでした: {message}",
   "modelProfiles.noProviders": "登録済みプロバイダーが見つかりません。PySubtrans のインストールを確認して再試行してください。",
   "modelProfiles.legacyProvider": "既存のプロバイダー: {value}（現在の一覧にはありません）。一覧から選択すると置き換えられます。",
-  "modelProfiles.invalidProvider": "この継承チェーンの選択可能なプロファイルには利用可能なプロバイダーが必要です。選択または上書きしてください。",
+  "modelProfiles.invalidProvider": "この選択可能なプロファイルには利用可能なプロバイダーが必要です。選択または上書きしてください。",
   "modelProfiles.searchSetting": "設定を検索",
   "modelProfiles.noMatchingSettings": "一致する設定がありません",
   "modelProfiles.chooseProviderFirst": "設定を追加する前にプロバイダーを選択または上書きしてください。",

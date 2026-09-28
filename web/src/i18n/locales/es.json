@@ -64,7 +64,7 @@
   "modelProfiles.referenceError": "No se pudieron cargar los proveedores: {message}",
   "modelProfiles.noProviders": "No se encontraron proveedores registrados. Comprueba la instalación de PySubtrans y vuelve a intentarlo.",
   "modelProfiles.legacyProvider": "Proveedor existente: {value} (no disponible en la lista actual). Elige uno de la lista para reemplazarlo.",
-  "modelProfiles.invalidProvider": "Un perfil seleccionable en esta cadena necesita un proveedor disponible. Elige o sustituye el proveedor.",
+  "modelProfiles.invalidProvider": "Este perfil seleccionable necesita un proveedor disponible. Elige o sustituye el proveedor.",
   "modelProfiles.searchSetting": "Buscar ajustes",
   "modelProfiles.noMatchingSettings": "No hay ajustes coincidentes",
   "modelProfiles.chooseProviderFirst": "Elige o sustituye el proveedor antes de añadir ajustes.",

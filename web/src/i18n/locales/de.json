@@ -64,7 +64,7 @@
   "modelProfiles.referenceError": "Anbieter konnten nicht geladen werden: {message}",
   "modelProfiles.noProviders": "Keine registrierten Anbieter gefunden. PySubtrans-Installation prüfen und erneut versuchen.",
   "modelProfiles.legacyProvider": "Vorhandener Anbieter: {value} (nicht in der aktuellen Liste). Zum Ersetzen einen gelisteten Anbieter wählen.",
-  "modelProfiles.invalidProvider": "Ein auswählbares Profil in dieser Vererbungskette benötigt einen verfügbaren Anbieter. Anbieter wählen oder überschreiben.",
+  "modelProfiles.invalidProvider": "Dieses auswählbare Profil benötigt einen verfügbaren Anbieter. Anbieter wählen oder überschreiben.",
   "modelProfiles.searchSetting": "Einstellungen suchen",
   "modelProfiles.noMatchingSettings": "Keine passenden Einstellungen",
   "modelProfiles.chooseProviderFirst": "Zuerst einen Anbieter wählen oder überschreiben.",

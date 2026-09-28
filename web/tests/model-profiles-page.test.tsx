@@ -932,13 +932,15 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "provider", "DeepSeek");
   });
 
-  it.each(["loading", "error"])(
-    "blocks saving an unset base provider with a selectable descendant while reference is %s",
+  it.each(["ready", "loading", "error"])(
+    "defers descendant provider validation for a non-selectable base while reference is %s",
     async (state) => {
       const referenceResponse =
         state === "error"
           ? Promise.reject(new Error("unavailable"))
-          : new Promise<ModelProfileReference>(() => {});
+          : state === "loading"
+            ? new Promise<ModelProfileReference>(() => {})
+            : Promise.resolve(REFERENCE);
       const { saves } = renderEditor(
         "/model-profiles/base",
         baseWithSelectableChild(),
@@ -951,6 +953,37 @@ describe("Model Profile setting references", () => {
       }
       const providerArea = document.querySelector(".profile-provider") as HTMLElement;
       fireEvent.click(within(providerArea).getByRole("button", { name: "Unset" }));
+      if (state === "ready")
+        expect(within(providerArea).queryByRole("alert")).not.toBeInTheDocument();
+      const save = screen.getByRole("button", { name: "Save Model Profile" });
+      expect(save).toBeEnabled();
+      fireEvent.click(save);
+      await waitFor(() => expect(saves).toHaveLength(1));
+      expect(saves[0].body.settings).toContainEqual({
+        key: "provider",
+        kind: "unset",
+        value: null,
+      });
+    },
+  );
+
+  it.each(["loading", "error"])(
+    "blocks saving a selectable profile while reference is %s",
+    async (state) => {
+      const referenceResponse =
+        state === "error"
+          ? Promise.reject(new Error("unavailable"))
+          : new Promise<ModelProfileReference>(() => {});
+      const { saves } = renderEditor(
+        "/model-profiles/child",
+        baseWithSelectableChild(),
+        referenceResponse,
+      );
+      if (state === "error") {
+        await screen.findByRole("alert");
+      } else {
+        await screen.findByRole("combobox", { name: "Provider" });
+      }
       const save = screen.getByRole("button", { name: "Save Model Profile" });
       expect(save).toBeDisabled();
       fireEvent.click(save);
