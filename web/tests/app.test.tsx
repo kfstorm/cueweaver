@@ -735,7 +735,12 @@ function renderRoute(
       }
       if (String(input) === "/api/model-profile-options") {
         return Promise.resolve(
-          jsonResponse({ provider: "OpenAI", options: [], refresh_when_changed: [] }),
+          jsonResponse({
+            provider: "OpenAI",
+            options: [],
+            refresh_when_changed: [],
+            setting_updates: {},
+          }),
         );
       }
       return Promise.resolve(jobListResponse([]));

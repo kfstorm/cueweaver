@@ -9,10 +9,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import cast
 
-from PySubtrans.TranslationProvider import TranslationProvider
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from ..adapters.pysubtrans_model_profile_reference import validate_model_profile_options
 from .database import JobRow, ModelProfileRow, ModelProfileSettingRow, SqliteDatabase
 from .errors import ServiceError
 
@@ -101,11 +101,18 @@ class ModelProfiles:
         assert isinstance(name, str)
         assert isinstance(provider, str)
         assert isinstance(settings, list)
+        explicit = cast(builtins.list[dict[str, object]], settings)
+        updates = validate_model_profile_options(
+            provider, {str(item["key"]): item["value"] for item in explicit}
+        )
         return self._persist(
             profile_id,
             name,
             provider,
-            cast(builtins.list[dict[str, object]], settings),
+            [
+                *[item for item in explicit if item["key"] not in updates],
+                *({"key": key, "value": value} for key, value in updates.items()),
+            ],
         )
 
     @staticmethod
@@ -116,10 +123,7 @@ class ModelProfiles:
                 "Model Profile name must be non-empty",
                 field="name",
             )
-        if (
-            not isinstance(provider, str)
-            or provider not in TranslationProvider.get_providers()
-        ):
+        if not isinstance(provider, str) or not provider.strip():
             raise ServiceError(
                 "invalid_model_profile_provider",
                 "Model Profile provider is not installed",

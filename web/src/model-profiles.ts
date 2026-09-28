@@ -26,6 +26,7 @@ export type ModelProfileOptions = {
   provider: string;
   options: ModelProfileOption[];
   refresh_when_changed: string[];
+  setting_updates: Record<string, string>;
 };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

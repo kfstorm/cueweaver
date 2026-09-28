@@ -27,9 +27,9 @@ test.beforeAll(async ({ request }) => {
 });
 
 test("creates a standalone profile from the provider registry", async ({ page }) => {
-  await page.goto("/model-profiles/new");
+  await page.goto("/settings/model-profiles/new");
   await page.getByLabel("Name").fill("Reference profile");
-  await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption({
+  await page.getByRole("combobox", { name: /Provider/ }).selectOption({
     label: "OpenAI",
   });
   await expect(page.getByRole("link", { name: "Provider guide" })).toBeVisible();

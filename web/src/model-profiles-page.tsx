@@ -151,6 +151,7 @@ function ProfileForm({
   const [optionsPending, setOptionsPending] = useState(Boolean(initial.provider));
   const [optionsError, setOptionsError] = useState<string>();
   const requestId = useRef(0);
+  const draftRevision = useRef(0);
   const controller = useRef<AbortController | undefined>(undefined);
   const initialRequest = useRef(initial);
 
@@ -166,6 +167,7 @@ function ProfileForm({
       const nextController = new AbortController();
       controller.current = nextController;
       const id = ++requestId.current;
+      const revision = draftRevision.current;
       setOptionsPending(true);
       setOptionsError(undefined);
       try {
@@ -174,7 +176,24 @@ function ProfileForm({
           settings,
           nextController.signal,
         );
-        if (id !== requestId.current) return;
+        if (id !== requestId.current || revision !== draftRevision.current) return;
+        const visible = new Set(result.options.map((option) => option.key));
+        setDraft((previous) => {
+          if (revision !== draftRevision.current) return previous;
+          return {
+            ...previous,
+            settings: [
+              ...previous.settings.filter(
+                (setting) =>
+                  visible.has(setting.key) && !(setting.key in result.setting_updates),
+              ),
+              ...Object.entries(result.setting_updates).map(([key, value]) => ({
+                key,
+                value,
+              })),
+            ],
+          };
+        });
         setOptions(result.options);
         setRefreshKeys(result.refresh_when_changed);
       } catch (caught) {
@@ -201,6 +220,7 @@ function ProfileForm({
     draft.settings.map((setting) => [setting.key, setting.value]),
   );
   const setSetting = (key: string, value: unknown) => {
+    draftRevision.current += 1;
     setDraft((previous) => ({
       ...previous,
       settings: [
@@ -210,6 +230,7 @@ function ProfileForm({
     }));
   };
   const clearSetting = (key: string) => {
+    draftRevision.current += 1;
     setDraft((previous) => ({
       ...previous,
       settings: previous.settings.filter((setting) => setting.key !== key),
@@ -228,6 +249,9 @@ function ProfileForm({
       !window.confirm(t("modelProfiles.providerChangeConfirm"))
     )
       return;
+    draftRevision.current += 1;
+    controller.current?.abort();
+    ++requestId.current;
     setOptions([]);
     setRefreshKeys([]);
     setOptionsError(undefined);

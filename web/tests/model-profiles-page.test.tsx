@@ -60,6 +60,7 @@ const options = (provider = "OpenAI"): ModelProfileOptions => ({
     },
   ],
   refresh_when_changed: ["model", "stream", "effort"],
+  setting_updates: {},
 });
 
 function response(body: unknown, ok = true) {
@@ -284,6 +285,7 @@ describe("standalone Model Profile editor", () => {
             },
           ],
           refresh_when_changed: [],
+          setting_updates: {},
         });
       },
     });
@@ -351,5 +353,128 @@ describe("standalone Model Profile editor", () => {
     await waitFor(() => expect(optionRequests).toHaveLength(3));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByLabelText("model")).toHaveValue("keep-me");
+  });
+
+  it("drops explicit settings hidden by a successful dynamic refresh", async () => {
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [
+        {
+          ...existing,
+          settings: [
+            { key: "stream", value: true },
+            { key: "temperature", value: 0.4 },
+          ],
+        },
+      ],
+      optionsHandler: async (init) => {
+        const { settings } = JSON.parse(String(init.body)) as {
+          settings: Record<string, unknown>;
+        };
+        const result = options();
+        if (settings.stream === false)
+          result.options = result.options.filter(
+            (option) => option.key !== "temperature",
+          );
+        return response(result);
+      },
+    });
+    await screen.findByLabelText("temperature");
+    fireEvent.click(screen.getByLabelText("stream"));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("temperature")).not.toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "stream", value: false }]);
+  });
+
+  it("persists only an auto-selected model while other defaults stay sparse", async () => {
+    const { saves, optionRequests } = renderEditor({
+      optionsHandler: async () =>
+        response({
+          ...options(),
+          options: [
+            {
+              ...options().options[0],
+              type: "choice",
+              choices: ["model-a", "model-b"],
+              value: "model-a",
+            },
+            ...options().options.slice(1),
+            {
+              key: "model_a_detail",
+              type: "string",
+              description: null,
+              choices: null,
+              value: "visible after selection",
+            },
+          ],
+          setting_updates: { model: "model-a" },
+        }),
+    });
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Chosen model" },
+    });
+    await selectProvider();
+    await waitFor(() => expect(screen.getByLabelText("model")).toHaveValue("model-a"));
+    expect(screen.getByLabelText("model_a_detail")).toHaveValue(
+      "visible after selection",
+    );
+    expect(optionRequests).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "model", value: "model-a" }]);
+  });
+
+  it("applies the selected model after changing providers", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [existing],
+      optionsHandler: async (init) => {
+        const { provider } = JSON.parse(String(init.body)) as { provider: string };
+        return response({
+          ...options(provider),
+          setting_updates: provider === "DeepSeek" ? { model: "model-a" } : {},
+        });
+      },
+    });
+    await screen.findByLabelText("model");
+    fireEvent.change(screen.getByRole("combobox", { name: /Provider/ }), {
+      target: { value: "DeepSeek" },
+    });
+    await waitFor(() => expect(screen.getByLabelText("model")).toHaveValue("model-a"));
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      provider: "DeepSeek",
+      settings: [{ key: "model", value: "model-a" }],
+    });
+  });
+
+  it("ignores stale setting updates after a newer edit and refresh", async () => {
+    const pending = deferred<ReturnType<typeof response>>();
+    let calls = 0;
+    const { saves } = renderEditor({
+      optionsHandler: async () => {
+        calls += 1;
+        if (calls === 2) return pending.promise;
+        return response(options());
+      },
+    });
+    await selectProvider();
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "first" } });
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() => expect(calls).toBe(2));
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "second" } });
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() => expect(calls).toBe(3));
+    pending.resolve(response({ ...options(), setting_updates: { model: "old" } }));
+    expect(screen.getByLabelText("model")).toHaveValue("second");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Current" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "model", value: "second" }]);
   });
 });

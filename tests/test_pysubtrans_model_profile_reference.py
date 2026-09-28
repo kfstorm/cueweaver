@@ -1,5 +1,7 @@
 """Runtime PySubtrans option discovery used by Model Profiles."""
 
+from unittest.mock import Mock
+
 from fastapi.testclient import TestClient
 from PySubtrans.SettingsType import SettingsType
 from PySubtrans.TranslationProvider import TranslationProvider
@@ -59,6 +61,10 @@ def test_options_endpoint_invokes_real_combination_and_dynamic_discovery(
                 }
             )
             self.refresh_when_changed = ["api_key", "mode"]
+            self.ResetAvailableModels = Mock()
+            self.UpdateSettings = Mock()
+            self.selected_model = None
+            self.available_models = ()
 
         def GetCombinedSettings(self, overrides):
             calls.append(("combined", dict(overrides)))
@@ -151,7 +157,66 @@ def test_options_endpoint_invokes_real_combination_and_dynamic_discovery(
             },
         ],
         "refresh_when_changed": ["api_key", "mode"],
+        "setting_updates": {},
     }
+
+
+def test_options_reconciles_missing_or_invalid_models_without_materializing_defaults(
+    tmp_path, monkeypatch
+):
+    class SyntheticProvider:
+        name = "Synthetic"
+
+        def __init__(self, settings):
+            self.settings = SettingsType(
+                {"model": settings.get("model", "old-model"), "retries": 2}
+            )
+            self.refresh_when_changed = ["api_key", "model"]
+            self.ResetAvailableModels = Mock()
+            self.UpdateSettings = Mock(side_effect=self.settings.update)
+            self.selected_model = self.settings.get("model")
+            self.available_models = ["model-a", "model-b"]
+
+        def GetCombinedSettings(self, overrides):
+            return SettingsType({**self.settings, **overrides})
+
+        def GetOptions(self, settings):
+            options = {
+                "model": (["model-a", "model-b"], "Model"),
+                "retries": (int, "Retries"),
+            }
+            if settings.get("model") == "model-a":
+                options["model_a_detail"] = (str, "Model A detail")
+            return options
+
+    monkeypatch.setattr(
+        TranslationProvider, "get_providers", lambda: {"Synthetic": SyntheticProvider}
+    )
+    application = CueWeaverApplication(Translator(), tmp_path / "work")
+    try:
+        with TestClient(create_app(application)) as client:
+            for settings, expected_updates in [
+                ({}, {"model": "model-a"}),
+                ({"model": None}, {"model": "model-a"}),
+                ({"model": "missing"}, {"model": "model-a"}),
+                ({"model": "model-b"}, {}),
+            ]:
+                result = client.post(
+                    "/api/model-profile-options",
+                    json={"provider": "Synthetic", "settings": settings},
+                )
+                assert result.status_code == 200
+                body = result.json()
+                assert body["setting_updates"] == expected_updates
+                assert body["options"][0]["value"] == (
+                    expected_updates.get("model") or settings["model"]
+                )
+                assert body["options"][1]["value"] == 2
+                assert (
+                    "model_a_detail" in {option["key"] for option in body["options"]}
+                ) == (body["options"][0]["value"] == "model-a")
+    finally:
+        application.close()
 
 
 def test_options_endpoint_reports_unknown_unsupported_and_runtime_errors_safely(
@@ -166,6 +231,15 @@ def test_options_endpoint_reports_unknown_unsupported_and_runtime_errors_safely(
 
         def GetCombinedSettings(self, overrides):
             return overrides
+
+        def ResetAvailableModels(self):
+            pass
+
+        def UpdateSettings(self, settings):
+            pass
+
+        selected_model = None
+        available_models = ()
 
         def GetOptions(self, _settings):
             return {"bad": (object, "Bad")}
