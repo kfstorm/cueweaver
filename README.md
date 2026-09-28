@@ -72,9 +72,9 @@ preserve the entire Work volume before restoring or inspecting a backup.
 
 Create Model Profiles in **Settings → Model Profiles**. Each profile is a standalone configuration with a name, a provider from the installed PySubtrans registry, and settings for that provider. CueWeaver starts without a profile, and new translations require one.
 
-The editor calls the selected provider's PySubtrans runtime APIs to load the available fields, descriptions, types, and choices. Providers can refresh these options after fields such as an API key or model change, including through network-backed model discovery. CueWeaver does not offer custom setting keys or values outside a provider's choices.
+The editor calls the selected provider's PySubtrans runtime APIs to load the available fields, descriptions, types, and choices. Providers can refresh these options after fields such as an API key or model change, including through network-backed model discovery. For choice settings, the editor offers the provider's current choices. A saved value remains available in the profile if it no longer appears in that list.
 
-Runtime defaults and environment fallbacks appear in the form without being copied into the profile. CueWeaver saves only values you explicitly change. Clear a value or choose **Use default** to remove that setting from the profile and return control to PySubtrans.
+When a profile has no explicit setting, PySubtrans determines the effective value from its runtime default or environment fallback. CueWeaver does not show that value in the form. It saves explicit profile settings and runtime normalization, such as an automatically selected model. Clear a value or choose **Use default** to remove that setting from the profile and return control to PySubtrans.
 
 Model Profile values, including API keys and tokens, are stored in SQLite as ordinary values and are readable through the UI and API. CueWeaver does not mask or encrypt them as secrets. Limit access to the deployment accordingly.
 
