@@ -217,8 +217,14 @@ function ProfileForm({
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(initial);
-  const [persistedKeys] = useState(
-    () => new Set(initial.settings.map((entry) => entry.key)),
+  const [existingKeysAtOpen] = useState(
+    () =>
+      new Set([
+        ...initial.settings.map((entry) => entry.key),
+        ...(profiles
+          .find((item) => item.id === initial.parent_id)
+          ?.effective_settings.map((entry) => entry.key) ?? []),
+      ]),
   );
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
@@ -327,7 +333,7 @@ function ProfileForm({
         .filter(
           (entry) =>
             entry.key !== "provider" &&
-            !persistedKeys.has(entry.key) &&
+            !existingKeysAtOpen.has(entry.key) &&
             !supportedKeys.has(entry.key),
         )
         .map((entry) => entry.key);

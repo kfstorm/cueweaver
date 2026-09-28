@@ -674,6 +674,38 @@ describe("Model Profile setting references", () => {
     await expectSavedLiteralSetting(saves, "temperature", "0.5");
   });
 
+  it("preserves an overridden inherited custom setting across provider changes", async () => {
+    const parent = profile(
+      "parent",
+      null,
+      [
+        { key: "provider", kind: "literal", value: "OpenAI" },
+        { key: "custom_option", kind: "literal", value: "foo" },
+      ],
+      [
+        { key: "provider", value: "OpenAI", source: { id: "parent", name: "parent" } },
+        {
+          key: "custom_option",
+          value: "foo",
+          source: { id: "parent", name: "parent" },
+        },
+      ],
+    );
+    const child = profile("child", "parent", [], parent.effective_settings);
+    const { saves } = renderEditor("/model-profiles/child", [parent, child]);
+    let row = await settingRow("custom_option");
+    fireEvent.click(within(row).getByRole("button", { name: "Override" }));
+    row = await settingRow("custom_option");
+    fireEvent.change(within(row).getByLabelText("Value"), {
+      target: { value: "bar" },
+    });
+
+    await addProvider("DeepSeek");
+    expect(await settingRow("custom_option")).toHaveTextContent("bar");
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "custom_option", "bar");
+  });
+
   it("disables provider and setting selection while the reference loads", async () => {
     let resolveReference!: (value: ModelProfileReference) => void;
     const referenceResponse = new Promise<ModelProfileReference>((resolve) => {
