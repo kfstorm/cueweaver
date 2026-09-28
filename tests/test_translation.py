@@ -99,9 +99,10 @@ def test_typed_profile_settings_are_passed_to_pysubtrans(tmp_path, monkeypatch):
         "settings": {
             "model": "synthetic-model",
             "api_key": "synthetic-key",
+            "max_threads": 2,
             "temperature": 0.5,
         },
-        "max_threads": 2,
+        "max_threads": 4,
     }
 
 
@@ -223,7 +224,7 @@ def test_translation_uses_provider_specific_thinking_policy(
     assert result == source.read_bytes()
     assert captured["settings"] == {
         "provider": provider_name,
-        "max_threads": 2,
+        "provider_settings": {provider_name: {"max_threads": 2}},
         "target_language": "zh-Hans",
         "prompt": "Translate these subtitles to Chinese (Simplified)",
         "preprocess_subtitles": False,

@@ -156,7 +156,7 @@ class Jobs:
             if self._closed.is_set():
                 raise ServiceError("worker_unavailable", "Job worker is shutting down")
             media, subtitle, output, source_format = self._validate(request)
-            self._model_profiles.require_selectable(request.model_profile_id)
+            self._model_profiles.require(request.model_profile_id)
             term_map = self._resolve_term_map(request, media)
             if request.output_conflict_policy == "skip" and output.exists():
                 return _skipped_result(media, output, self._media_root)

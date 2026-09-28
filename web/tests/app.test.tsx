@@ -32,19 +32,11 @@ const CHARACTERS_TERM_MAP: TermMapSummary = {
 const SELECTABLE_PROFILE: ModelProfile = {
   id: "profile-1",
   name: "Test profile",
-  parent_id: null,
-  selectable: true,
+  provider: "OpenAI",
   deletable: true,
   created_at: "2026-08-13T12:00:00Z",
   updated_at: "2026-08-13T12:00:00Z",
   settings: [],
-  effective_settings: [
-    {
-      key: "provider",
-      value: "OpenAI",
-      source: { id: "profile-1", name: "Test profile" },
-    },
-  ],
 };
 
 const BATCH_MEDIA: MediaDirectory = {
@@ -736,6 +728,21 @@ function renderRoute(
           }),
         );
       }
+      if (String(input) === "/api/model-profile-reference") {
+        return Promise.resolve(
+          jsonResponse({ pysubtrans_version: "2.0", providers: ["OpenAI"] }),
+        );
+      }
+      if (String(input) === "/api/model-profile-options") {
+        return Promise.resolve(
+          jsonResponse({
+            provider: "OpenAI",
+            options: [],
+            refresh_when_changed: [],
+            setting_updates: {},
+          }),
+        );
+      }
       return Promise.resolve(jobListResponse([]));
     });
   return renderWithFetch(
@@ -1018,7 +1025,7 @@ describe("product shell", () => {
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
   });
 
-  it("shows selectable profiles and contextual Manage links without a provider banner", async () => {
+  it("shows all profiles and contextual Manage links without a provider banner", async () => {
     renderRoute("/translate");
 
     expect(
@@ -4142,7 +4149,7 @@ describe("product shell", () => {
     );
   });
 
-  it("blocks all translation submission when there are no selectable Model Profiles", async () => {
+  it("blocks all translation submission when there are no Model Profiles", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();
@@ -4153,7 +4160,7 @@ describe("product shell", () => {
     expectModelProfileFieldStatus();
   });
 
-  it("requires a selectable Model Profile even with skip output policy", async () => {
+  it("requires a Model Profile even with skip output policy", async () => {
     renderRoute("/translate", false);
 
     await selectExternalSubtitle();

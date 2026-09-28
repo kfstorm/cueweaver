@@ -47,8 +47,7 @@ def add_test_profile(database: SqliteDatabase) -> None:
                 ModelProfileRow(
                     id=PROFILE_ID,
                     name="Test profile",
-                    parent_id=None,
-                    selectable=True,
+                    provider="OpenAI",
                     created_at="2026-08-13T12:00:00Z",
                     updated_at="2026-08-13T12:00:00Z",
                 )
@@ -56,9 +55,8 @@ def add_test_profile(database: SqliteDatabase) -> None:
             session.add(
                 ModelProfileSettingRow(
                     profile_id=PROFILE_ID,
-                    key="provider",
-                    kind="literal",
-                    value="OpenAI",
+                    key="model",
+                    value="synthetic-model",
                 )
             )
 
@@ -552,7 +550,7 @@ _clients_lock = threading.Lock()
 class ProfiledTestClient(TestClient):
     def post(self, url, *, json=None, **kwargs):
         # Older Job workflow cases exercise other fields; supply their shared
-        # selectable fixture explicitly on the wire.
+        # Model Profile fixture explicitly on the wire.
         if url in {"/api/jobs", "/api/jobs/batch"} and isinstance(json, dict):
             json = {"model_profile_id": PROFILE_ID, **json}
         return super().post(url, json=json, **kwargs)

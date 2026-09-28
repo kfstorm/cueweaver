@@ -18,37 +18,24 @@ test.beforeAll(async ({ request }) => {
   const response = await request.post("/api/model-profiles", {
     data: {
       name: "E2E profile",
-      parent_id: null,
-      selectable: true,
-      settings: [{ key: "provider", kind: "literal", value: "OpenAI" }],
+      provider: "OpenAI",
+      settings: [],
     },
   });
   expect(response.ok()).toBeTruthy();
   modelProfileId = (await response.json()).id as string;
 });
 
-test("adds a provider setting from the bundled reference", async ({ page }) => {
-  await page.goto("/model-profiles/new");
+test("creates a standalone profile from the provider registry", async ({ page }) => {
+  await page.goto("/settings/model-profiles/new");
   await page.getByLabel("Name").fill("Reference profile");
-
-  const keyInput = page.getByLabel(/New setting key/);
-  await keyInput.fill("provider");
-  await page.getByRole("button", { name: "Add setting" }).click();
-  await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption({
+  await page.getByRole("combobox", { name: /Provider/ }).selectOption({
     label: "OpenAI",
   });
-
-  await keyInput.fill("reasoning_effort");
-  await expect(
-    page.locator('#model-profile-setting-reference option[value="reasoning_effort"]'),
-  ).toBeAttached();
-  await page.getByRole("button", { name: "Add setting" }).click();
-  const setting = page
-    .locator(".profile-setting")
-    .filter({ hasText: "reasoning_effort" });
-  await expect(setting.getByLabel("Value type")).toHaveValue("string");
-  await expect(setting.getByLabel("Value type")).toBeEnabled();
-  await setting.getByRole("textbox").fill("custom-effort");
+  await expect(page.getByRole("link", { name: "Provider guide" })).toBeVisible();
+  await expect(page.getByText(/inherited|base profile|new setting key/i)).toHaveCount(
+    0,
+  );
 
   await page.getByRole("button", { name: "Save Model Profile" }).click();
   await expect(page.getByRole("heading", { name: "Model Profiles" })).toBeVisible();
@@ -401,11 +388,11 @@ test("mobile shell renders every product route", async ({ page }) => {
   await expectResponsiveShell(page, true);
 });
 
-test("legacy resource URLs redirect into Settings and keep profile deep links", async ({
+test("legacy resource URLs redirect into Settings and keep resource deep links", async ({
   page,
 }) => {
-  await page.goto(`/model-profiles/new?parent=${modelProfileId}`);
-  await expect(page).toHaveURL(`/settings/model-profiles/new?parent=${modelProfileId}`);
+  await page.goto("/model-profiles/new");
+  await expect(page).toHaveURL("/settings/model-profiles/new");
   await expect(
     page.getByRole("heading", { name: "Create Model Profile" }),
   ).toBeVisible();
@@ -1237,9 +1224,7 @@ test("desktop Job history keeps a long list scrollable", async ({ page }) => {
   ).toBe(true);
 });
 
-test("missing selectable Model Profiles are actionable and cannot submit", async ({
-  page,
-}) => {
+test("missing Model Profiles are actionable and cannot submit", async ({ page }) => {
   await page.route("/api/model-profiles", (route) =>
     route.fulfill({
       contentType: "application/json",

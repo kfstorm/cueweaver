@@ -120,7 +120,7 @@ class Translator:
 
 work_root = Path(sys.argv[2])
 profiles = ModelProfiles(SqliteDatabase(work_root / "cueweaver.sqlite3"))
-profile = profiles.create("Test profile", None, True, [{"key": "provider", "kind": "literal", "value": "OpenAI"}])
+profile = profiles.create("Test profile", "OpenAI", [])
 jobs = Jobs(Translator(), Path(sys.argv[1]), work_root)
 job = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh", "none", profile["id"]))
 print(job["id"], flush=True)

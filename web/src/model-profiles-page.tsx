@@ -1,80 +1,39 @@
-import { useCallback, useMemo, useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { PageHeader } from "./components/page-header";
 import { Button } from "./components/ui/button";
 import { Input, Select, Textarea } from "./components/ui/input";
 import { useI18n } from "./i18n";
 import {
+  requestModelProfileOptions,
   useDeleteModelProfile,
   useModelProfileReference,
   useModelProfiles,
   useSaveModelProfile,
   type ModelProfile,
-  type ModelProfileReference,
+  type ModelProfileOption,
   type ProfileInput,
-  type ProfileSetting,
-  type SettingReference,
 } from "./model-profiles";
 
-const empty = (parent_id: string | null = null): ProfileInput => ({
-  name: "",
-  parent_id,
-  selectable: false,
-  settings: [],
-});
-const valueType = (entry: ProfileSetting): string =>
-  entry.kind === "unset"
-    ? "unset"
-    : Array.isArray(entry.value)
-      ? "string list"
-      : entry.value !== null && typeof entry.value === "object"
-        ? "JSON"
-        : typeof entry.value === "number"
-          ? Number.isInteger(entry.value)
-            ? "integer"
-            : "number"
-          : typeof entry.value;
-const displayValue = (value: unknown): string =>
-  typeof value === "string" ? value : JSON.stringify(value);
-const inputValue = (value: unknown): string =>
-  typeof value === "string" ? value : JSON.stringify(value);
-const referenceTypeLabel = (type: string | null | undefined): string | undefined =>
-  type === "array" ? "string list" : type === "object" ? "JSON" : (type ?? undefined);
-const editorTypeForReference = (type: string | null | undefined): string => {
-  const label = referenceTypeLabel(type);
-  return ["string", "integer", "number", "boolean", "string list", "JSON"].includes(
-    label ?? "",
-  )
-    ? label!
-    : "string";
-};
-// For explicit type changes, seed number with a fraction to distinguish it
-// from integer.
-const initialValueForType = (type: string | null | undefined): unknown =>
-  type === "integer"
-    ? 0
-    : type === "number"
-      ? 0.5
-      : type === "boolean"
-        ? false
-        : type === "array" || type === "string list"
-          ? []
-          : type === "object" || type === "JSON"
-            ? {}
-            : "";
-const PROVIDER_REFERENCE: SettingReference = {
-  key: "provider",
-  type: "string",
-  description: null,
-  choices: null,
-};
+const PROVIDER_DOCS_URL =
+  "https://github.com/machinewrapped/llm-subtrans#translation-providers";
+
+const empty = (): ProfileInput => ({ name: "", provider: "", settings: [] });
 
 export function ModelProfilesPage() {
   const { t } = useI18n();
   const profiles = useModelProfiles();
   const remove = useDeleteModelProfile();
   const navigate = useNavigate();
+
   return (
     <>
       <PageHeader
@@ -93,42 +52,12 @@ export function ModelProfilesPage() {
             <div>
               <strong>{profile.name}</strong>
               <p className="field-help">
-                {t(
-                  profile.selectable
-                    ? "modelProfiles.selectable"
-                    : "modelProfiles.base",
-                )}{" "}
-                ·{" "}
-                {t("modelProfiles.parent", {
-                  name:
-                    profiles.data.find((item) => item.id === profile.parent_id)?.name ??
-                    t("modelProfiles.none"),
-                })}
-              </p>
-              <p className="field-help">
-                {t("modelProfiles.provider", {
-                  value: displayValue(
-                    profile.effective_settings.find((item) => item.key === "provider")
-                      ?.value ?? "—",
-                  ),
-                })}{" "}
-                ·{" "}
-                {t("modelProfiles.model", {
-                  value: displayValue(
-                    profile.effective_settings.find((item) => item.key === "model")
-                      ?.value ?? "—",
-                  ),
-                })}
+                {t("modelProfiles.provider", { value: profile.provider })}
               </p>
             </div>
             <div className="profile-actions">
               <Link to={`/settings/model-profiles/${profile.id}`}>
                 {t("modelProfiles.edit")}
-              </Link>
-              <Link
-                to={`/settings/model-profiles/new?parent=${encodeURIComponent(profile.id)}`}
-              >
-                {t("modelProfiles.createDerived")}
               </Link>
               <Button
                 type="button"
@@ -154,33 +83,34 @@ export function ModelProfilesPage() {
 export function ModelProfileEditor() {
   const { t } = useI18n();
   const { profileId } = useParams();
-  const location = useLocation();
   const navigate = useNavigate();
   const profiles = useModelProfiles();
   const reference = useModelProfileReference();
   const save = useSaveModelProfile();
   const current = profiles.data?.find((item) => item.id === profileId);
-  const parent = new URLSearchParams(location.search).get("parent");
+
   if (profiles.isPending) return <p role="status">{t("modelProfiles.loading")}</p>;
   if (profiles.isError) return <p role="alert">{profiles.error.message}</p>;
   if (profileId !== "new" && !current)
     return <p role="alert">{t("modelProfiles.notFound")}</p>;
+
   return (
     <ProfileForm
-      key={current?.id ?? parent ?? "new"}
+      key={current?.id ?? "new"}
       current={current}
       initial={
         current
           ? {
               name: current.name,
-              parent_id: current.parent_id,
-              selectable: current.selectable,
+              provider: current.provider,
               settings: current.settings,
             }
-          : empty(profiles.data?.some((item) => item.id === parent) ? parent : null)
+          : empty()
       }
-      profiles={profiles.data ?? []}
-      reference={reference.data}
+      providers={reference.data?.providers ?? []}
+      referencePending={reference.isPending}
+      referenceError={reference.isError ? reference.error.message : undefined}
+      retryReference={() => void reference.refetch()}
       onSave={(input) =>
         save.mutate(
           { id: current?.id, input },
@@ -196,120 +126,143 @@ export function ModelProfileEditor() {
 function ProfileForm({
   current,
   initial,
-  profiles,
-  reference,
+  providers,
+  referencePending,
+  referenceError,
+  retryReference,
   onSave,
   pending,
   error,
 }: {
   current?: ModelProfile;
   initial: ProfileInput;
-  profiles: ModelProfile[];
-  reference?: ModelProfileReference;
+  providers: string[];
+  referencePending: boolean;
+  referenceError?: string;
+  retryReference: () => void;
   onSave: (input: ProfileInput) => void;
   pending: boolean;
   error?: string;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(initial);
-  const [newKey, setNewKey] = useState("");
-  const [pendingEditorTypes, setPendingEditorTypes] = useState<Map<string, string>>(
-    () => new Map(),
+  const [options, setOptions] = useState<ModelProfileOption[]>([]);
+  const [refreshKeys, setRefreshKeys] = useState<string[]>([]);
+  const [optionsPending, setOptionsPending] = useState(Boolean(initial.provider));
+  const [optionsError, setOptionsError] = useState<string>();
+  const requestId = useRef(0);
+  const optionsRevision = useRef(0);
+  const controller = useRef<AbortController | undefined>(undefined);
+  const initialRequest = useRef(initial);
+
+  const settingsRecord = useCallback(
+    () => Object.fromEntries(draft.settings.map(({ key, value }) => [key, value])),
+    [draft.settings],
   );
-  const [parseErrors, setParseErrors] = useState<Map<string, string>>(() => new Map());
-  const setParseError = useCallback((key: string, message: string) => {
-    setParseErrors((previous) => {
-      const next = new Map(previous);
-      if (message) next.set(key, message);
-      else next.delete(key);
-      return next;
-    });
-  }, []);
-  const disallowed = useMemo(() => {
-    const descendants = new Set<string>(current ? [current.id] : []);
-    for (let i = 0; i < profiles.length; i++)
-      for (const profile of profiles)
-        if (profile.parent_id && descendants.has(profile.parent_id))
-          descendants.add(profile.id);
-    return descendants;
-  }, [current, profiles]);
-  const parentEffective =
-    profiles.find((item) => item.id === draft.parent_id)?.effective_settings ?? [];
-  const inherited = new Map(parentEffective.map((item) => [item.key, item]));
-  const local = new Map(draft.settings.map((item) => [item.key, item]));
-  const keys = [
-    ...new Set([...inherited.keys(), ...local.keys(), ...pendingEditorTypes.keys()]),
-  ].sort();
-  const localProvider = local.get("provider");
-  const providerValue =
-    localProvider?.kind === "unset"
-      ? undefined
-      : localProvider?.kind === "literal"
-        ? localProvider.value
-        : inherited.get("provider")?.value;
-  const effectiveProvider =
-    typeof providerValue === "string" ? providerValue : undefined;
-  const providerNames = Object.keys(reference?.providers ?? {});
-  const providerSettings = effectiveProvider
-    ? (reference?.providers?.[effectiveProvider] ?? [])
-    : [];
-  const addableSettings = providerSettings.filter((item) => !keys.includes(item.key));
-  if (!effectiveProvider && !keys.includes("provider")) {
-    addableSettings.unshift({
-      key: "provider",
-      type: "string",
-      description: null,
-      choices: null,
-    });
-  }
-  const selectedReference = addableSettings.find((item) => item.key === newKey.trim());
-  const change = (entry: ProfileSetting) => {
-    if (entry.kind === "unset") setParseError(entry.key, "");
-    setPendingEditorTypes((previous) => {
-      if (!previous.has(entry.key)) return previous;
-      const next = new Map(previous);
-      next.delete(entry.key);
-      return next;
-    });
+
+  const refresh = useCallback(
+    async (provider: string, settings: Record<string, unknown>) => {
+      if (!provider) return;
+      controller.current?.abort();
+      const nextController = new AbortController();
+      controller.current = nextController;
+      const id = ++requestId.current;
+      const revision = optionsRevision.current;
+      setOptionsPending(true);
+      setOptionsError(undefined);
+      try {
+        const result = await requestModelProfileOptions(
+          provider,
+          settings,
+          nextController.signal,
+        );
+        if (id !== requestId.current || revision !== optionsRevision.current) return;
+        const visible = new Set(result.options.map((option) => option.key));
+        setDraft((previous) => {
+          if (revision !== optionsRevision.current) return previous;
+          return {
+            ...previous,
+            settings: [
+              ...previous.settings.filter(
+                (setting) =>
+                  visible.has(setting.key) && !(setting.key in result.setting_updates),
+              ),
+              ...Object.entries(result.setting_updates).map(([key, value]) => ({
+                key,
+                value,
+              })),
+            ],
+          };
+        });
+        setOptions(result.options);
+        setRefreshKeys(result.refresh_when_changed);
+      } catch (caught) {
+        if (id !== requestId.current || nextController.signal.aborted) return;
+        setOptionsError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        if (id === requestId.current) setOptionsPending(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const { provider, settings } = initialRequest.current;
+    if (!provider) return;
+    void refresh(
+      provider,
+      Object.fromEntries(settings.map(({ key, value }) => [key, value])),
+    );
+    return () => controller.current?.abort();
+  }, [refresh]);
+
+  const explicit = new Map(
+    draft.settings.map((setting) => [setting.key, setting.value]),
+  );
+  const setSetting = (key: string, value: unknown) => {
+    if (refreshKeys.includes(key)) optionsRevision.current += 1;
     setDraft((previous) => ({
       ...previous,
-      settings: [...previous.settings.filter((item) => item.key !== entry.key), entry],
+      settings: [
+        ...previous.settings.filter((setting) => setting.key !== key),
+        { key, value },
+      ],
     }));
   };
-  const remove = (key: string) => {
-    setParseError(key, "");
-    setPendingEditorTypes((previous) => {
-      if (!previous.has(key)) return previous;
-      const next = new Map(previous);
-      next.delete(key);
-      return next;
-    });
+  const clearSetting = (key: string) => {
+    if (refreshKeys.includes(key)) optionsRevision.current += 1;
     setDraft((previous) => ({
       ...previous,
-      settings: previous.settings.filter((item) => item.key !== key),
+      settings: previous.settings.filter((setting) => setting.key !== key),
     }));
+  };
+  const refreshAfterChange = (key: string, value?: unknown) => {
+    if (!refreshKeys.includes(key)) return;
+    const settings = settingsRecord();
+    if (value === undefined || value === "") delete settings[key];
+    else settings[key] = value;
+    void refresh(draft.provider, settings);
+  };
+  const changeProvider = (provider: string) => {
+    if (
+      draft.settings.length > 0 &&
+      !window.confirm(t("modelProfiles.providerChangeConfirm"))
+    )
+      return;
+    optionsRevision.current += 1;
+    controller.current?.abort();
+    ++requestId.current;
+    setOptions([]);
+    setRefreshKeys([]);
+    setOptionsError(undefined);
+    setDraft((previous) => ({ ...previous, provider, settings: [] }));
+    void refresh(provider, {});
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pending || parseErrors.size > 0 || pendingEditorTypes.size > 0) return;
-    onSave(draft);
+    if (!pending) onSave(draft);
   };
-  const addSetting = () => {
-    const key = newKey.trim();
-    if (!key || keys.includes(key)) return;
-    const settingReference =
-      key === "provider"
-        ? PROVIDER_REFERENCE
-        : providerSettings.find((item) => item.key === key);
-    if (settingReference) {
-      setPendingEditorTypes((previous) =>
-        new Map(previous).set(key, editorTypeForReference(settingReference.type)),
-      );
-    } else {
-      change({ key, kind: "literal", value: "" });
-    }
-    setNewKey("");
-  };
+
   return (
     <>
       <PageHeader
@@ -330,222 +283,84 @@ function ProfileForm({
           />
         </label>
         <label>
-          {t("modelProfiles.parentField")}
+          <span className="profile-label-heading">
+            {t("modelProfiles.providerValue")}
+            <a href={PROVIDER_DOCS_URL} target="_blank" rel="noreferrer">
+              {t("modelProfiles.providerDocs")}
+            </a>
+          </span>
           <Select
-            value={draft.parent_id ?? ""}
-            onChange={(event) =>
-              setDraft({ ...draft, parent_id: event.target.value || null })
-            }
+            required
+            value={draft.provider}
+            disabled={referencePending || !!referenceError}
+            onChange={(event) => changeProvider(event.target.value)}
           >
-            <option value="">{t("modelProfiles.none")}</option>
-            {profiles
-              .filter((item) => !disallowed.has(item.id))
-              .map((item) => (
-                <option value={item.id} key={item.id}>
-                  {item.name}
-                </option>
-              ))}
+            <option value="" disabled>
+              {t("modelProfiles.chooseProvider")}
+            </option>
+            {providers.map((provider) => (
+              <option value={provider} key={provider}>
+                {provider}
+              </option>
+            ))}
           </Select>
         </label>
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
-            checked={!draft.selectable}
-            onChange={(event) =>
-              setDraft({ ...draft, selectable: !event.target.checked })
-            }
-          />
-          {t("modelProfiles.baseControl")}
-        </label>
-        <h2>{t("modelProfiles.settings")}</h2>
-        <p className="field-help">{t("modelProfiles.removeHelp")}</p>
-        {keys.map((key) => {
-          const entry = local.get(key);
-          const parentEntry = inherited.get(key);
-          const pendingEditorType = pendingEditorTypes.get(key);
-          const settingReference =
-            key === "provider"
-              ? PROVIDER_REFERENCE
-              : providerSettings.find((item) => item.key === key);
-          const typeEntry =
-            entry?.kind === "literal"
-              ? entry
-              : !entry && parentEntry
-                ? { key, kind: "literal" as const, value: parentEntry.value }
-                : undefined;
-          const effective =
-            entry?.kind === "unset"
-              ? undefined
-              : entry?.kind === "literal"
-                ? entry.value
-                : parentEntry?.value;
-          return (
-            <div className="profile-setting" key={key}>
-              <div>
-                <strong>{key}</strong>{" "}
-                <span className="field-help">
-                  {entry
-                    ? entry.kind === "unset"
-                      ? t("modelProfiles.unsetLocally")
-                      : t("modelProfiles.local")
-                    : pendingEditorType !== undefined
-                      ? t("modelProfiles.local")
-                      : t("modelProfiles.inheritedFrom", {
-                          name: parentEntry?.source.name ?? "",
-                        })}{" "}
-                  ·{" "}
-                  {pendingEditorType ??
-                    (typeEntry
-                      ? valueType(typeEntry)
-                      : entry?.kind === "unset"
-                        ? "unset"
-                        : "")}
-                </span>
-                {settingReference?.description && (
-                  <p className="field-help profile-setting-description">
-                    {settingReference.description}
-                  </p>
-                )}
-                {settingReference?.type && (
-                  <p className="field-help">
-                    {t("modelProfiles.pysubtransType", {
-                      type:
-                        referenceTypeLabel(settingReference.type) ??
-                        settingReference.type,
-                    })}
-                  </p>
-                )}
-              </div>
-              <span className="profile-value">
-                {pendingEditorType !== undefined
-                  ? t("modelProfiles.chooseValue")
-                  : effective === undefined
-                    ? t("modelProfiles.unset")
-                    : displayValue(effective)}
-              </span>
-              {entry ? (
-                <>
-                  <Button type="button" variant="outline" onClick={() => remove(key)}>
-                    {t("modelProfiles.removeLocal")}
-                  </Button>
-                  {entry.kind !== "unset" && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => change({ key, kind: "unset", value: null })}
-                    >
-                      {t("modelProfiles.unset")}
-                    </Button>
-                  )}
-                </>
-              ) : pendingEditorType !== undefined ? (
-                <Button type="button" variant="outline" onClick={() => remove(key)}>
-                  {t("modelProfiles.removeLocal")}
-                </Button>
-              ) : (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      change({ key, kind: "literal", value: parentEntry?.value ?? "" })
-                    }
-                  >
-                    {t("modelProfiles.override")}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => change({ key, kind: "unset", value: null })}
-                  >
-                    {t("modelProfiles.unset")}
-                  </Button>
-                </>
-              )}
-              {(entry?.kind === "literal" || pendingEditorType !== undefined) && (
-                <LiteralEditor
-                  entry={
-                    entry?.kind === "literal"
-                      ? entry
-                      : { key, kind: "literal", value: "" }
-                  }
-                  pendingType={pendingEditorType}
-                  reference={settingReference}
-                  providerNames={providerNames}
-                  onChange={change}
-                  onError={setParseError}
-                  onPendingTypeChange={(settingKey, type) =>
-                    setPendingEditorTypes((previous) =>
-                      new Map(previous).set(settingKey, type),
-                    )
-                  }
-                />
-              )}
-            </div>
-          );
-        })}
-        <div className="profile-add">
-          <label>
-            {t("modelProfiles.newKey")}
-            <Input
-              list="model-profile-setting-reference"
-              autoComplete="off"
-              value={newKey}
-              onChange={(event) => setNewKey(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  addSetting();
-                }
-              }}
-              aria-describedby="model-profile-setting-help"
-            />
-            <datalist id="model-profile-setting-reference">
-              {addableSettings.map((item) => (
-                <option
-                  key={item.key}
-                  value={item.key}
-                  label={`${item.type ?? ""}${item.description ? ` · ${item.description}` : ""}`}
-                />
-              ))}
-            </datalist>
-            {selectedReference && (
-              <span className="field-help" role="status">
-                {referenceTypeLabel(selectedReference.type) ??
-                  t("modelProfiles.valueType")}
-                {selectedReference.description
-                  ? ` · ${selectedReference.description}`
-                  : ""}
-              </span>
+        {referencePending && <p role="status">{t("modelProfiles.referenceLoading")}</p>}
+        {referenceError && (
+          <div className="field-recovery">
+            <p role="alert" className="form-error">
+              {t("modelProfiles.referenceError")}: {referenceError}
+            </p>
+            <Button type="button" variant="outline" onClick={retryReference}>
+              {t("common.tryAgain")}
+            </Button>
+          </div>
+        )}
+        {draft.provider && (
+          <section className="profile-options" aria-labelledby="profile-options-title">
+            <h2 id="profile-options-title">{t("modelProfiles.settings")}</h2>
+            {options.map((option) => (
+              <OptionField
+                key={option.key}
+                option={option}
+                explicitValue={explicit.get(option.key)}
+                isExplicit={explicit.has(option.key)}
+                onChange={(value) => setSetting(option.key, value)}
+                onClear={() => {
+                  clearSetting(option.key);
+                  refreshAfterChange(option.key);
+                }}
+                onRefresh={(value) => refreshAfterChange(option.key, value)}
+              />
+            ))}
+            {optionsPending && (
+              <p className="field-help" role="status">
+                {t("modelProfiles.optionsLoading")}
+              </p>
             )}
-            <span id="model-profile-setting-help" className="field-help">
-              {t("modelProfiles.settingSuggestionHelp")}
-            </span>
-          </label>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!newKey.trim() || keys.includes(newKey.trim())}
-            onClick={addSetting}
-          >
-            {t("modelProfiles.addSetting")}
-          </Button>
-        </div>
-        {[...parseErrors].map(([key, message]) => (
-          <p key={key} role="alert" className="form-error">
-            {message}
-          </p>
-        ))}
+            {optionsError && (
+              <div className="field-recovery">
+                <p role="alert" className="form-error">
+                  {t("modelProfiles.optionsError")}: {optionsError}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void refresh(draft.provider, settingsRecord())}
+                >
+                  {t("modelProfiles.retryOptions")}
+                </Button>
+              </div>
+            )}
+          </section>
+        )}
         {error && (
           <p role="alert" className="form-error">
             {error}
           </p>
         )}
         <div className="profile-actions">
-          <Button
-            type="submit"
-            disabled={pending || parseErrors.size > 0 || pendingEditorTypes.size > 0}
-          >
+          <Button type="submit" disabled={pending || !draft.provider}>
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
           <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
@@ -555,148 +370,114 @@ function ProfileForm({
   );
 }
 
-function LiteralEditor({
-  entry,
-  pendingType,
-  reference,
-  providerNames,
+function OptionField({
+  option,
+  explicitValue,
+  isExplicit,
   onChange,
-  onError,
-  onPendingTypeChange,
+  onClear,
+  onRefresh,
 }: {
-  entry: ProfileSetting;
-  pendingType?: string;
-  reference?: SettingReference;
-  providerNames: string[];
-  onChange: (entry: ProfileSetting) => void;
-  onError: (key: string, message: string) => void;
-  onPendingTypeChange: (key: string, type: string) => void;
+  option: ModelProfileOption;
+  explicitValue: unknown;
+  isExplicit: boolean;
+  onChange: (value: unknown) => void;
+  onClear: () => void;
+  onRefresh: (value?: unknown) => void;
 }) {
   const { t } = useI18n();
-  const [raw, setRaw] = useState(inputValue(entry.value));
-  const [editorType, setEditorType] = useState(() => pendingType ?? valueType(entry));
-  const isKnownProvider =
-    entry.key === "provider" && providerNames.length > 0 && editorType === "string";
-  const choices = reference?.choices?.length ? reference.choices : undefined;
-  const changeType = (next: string) => {
-    setEditorType(next);
-    onError(entry.key, "");
-    if (pendingType !== undefined) {
-      setRaw("");
-      onPendingTypeChange(entry.key, next);
-      return;
-    }
-    const value = initialValueForType(next);
-    setRaw(inputValue(value));
-    onChange({ ...entry, value });
-  };
-  const changeRaw = (text: string) => {
-    setRaw(text);
-    try {
-      let value: unknown = text;
-      if (editorType === "integer" || editorType === "number") {
-        value = Number(text);
-        if (
-          !text.trim() ||
-          !Number.isFinite(value) ||
-          (editorType === "integer" && !Number.isInteger(value))
-        )
-          throw new Error("Enter a valid number");
-      } else if (editorType === "string list" || editorType === "JSON") {
-        value = JSON.parse(text);
-        if (
-          editorType === "string list" &&
-          (!Array.isArray(value) || !value.every((item) => typeof item === "string"))
-        )
-          throw new Error("Enter a JSON array of strings");
-        if (
-          editorType === "JSON" &&
-          (value === null || typeof value !== "object" || Array.isArray(value))
-        )
-          throw new Error("Enter a JSON object");
-      }
-      onError(entry.key, "");
-      onChange({ ...entry, value });
-    } catch {
-      onError(
-        entry.key,
-        t("modelProfiles.invalidValue", { type: editorType, key: entry.key }),
+  const displayed = isExplicit ? explicitValue : undefined;
+  const clearEmpty = (value: string) => {
+    if (value === "") onClear();
+    else
+      onChange(
+        option.type === "integer"
+          ? Number.parseInt(value, 10)
+          : option.type === "number"
+            ? Number(value)
+            : value,
       );
+  };
+  const refreshOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onRefresh(isExplicit ? explicitValue : undefined);
     }
   };
+
   return (
-    <div className="profile-editor">
-      <label>
-        {t("modelProfiles.valueType")}
-        <Select value={editorType} onChange={(event) => changeType(event.target.value)}>
-          {["string", "integer", "number", "boolean", "string list", "JSON"].map(
-            (item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ),
-          )}
-        </Select>
-      </label>
-      {isKnownProvider ? (
-        <label>
-          {t("modelProfiles.providerValue")}
+    <div className="profile-option">
+      <label htmlFor={`profile-option-${option.key}`}>{option.key}</label>
+      {option.description && <p className="field-help">{option.description}</p>}
+      <div className="profile-option-control">
+        {option.type === "boolean" || option.type === "choice" ? (
           <Select
-            value={typeof entry.value === "string" ? entry.value : ""}
+            id={`profile-option-${option.key}`}
+            value={isExplicit ? String(explicitValue) : ""}
             onChange={(event) => {
-              onError(entry.key, "");
-              onChange({ ...entry, value: event.target.value });
+              const selected = event.target.value;
+              if (selected === "") {
+                onClear();
+                onRefresh();
+                return;
+              }
+              const value = option.type === "boolean" ? selected === "true" : selected;
+              onChange(value);
+              onRefresh(value);
             }}
           >
-            <option value="" disabled>
-              {t("modelProfiles.chooseProvider")}
-            </option>
-            {typeof entry.value === "string" &&
-              entry.value &&
-              !providerNames.includes(entry.value) && (
-                <option value={entry.value}>{entry.value}</option>
-              )}
-            {providerNames.map((provider) => (
-              <option key={provider} value={provider}>
-                {provider}
-              </option>
-            ))}
-          </Select>
-        </label>
-      ) : editorType === "boolean" ? (
-        <label>
-          {t("modelProfiles.value")}
-          <Select
-            value={String(entry.value)}
-            onChange={(event) => {
-              onError(entry.key, "");
-              onChange({ ...entry, value: event.target.value === "true" });
-            }}
-          >
-            {String(entry.value) === "" && (
-              <option value="" disabled>
-                {t("modelProfiles.chooseValue")}
-              </option>
+            <option value="">{t("modelProfiles.useDefault")}</option>
+            {option.type === "boolean" ? (
+              <>
+                <option value="true">{t("jobs.enabled")}</option>
+                <option value="false">{t("jobs.disabled")}</option>
+              </>
+            ) : (
+              <>
+                {isExplicit &&
+                  typeof explicitValue === "string" &&
+                  !(option.choices ?? []).includes(explicitValue) && (
+                    <option value={explicitValue}>{explicitValue}</option>
+                  )}
+                {(option.choices ?? []).map((choice) => (
+                  <option value={choice} key={choice}>
+                    {choice}
+                  </option>
+                ))}
+              </>
             )}
-            <option value="true">{t("modelProfiles.true")}</option>
-            <option value="false">{t("modelProfiles.false")}</option>
           </Select>
-        </label>
-      ) : (
-        <label>
-          {t("modelProfiles.value")}
-          {editorType === "JSON" || editorType === "string list" ? (
-            <Textarea value={raw} onChange={(event) => changeRaw(event.target.value)} />
-          ) : (
-            <Input value={raw} onChange={(event) => changeRaw(event.target.value)} />
-          )}
-          {choices && (
-            <span className="field-help">
-              {t("modelProfiles.staticChoicesHelp", { values: choices.join(", ") })}
-            </span>
-          )}
-        </label>
-      )}
+        ) : option.type === "multiline" ? (
+          <Textarea
+            id={`profile-option-${option.key}`}
+            value={String(displayed ?? "")}
+            onChange={(event) => clearEmpty(event.target.value)}
+            onBlur={() => onRefresh(isExplicit ? explicitValue : undefined)}
+          />
+        ) : (
+          <Input
+            id={`profile-option-${option.key}`}
+            type={option.type === "string" ? "text" : "number"}
+            step={
+              option.type === "integer"
+                ? "1"
+                : option.type === "number"
+                  ? "any"
+                  : undefined
+            }
+            value={String(displayed ?? "")}
+            onChange={(event) => clearEmpty(event.target.value)}
+            onBlur={() => onRefresh(isExplicit ? explicitValue : undefined)}
+            onKeyDown={refreshOnEnter}
+          />
+        )}
+        {isExplicit && option.type !== "boolean" && option.type !== "choice" && (
+          <Button type="button" variant="outline" onClick={onClear}>
+            {t("modelProfiles.useDefault")}
+          </Button>
+        )}
+      </div>
+      {!isExplicit && <p className="field-help">{t("modelProfiles.runtimeDefault")}</p>}
     </div>
   );
 }

@@ -10,167 +10,116 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { I18nProvider, setActiveLocale, translate } from "../src/i18n";
+import { I18nProvider } from "../src/i18n";
 import { ModelProfileEditor } from "../src/model-profiles-page";
-import type { ModelProfile, ModelProfileReference } from "../src/model-profiles";
+import type { ModelProfile, ModelProfileOptions } from "../src/model-profiles";
 import { ThemeProvider } from "../src/theme-provider";
 
-const REFERENCE: ModelProfileReference = {
-  pysubtrans_version: "1.6.0",
-  providers: {
-    DeepSeek: [
-      {
-        key: "api_key",
-        type: "string",
-        description: "Synthetic DeepSeek key description",
-        choices: null,
-      },
-      {
-        key: "temperature",
-        type: "number",
-        description: "Synthetic temperature description",
-        choices: null,
-      },
-      {
-        key: "deepseek_limit",
-        type: "number",
-        description: "Synthetic DeepSeek-only setting",
-        choices: null,
-      },
-      { key: "model", type: "string", description: "Model description", choices: null },
-    ],
-    OpenAI: [
-      {
-        key: "api_key",
-        type: "string",
-        description: "Synthetic OpenAI key description",
-        choices: null,
-      },
-      {
-        key: "model",
-        type: "string",
-        description: "Model description",
-        choices: null,
-      },
-      {
-        key: "temperature",
-        type: "number",
-        description: "Synthetic temperature description",
-        choices: null,
-      },
-      {
-        key: "reasoning_effort",
-        type: "string",
-        description: "Synthetic reasoning description",
-        choices: ["none", "low", "high"],
-      },
-      {
-        key: "free_plan",
-        type: "boolean",
-        description: null,
-        choices: null,
-      },
-    ],
-  },
+const existing: ModelProfile = {
+  id: "profile-1",
+  name: "Synthetic profile",
+  provider: "OpenAI",
+  deletable: true,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  settings: [{ key: "temperature", value: 0.4 }],
 };
 
-function profile(
-  id: string,
-  parentId: string | null,
-  settings: ModelProfile["settings"],
-  effectiveSettings: ModelProfile["effective_settings"],
-): ModelProfile {
-  return {
-    id,
-    name: id,
-    parent_id: parentId,
-    selectable: false,
-    deletable: true,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-    settings,
-    effective_settings: effectiveSettings,
+const options = (provider = "OpenAI"): ModelProfileOptions => ({
+  provider,
+  options: [
+    {
+      key: "model",
+      type: "string",
+      description: "Model name",
+      choices: null,
+    },
+    { key: "retries", type: "integer", description: null, choices: null },
+    {
+      key: "temperature",
+      type: "number",
+      description: null,
+      choices: null,
+    },
+    { key: "stream", type: "boolean", description: null, choices: null },
+    {
+      key: "effort",
+      type: "choice",
+      description: null,
+      choices: ["low", "high"],
+    },
+    {
+      key: "prompt_template",
+      type: "multiline",
+      description: null,
+      choices: null,
+    },
+  ],
+  refresh_when_changed: ["model", "stream", "effort"],
+  setting_updates: {},
+});
+
+function response(body: unknown, ok = true) {
+  return { ok, json: async () => body };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function optionsWithPendingSecondRequest(
+  pending: ReturnType<typeof deferred<ReturnType<typeof response>>>,
+) {
+  let calls = 0;
+  return async () => {
+    calls += 1;
+    return calls === 2 ? pending.promise : response(options());
   };
 }
 
-function existingStringTemperatureProfile(): ModelProfile {
-  const source = { id: "existing", name: "existing" };
-  return profile(
-    "existing",
-    null,
-    [
-      { key: "provider", kind: "literal", value: "OpenAI" },
-      { key: "temperature", kind: "literal", value: "0.5" },
-    ],
-    [
-      { key: "provider", value: "OpenAI", source },
-      { key: "temperature", value: "0.5", source },
-    ],
-  );
-}
-
-function existingIntegerProviderProfile(): ModelProfile {
-  const source = { id: "base", name: "base" };
-  return profile(
-    "base",
-    null,
-    [{ key: "provider", kind: "literal", value: 123 }],
-    [{ key: "provider", value: 123, source }],
-  );
-}
-
-function existingCustomStringProviderProfile(): ModelProfile {
-  const source = { id: "base", name: "base" };
-  return profile(
-    "base",
-    null,
-    [{ key: "provider", kind: "literal", value: "OldCustomProvider" }],
-    [{ key: "provider", value: "OldCustomProvider", source }],
-  );
-}
-
-const inheritedOpenAiProvider = {
-  key: "provider",
-  value: "OpenAI",
-  source: { id: "base", name: "base" },
-};
-
-const inheritedModel = {
-  key: "model",
-  value: "synthetic-model",
-  source: { id: "base", name: "base" },
-};
-
-function renderEditor(
-  path: string,
-  profiles: ModelProfile[] = [],
-  referenceResponse: Promise<ModelProfileReference> = Promise.resolve(REFERENCE),
-) {
-  const saves: Array<{ method: string; body: Record<string, unknown> }> = [];
-  const fetchMock = vi
-    .fn()
-    .mockImplementation(async (input: string, init?: RequestInit) => {
-      if (input === "/api/model-profiles" && !init?.method) {
-        return jsonResponse({ model_profiles: profiles });
-      }
-      if (input === "/api/model-profile-reference") {
-        return jsonResponse(await referenceResponse);
-      }
-      if (input.startsWith("/api/model-profiles") && init?.method) {
-        saves.push({
-          method: init.method,
-          body: JSON.parse(String(init.body)) as Record<string, unknown>,
-        });
-        return jsonResponse({ id: "saved-profile" });
-      }
-      return jsonResponse({});
-    });
-  vi.stubGlobal("fetch", fetchMock);
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+function renderEditor({
+  path = "/model-profiles/new",
+  profiles = [],
+  referenceHandler,
+  optionsHandler,
+}: {
+  path?: string;
+  profiles?: ModelProfile[];
+  referenceHandler?: () => Promise<ReturnType<typeof response>>;
+  optionsHandler?: (init: RequestInit) => Promise<ReturnType<typeof response>>;
+} = {}) {
+  const saves: Record<string, unknown>[] = [];
+  const optionRequests: Record<string, unknown>[] = [];
+  const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/model-profiles" && !init?.method)
+      return response({ model_profiles: profiles });
+    if (input === "/api/model-profile-reference")
+      return referenceHandler
+        ? referenceHandler()
+        : response({ pysubtrans_version: "2.0", providers: ["OpenAI", "DeepSeek"] });
+    if (input === "/api/model-profile-options") {
+      optionRequests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return optionsHandler ? optionsHandler(init!) : response(options());
+    }
+    if (input.startsWith("/api/model-profiles") && init?.method) {
+      saves.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return response(existing);
+    }
+    throw new Error(`Unexpected request: ${input}`);
   });
+  vi.stubGlobal("fetch", fetchMock);
   render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider
+      client={
+        new QueryClient({
+          defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        })
+      }
+    >
       <ThemeProvider>
         <I18nProvider>
           <MemoryRouter initialEntries={[path]}>
@@ -179,7 +128,6 @@ function renderEditor(
                 path="/model-profiles/:profileId"
                 element={<ModelProfileEditor />}
               />
-              <Route path="/model-profiles" element={<div />} />
               <Route path="/settings/model-profiles" element={<div />} />
             </Routes>
           </MemoryRouter>
@@ -187,503 +135,449 @@ function renderEditor(
       </ThemeProvider>
     </QueryClientProvider>,
   );
-  return { fetchMock, saves };
+  return { fetchMock, optionRequests, saves };
 }
 
-function jsonResponse(body: unknown, ok = true) {
-  return { ok, json: async () => body };
-}
-
-async function addSetting(key: string) {
-  const keyInput = await screen.findByLabelText(/New setting key/);
-  fireEvent.change(keyInput, { target: { value: key } });
-  fireEvent.click(screen.getByRole("button", { name: "Add setting" }));
-  return keyInput;
-}
-
-async function addProvider(name: string) {
-  await addSetting("provider");
-  fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-    target: { value: name },
+async function selectProvider(provider = "OpenAI") {
+  fireEvent.change(await screen.findByRole("combobox", { name: /Provider/ }), {
+    target: { value: provider },
   });
-}
-
-async function settingRow(key: string): Promise<HTMLElement> {
-  await screen.findByLabelText(/New setting key/);
-  const row = [...document.querySelectorAll<HTMLElement>(".profile-setting")].find(
-    (item) => item.textContent?.includes(key),
-  );
-  if (!row) throw new Error(`Setting ${key} was not rendered`);
-  return row;
-}
-
-async function expectSavedLiteralSetting(
-  saves: Array<{ method: string; body: Record<string, unknown> }>,
-  key: string,
-  value: unknown,
-) {
-  await waitFor(() => expect(saves).toHaveLength(1));
-  expect(saves[0].body).toMatchObject({
-    settings: expect.arrayContaining([{ key, kind: "literal", value }]),
-  });
+  await screen.findByLabelText("model");
 }
 
 afterEach(() => {
   cleanup();
-  setActiveLocale("en");
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-describe("Model Profile setting references", () => {
-  it("adds provider, reference and custom settings, then saves the existing schema", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
-    const keyInput = await screen.findByLabelText(/New setting key/);
-    const suggestions = document.getElementById("model-profile-setting-reference");
-    expect(suggestions?.querySelector('option[value="provider"]')).toBeInTheDocument();
+describe("standalone Model Profile editor", () => {
+  it("shows provider registry loading and retries an error", async () => {
+    const first = deferred<ReturnType<typeof response>>();
+    let calls = 0;
+    renderEditor({
+      referenceHandler: async () => {
+        calls += 1;
+        return calls === 1
+          ? first.promise
+          : response({ pysubtrans_version: "2.0", providers: ["OpenAI"] });
+      },
+    });
 
-    await addProvider("OpenAI");
-    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("provider"),
-    )!;
-    expect(within(providerRow).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(providerRow).getByLabelText("Value type")).toBeEnabled();
-    expect(keyInput).toHaveValue("");
+    expect(await screen.findByText("Loading provider registry…")).toBeInTheDocument();
+    first.resolve(response({ message: "Registry unavailable" }, false));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Registry unavailable");
 
-    await addSetting("api_key");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(calls).toBe(2));
+    expect(await screen.findByRole("combobox", { name: /Provider/ })).toBeEnabled();
+  });
+
+  it("uses the provider registry and renders each runtime option type", async () => {
+    renderEditor();
+    const provider = await screen.findByRole("combobox", { name: /Provider/ });
     expect(
-      await screen.findByText("Synthetic OpenAI key description"),
-    ).toBeInTheDocument();
-    const settingRows = document.querySelectorAll(".profile-setting");
-    const apiKeyRow = [...settingRows].find((row) =>
-      row.textContent?.includes("api_key"),
+      within(provider)
+        .getAllByRole("option")
+        .map((item) => item.textContent),
+    ).toEqual(["Choose a provider", "OpenAI", "DeepSeek"]);
+    fireEvent.change(provider, { target: { value: "OpenAI" } });
+
+    expect(await screen.findByLabelText("model")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("retries")).toHaveAttribute("type", "number");
+    expect(screen.getByLabelText("temperature")).toHaveAttribute("step", "any");
+    expect(screen.getByLabelText("stream").tagName).toBe("SELECT");
+    expect(screen.getByLabelText("effort").tagName).toBe("SELECT");
+    expect(screen.getByLabelText("prompt_template").tagName).toBe("TEXTAREA");
+    expect(screen.getByRole("link", { name: "Provider guide" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("#translation-providers"),
     );
-    expect(apiKeyRow).toBeTruthy();
-    expect(within(apiKeyRow as HTMLElement).getByLabelText("Value type")).toHaveValue(
-      "string",
-    );
-    fireEvent.change(within(apiKeyRow as HTMLElement).getByLabelText("Value"), {
-      target: { value: "synthetic-key" },
+    expect(
+      screen.queryByText(/inherit|unset|custom key|value type/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps runtime defaults sparse and creates or removes explicit settings", async () => {
+    const { saves } = renderEditor();
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "New profile" },
+    });
+    await selectProvider();
+    expect(screen.getByLabelText("model")).toHaveValue("");
+    expect(screen.getByLabelText("retries")).toHaveValue(null);
+    expect(screen.getByLabelText("temperature")).toHaveValue(null);
+    expect(screen.getByLabelText("prompt_template")).toHaveValue("");
+    expect(screen.getByLabelText("effort")).toHaveValue("");
+    expect(screen.getByLabelText("stream")).toHaveValue("");
+    expect(
+      screen.queryByRole("button", { name: "Use default" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("model"), {
+      target: { value: "custom-model" },
+    });
+    expect(screen.getByRole("button", { name: "Use default" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "true" },
+    });
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByLabelText("temperature"), {
+      target: { value: "0.25" },
+    });
+    fireEvent.change(screen.getByLabelText("retries"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("retries"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toEqual({
+      name: "New profile",
+      provider: "OpenAI",
+      settings: [{ key: "temperature", value: 0.25 }],
+    });
+  });
+
+  it("keeps an explicit choice that is absent from runtime choices", async () => {
+    const profile: ModelProfile = {
+      ...existing,
+      settings: [{ key: "effort", value: "retired-choice" }],
+    };
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [profile],
     });
 
-    await addSetting("custom_flag");
-    const customRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("custom_flag"),
-    );
-    expect(customRow).toBeTruthy();
-    fireEvent.change(within(customRow as HTMLElement).getByLabelText("Value type"), {
-      target: { value: "boolean" },
-    });
-
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
-    });
+    expect(await screen.findByLabelText("effort")).toHaveValue("retired-choice");
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0].method).toBe("POST");
-    expect(saves[0].body).toMatchObject({
-      name: "Synthetic profile",
-      settings: expect.arrayContaining([
-        { key: "provider", kind: "literal", value: "OpenAI" },
-        { key: "api_key", kind: "literal", value: "synthetic-key" },
-        { key: "custom_flag", kind: "literal", value: false },
-      ]),
-    });
+    expect(saves[0].settings).toEqual([{ key: "effort", value: "retired-choice" }]);
   });
 
-  it("uses inherited provider suggestions and updates them after provider override", async () => {
-    const base = profile("base", null, [], [inheritedOpenAiProvider, inheritedModel]);
-    const child = profile(
-      "child",
-      "base",
-      [],
-      [inheritedOpenAiProvider, inheritedModel],
-    );
-    renderEditor("/model-profiles/child", [base, child]);
-
-    const keyInput = await screen.findByLabelText(/New setting key/);
-    const datalist = document.getElementById("model-profile-setting-reference")!;
-    await waitFor(() => {
-      expect(
-        [...datalist.querySelectorAll("option")].map((option) => option.value),
-      ).toContain("reasoning_effort");
+  it("loads and saves existing explicit settings without option value echoes", async () => {
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [existing],
     });
-    expect(
-      [...datalist.querySelectorAll("option")].map((option) => option.value),
-    ).not.toContain("model");
 
-    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("provider"),
-    )!;
-    fireEvent.click(within(providerRow).getByRole("button", { name: "Override" }));
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-      target: { value: "DeepSeek" },
-    });
-    await waitFor(() => {
-      expect(
-        [...datalist.querySelectorAll("option")].map((option) => option.value),
-      ).toContain("temperature");
-    });
-    expect(
-      [...datalist.querySelectorAll("option")].map((option) => option.value),
-    ).not.toContain("reasoning_effort");
-    expect(keyInput).toHaveValue("");
-  });
-
-  it("preserves an existing value whose type differs from the provider reference", async () => {
-    const current = existingStringTemperatureProfile();
-    const { saves } = renderEditor("/model-profiles/existing", [current]);
-
-    const row = await settingRow("temperature");
-    const type = within(row).getByLabelText("Value type");
-    expect(type).toHaveValue("string");
-    expect(type).toBeEnabled();
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
-    );
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Existing profile" },
-    });
+    expect(await screen.findByLabelText("temperature")).toHaveValue(0.4);
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "temperature", "0.5");
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "temperature", value: 0.4 }]);
   });
 
-  it("converts a mismatched existing setting only after the user changes its type", async () => {
-    const current = existingStringTemperatureProfile();
-    const { saves } = renderEditor("/model-profiles/existing", [current]);
+  it.each([
+    ["true", true],
+    ["false", false],
+  ])(
+    "persists an explicit boolean %s separately from runtime default",
+    async (selection, expected) => {
+      const { saves } = renderEditor();
+      fireEvent.change(await screen.findByLabelText("Name"), {
+        target: { value: "Boolean profile" },
+      });
+      await selectProvider();
+      fireEvent.change(screen.getByLabelText("stream"), {
+        target: { value: selection },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
 
-    const row = await settingRow("temperature");
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "number" },
+      await waitFor(() => expect(saves).toHaveLength(1));
+      expect(saves[0].settings).toEqual([{ key: "stream", value: expected }]);
+    },
+  );
+
+  it("refreshes text on blur or Enter and boolean or choice immediately", async () => {
+    const { optionRequests } = renderEditor();
+    await selectProvider();
+    expect(optionRequests).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText("model"), {
+      target: { value: "typed-model" },
     });
-    expect(within(row).getByLabelText("Value type")).toHaveValue("number");
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
-    );
-    fireEvent.change(within(row).getByLabelText("Value"), {
-      target: { value: "0.5" },
+    expect(optionRequests).toHaveLength(1);
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() => expect(optionRequests).toHaveLength(2));
+    expect(optionRequests[1]).toEqual({
+      provider: "OpenAI",
+      settings: { model: "typed-model" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "temperature", 0.5);
+    fireEvent.change(screen.getByLabelText("model"), {
+      target: { value: "entered-model" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("model"), { key: "Enter" });
+    await waitFor(() => expect(optionRequests).toHaveLength(3));
+    expect(optionRequests[2]).toEqual({
+      provider: "OpenAI",
+      settings: { model: "entered-model" },
+    });
+
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "false" },
+    });
+    await waitFor(() => expect(optionRequests).toHaveLength(4));
+    expect(optionRequests[3]).toMatchObject({
+      settings: { model: "entered-model", stream: false },
+    });
+    fireEvent.change(screen.getByLabelText("effort"), { target: { value: "high" } });
+    await waitFor(() => expect(optionRequests).toHaveLength(5));
+    expect(optionRequests[4]).toMatchObject({
+      settings: { model: "entered-model", stream: false, effort: "high" },
+    });
   });
 
-  it("allows custom values for settings with static choice suggestions", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
+  it("ignores a stale options response after the provider changes", async () => {
+    const first = deferred<ReturnType<typeof response>>();
+    let calls = 0;
+    renderEditor({
+      optionsHandler: async () => {
+        calls += 1;
+        if (calls === 1) return first.promise;
+        return response({
+          provider: "DeepSeek",
+          options: [
+            {
+              key: "deepseek_model",
+              type: "string",
+              description: null,
+              choices: null,
+            },
+          ],
+          refresh_when_changed: [],
+          setting_updates: {},
+        });
+      },
     });
-    await addProvider("OpenAI");
-    await addSetting("reasoning_effort");
-
-    const row = await settingRow("reasoning_effort");
-    expect(within(row).getByLabelText("Value type")).toBeEnabled();
-    const value = within(row).getByRole("textbox");
-    expect(value.tagName).toBe("INPUT");
-    expect(row).toHaveTextContent(/none.*low.*high/);
-    expect(row.querySelector(".profile-editor .field-help")).toBeInTheDocument();
-    fireEvent.change(value, { target: { value: "custom-effort" } });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "reasoning_effort", "custom-effort");
-  });
-
-  it("updates reference hints without changing an existing setting", async () => {
-    renderEditor("/model-profiles/new");
-    await addProvider("OpenAI");
-    await addSetting("deepseek_limit");
-    const row = await settingRow("deepseek_limit");
-    fireEvent.change(within(row).getByLabelText("Value"), {
-      target: { value: "manual value" },
-    });
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-      target: { value: "DeepSeek" },
-    });
-
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(row).getByLabelText("Value type")).toBeEnabled();
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
-    );
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-  });
-
-  it("keeps custom editor input and parse state when the provider changes", async () => {
-    renderEditor("/model-profiles/new");
-    await addProvider("OpenAI");
-    await addSetting("foo");
-    const row = await settingRow("foo");
-    fireEvent.change(within(row).getByLabelText("Value type"), {
-      target: { value: "number" },
-    });
-    const value = within(row).getByLabelText("Value");
-    fireEvent.change(value, { target: { value: "0" } });
-    fireEvent.change(value, { target: { value: "abc" } });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-
-    fireEvent.change(await screen.findByRole("combobox", { name: "Provider" }), {
-      target: { value: "DeepSeek" },
-    });
-
-    expect(within(row).getByLabelText("Value")).toHaveValue("abc");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-    fireEvent.change(within(row).getByLabelText("Value"), {
-      target: { value: "0" },
-    });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-  });
-
-  it("preserves a legacy non-string provider until the user changes its type", async () => {
-    const current = existingIntegerProviderProfile();
-    const { saves } = renderEditor("/model-profiles/base", [current]);
-    const row = await settingRow("provider");
-    expect(row).toHaveTextContent("· integer");
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "string" }),
-    );
-    expect(within(row).getByLabelText("Value type")).toHaveValue("integer");
-    expect(within(row).getByLabelText("Value type")).toBeEnabled();
-    expect(within(row).getByLabelText("Value")).toHaveValue("123");
-    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "provider", 123);
-  });
-
-  it("offers a provider dropdown when adding a provider setting", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
-    });
-    await addSetting("provider");
-
-    const row = await settingRow("provider");
-    const provider = within(row).getByRole("combobox", { name: "Provider" });
-    const save = screen.getByRole("button", { name: "Save Model Profile" });
-    expect(provider).toHaveValue("");
-    expect(
-      [...provider.querySelectorAll("option")].map((option) => option.value),
-    ).toEqual(["", "DeepSeek", "OpenAI"]);
-    expect(provider.querySelector('option[value=""]')).toBeDisabled();
-    expect(save).toBeDisabled();
-
+    const provider = await screen.findByRole("combobox", { name: /Provider/ });
     fireEvent.change(provider, { target: { value: "OpenAI" } });
-    expect(save).toBeEnabled();
-    fireEvent.click(save);
-    await expectSavedLiteralSetting(saves, "provider", "OpenAI");
+    expect(await screen.findByText("Refreshing provider options…")).toBeInTheDocument();
+    fireEvent.change(provider, { target: { value: "DeepSeek" } });
+    expect(await screen.findByLabelText("deepseek_model")).toBeInTheDocument();
+
+    first.resolve(response(options("OpenAI")));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("model")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("deepseek_model")).toHaveValue("");
   });
 
-  it("preserves the inherited type and value when a setting is overridden", async () => {
-    const inheritedTemperature = {
-      key: "temperature",
-      value: "0.5",
-      source: { id: "base", name: "base" },
-    };
-    const base = profile(
-      "base",
-      null,
-      [
-        { key: "provider", kind: "literal", value: "OpenAI" },
-        { key: "temperature", kind: "literal", value: "0.5" },
+  it("confirms provider changes and clears explicit settings only when accepted", async () => {
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const { optionRequests, saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [existing],
+      optionsHandler: async (init) => {
+        const body = JSON.parse(String(init.body)) as { provider: string };
+        return response(options(body.provider));
+      },
+    });
+    const provider = await screen.findByRole("combobox", { name: /Provider/ });
+    await screen.findByLabelText("model");
+    fireEvent.change(provider, { target: { value: "DeepSeek" } });
+    expect(provider).toHaveValue("OpenAI");
+    expect(screen.getByLabelText("temperature")).toHaveValue(0.4);
+
+    fireEvent.change(provider, { target: { value: "DeepSeek" } });
+    await waitFor(() => expect(provider).toHaveValue("DeepSeek"));
+    await waitFor(() =>
+      expect(optionRequests.at(-1)).toEqual({ provider: "DeepSeek", settings: {} }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() =>
+      expect(saves.at(-1)).toMatchObject({ provider: "DeepSeek", settings: [] }),
+    );
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the draft and current options when refresh fails, then retries", async () => {
+    let calls = 0;
+    const { optionRequests } = renderEditor({
+      optionsHandler: async () => {
+        calls += 1;
+        if (calls === 2) return response({ message: "Synthetic failure" }, false);
+        return response(options());
+      },
+    });
+    await selectProvider();
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "keep-me" } });
+    fireEvent.blur(screen.getByLabelText("model"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Synthetic failure");
+    expect(screen.getByLabelText("model")).toHaveValue("keep-me");
+    expect(screen.getByLabelText("temperature")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry options" }));
+    await waitFor(() => expect(optionRequests).toHaveLength(3));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("model")).toHaveValue("keep-me");
+  });
+
+  it("drops explicit settings hidden by a successful dynamic refresh", async () => {
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [
+        {
+          ...existing,
+          settings: [
+            { key: "stream", value: true },
+            { key: "temperature", value: 0.4 },
+          ],
+        },
       ],
-      [inheritedOpenAiProvider, inheritedTemperature],
-    );
-    const child = profile(
-      "child",
-      "base",
-      [],
-      [inheritedOpenAiProvider, inheritedTemperature],
-    );
-    const { saves } = renderEditor("/model-profiles/child", [base, child]);
-
-    let row = await settingRow("temperature");
-    expect(row).toHaveTextContent("· string");
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
-    );
-
-    fireEvent.click(within(row).getByRole("button", { name: "Override" }));
-    row = await settingRow("temperature");
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(row).getByLabelText("Value type")).toBeEnabled();
-    expect(within(row).getByLabelText("Value")).toHaveValue("0.5");
-
-    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "temperature", "0.5");
-  });
-
-  it("keeps the generic type for a key added before reference metadata arrives", async () => {
-    let resolveReference!: (value: ModelProfileReference) => void;
-    const referenceResponse = new Promise<ModelProfileReference>((resolve) => {
-      resolveReference = resolve;
+      optionsHandler: async (init) => {
+        const { settings } = JSON.parse(String(init.body)) as {
+          settings: Record<string, unknown>;
+        };
+        const result = options();
+        if (settings.stream === false)
+          result.options = result.options.filter(
+            (option) => option.key !== "temperature",
+          );
+        return response(result);
+      },
     });
-    renderEditor("/model-profiles/new", [], referenceResponse);
-
-    await addSetting("provider");
-    const providerRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("provider"),
-    )!;
-    fireEvent.change(within(providerRow).getByLabelText("Value"), {
-      target: { value: "OpenAI" },
+    await screen.findByLabelText("temperature");
+    fireEvent.change(screen.getByLabelText("stream"), {
+      target: { value: "false" },
     });
-    await addSetting("temperature");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-
-    resolveReference(REFERENCE);
-
-    const temperatureRow = await screen.findByText("Synthetic temperature description");
-    const row = temperatureRow.closest(".profile-setting")!;
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(row).getByLabelText("Value")).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-    expect(row).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
+    await waitFor(() =>
+      expect(screen.queryByLabelText("temperature")).not.toBeInTheDocument(),
     );
-  });
-
-  it("allows an untouched legacy provider string outside the current registry", async () => {
-    const current = existingCustomStringProviderProfile();
-    const { saves } = renderEditor("/model-profiles/base", [current]);
-    const row = await settingRow("provider");
-
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    expect(within(row).getByRole("combobox", { name: "Provider" })).toHaveValue(
-      "OldCustomProvider",
-    );
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "provider", "OldCustomProvider");
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "stream", value: false }]);
   });
 
-  it("requires an explicit boolean value for a referenced setting", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
+  it("persists only an auto-selected model while other defaults stay sparse", async () => {
+    const { saves, optionRequests } = renderEditor({
+      optionsHandler: async () =>
+        response({
+          ...options(),
+          options: [
+            {
+              ...options().options[0],
+              type: "choice",
+              choices: ["model-a", "model-b"],
+            },
+            ...options().options.slice(1),
+            {
+              key: "model_a_detail",
+              type: "string",
+              description: null,
+              choices: null,
+            },
+          ],
+          setting_updates: { model: "model-a" },
+        }),
+    });
     fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
+      target: { value: "Chosen model" },
     });
-    await addProvider("OpenAI");
-
-    await addSetting("free_plan");
-    const freePlanRow = [...document.querySelectorAll(".profile-setting")].find((row) =>
-      row.textContent?.includes("free_plan"),
-    )!;
-    expect(within(freePlanRow).getByLabelText("Value type")).toBeEnabled();
-    expect(within(freePlanRow).getByLabelText("Value type")).toHaveValue("boolean");
-    const save = screen.getByRole("button", { name: "Save Model Profile" });
-    const value = within(freePlanRow).getByRole("combobox", { name: "Value" });
-    expect(value).toHaveValue("");
-    expect(save).toBeDisabled();
-
-    fireEvent.change(value, { target: { value: "false" } });
-    expect(save).toBeEnabled();
-    fireEvent.click(save);
-    await expectSavedLiteralSetting(saves, "free_plan", false);
-  });
-
-  it("keeps referenced numeric settings incomplete until a value is entered", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
-    });
-    await addProvider("OpenAI");
-
-    await addSetting("temperature");
-    let rows = [...document.querySelectorAll(".profile-setting")];
-    const temperatureRow = rows.find((row) =>
-      row.textContent?.includes("temperature"),
-    )!;
-    expect(within(temperatureRow).getByLabelText("Value type")).toHaveValue("number");
-    expect(within(temperatureRow).getByLabelText("Value type")).toBeEnabled();
-    const temperatureValue = within(temperatureRow).getByLabelText("Value");
-    expect(temperatureValue.tagName).toBe("INPUT");
-    expect(temperatureValue).toHaveValue("");
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
-    expect(saves).toHaveLength(0);
-    expect(temperatureRow).toHaveTextContent(
-      translate("modelProfiles.pysubtransType", { type: "number" }),
-    );
-
-    await addSetting("model");
-    rows = [...document.querySelectorAll(".profile-setting")];
-    const modelRow = rows.find((row) => row.textContent?.includes("model"))!;
-    expect(within(modelRow).getByLabelText("Value").tagName).toBe("INPUT");
-    fireEvent.change(temperatureValue, { target: { value: "0.75" } });
-    fireEvent.change(within(modelRow).getByLabelText("Value"), {
-      target: { value: "synthetic-model" },
-    });
+    await selectProvider();
+    await waitFor(() => expect(screen.getByLabelText("model")).toHaveValue("model-a"));
+    expect(screen.getByLabelText("model_a_detail")).toHaveValue("");
+    expect(optionRequests).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "temperature", 0.75);
-    expect(saves[0].body.settings).toContainEqual({
-      key: "model",
-      kind: "literal",
-      value: "synthetic-model",
-    });
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "model", value: "model-a" }]);
   });
 
-  it("uses generic provider editing when provider reference data is unavailable", async () => {
-    const { saves } = renderEditor(
-      "/model-profiles/new",
-      [],
-      Promise.reject(new Error("unavailable")),
-    );
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
+  it("applies the selected model after changing providers", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { saves } = renderEditor({
+      path: "/model-profiles/profile-1",
+      profiles: [existing],
+      optionsHandler: async (init) => {
+        const { provider } = JSON.parse(String(init.body)) as { provider: string };
+        return response({
+          ...options(provider),
+          setting_updates: provider === "DeepSeek" ? { model: "model-a" } : {},
+        });
+      },
     });
-    await addSetting("provider");
-
-    const row = await settingRow("provider");
-    expect(within(row).getByLabelText("Value type")).toHaveValue("string");
-    const provider = within(row).getByLabelText("Value");
-    expect(provider.tagName).toBe("INPUT");
-    fireEvent.change(provider, { target: { value: "UnlistedProvider" } });
-    await addSetting("custom_option");
-    const customRow = await settingRow("custom_option");
-    fireEvent.change(within(customRow).getByLabelText("Value type"), {
-      target: { value: "number" },
+    await screen.findByLabelText("model");
+    fireEvent.change(screen.getByRole("combobox", { name: /Provider/ }), {
+      target: { value: "DeepSeek" },
     });
-    fireEvent.change(within(customRow).getByLabelText("Value"), {
-      target: { value: "2.5" },
-    });
-    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
-
+    await waitFor(() => expect(screen.getByLabelText("model")).toHaveValue("model-a"));
     fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
-    await expectSavedLiteralSetting(saves, "provider", "UnlistedProvider");
-    expect(saves[0].body.settings).toContainEqual({
-      key: "custom_option",
-      kind: "literal",
-      value: 2.5,
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({
+      provider: "DeepSeek",
+      settings: [{ key: "model", value: "model-a" }],
     });
   });
 
-  it("keeps inherited override, unset and remove-local controls available", async () => {
-    const inheritedTemperature = {
-      key: "temperature",
-      value: 0.25,
-      source: { id: "base", name: "base" },
-    };
-    const base = profile(
-      "base",
-      null,
-      [],
-      [inheritedOpenAiProvider, inheritedTemperature],
-    );
-    const child = profile(
-      "child",
-      "base",
-      [],
-      [inheritedOpenAiProvider, inheritedTemperature],
-    );
-    renderEditor("/model-profiles/child", [base, child]);
+  it("ignores stale setting updates after a newer edit and refresh", async () => {
+    const pending = deferred<ReturnType<typeof response>>();
+    let calls = 0;
+    const { saves } = renderEditor({
+      optionsHandler: async () => {
+        calls += 1;
+        return calls === 2 ? pending.promise : response(options());
+      },
+    });
+    await selectProvider();
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "first" } });
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() => expect(calls).toBe(2));
+    fireEvent.change(screen.getByLabelText("model"), { target: { value: "second" } });
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() => expect(calls).toBe(3));
+    pending.resolve(response({ ...options(), setting_updates: { model: "old" } }));
+    expect(screen.getByLabelText("model")).toHaveValue("second");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Current" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([{ key: "model", value: "second" }]);
+  });
 
-    let row = await settingRow("temperature");
-    fireEvent.click(within(row).getByRole("button", { name: "Override" }));
-    row = await settingRow("temperature");
-    fireEvent.click(within(row).getByRole("button", { name: "Unset" }));
-    expect(row.querySelector(".profile-value")).not.toHaveTextContent("0.25");
-    expect(within(row).getAllByRole("button")).toHaveLength(1);
-    fireEvent.click(within(row).getByRole("button", { name: "Remove local" }));
-    expect(row.querySelector(".profile-value")).toHaveTextContent("0.25");
-    expect(within(row).getAllByRole("button")).toHaveLength(2);
+  it("applies a model refresh after a non-refresh setting changes", async () => {
+    const pending = deferred<ReturnType<typeof response>>();
+    const { saves } = renderEditor({
+      optionsHandler: optionsWithPendingSecondRequest(pending),
+    });
+    await selectProvider();
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Updated profile" },
+    });
+
+    fireEvent.change(screen.getByLabelText("model"), {
+      target: { value: "model-b" },
+    });
+    fireEvent.blur(screen.getByLabelText("model"));
+    await waitFor(() =>
+      expect(screen.getByText("Refreshing provider options…")).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("temperature"), {
+      target: { value: "0.25" },
+    });
+
+    const modelBOptions = options();
+    modelBOptions.options = modelBOptions.options.filter(
+      (option) => option.key !== "effort",
+    );
+    modelBOptions.options.push({
+      key: "model_b_detail",
+      type: "string",
+      description: null,
+      choices: null,
+    });
+    pending.resolve(response(modelBOptions));
+
+    expect(await screen.findByLabelText("model_b_detail")).toBeInTheDocument();
+    expect(screen.queryByLabelText("effort")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("temperature")).toHaveValue(0.25);
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].settings).toEqual([
+      { key: "model", value: "model-b" },
+      { key: "temperature", value: 0.25 },
+    ]);
   });
 });

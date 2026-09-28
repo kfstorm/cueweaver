@@ -25,10 +25,7 @@ class ModelProfileRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    parent_id: Mapped[str | None] = mapped_column(
-        ForeignKey("model_profiles.id", ondelete="RESTRICT")
-    )
-    selectable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
 
@@ -40,8 +37,7 @@ class ModelProfileSettingRow(Base):
         ForeignKey("model_profiles.id", ondelete="CASCADE"), primary_key=True
     )
     key: Mapped[str] = mapped_column(String, primary_key=True)
-    kind: Mapped[str] = mapped_column(String, nullable=False)
-    value: Mapped[object | None] = mapped_column(JSON(none_as_null=True))
+    value: Mapped[object] = mapped_column(JSON(none_as_null=True), nullable=False)
 
 
 class JobRow(Base):

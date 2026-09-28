@@ -40,7 +40,14 @@ class PySubtransTranslator:
         working_source = _prepare_working_source(
             source, target_language, user_overrides, work_directory
         )
-        option_overrides: dict[str, Any] = dict(settings or {})
+        resolved_settings = dict(settings or {})
+        selected_provider = resolved_settings.pop("provider", None)
+        option_overrides: dict[str, Any] = {}
+        if selected_provider is not None:
+            option_overrides["provider"] = selected_provider
+            option_overrides["provider_settings"] = {
+                selected_provider: resolved_settings
+            }
         options = init_options(
             **option_overrides,
             target_language=target_language,
