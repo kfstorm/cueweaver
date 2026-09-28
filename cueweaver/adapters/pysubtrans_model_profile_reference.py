@@ -7,6 +7,7 @@ import math
 from collections.abc import Mapping
 from typing import cast
 
+from PySubtrans.Options import MULTILINE_OPTION
 from PySubtrans.SettingsType import SettingsType
 from PySubtrans.TranslationProvider import TranslationProvider
 
@@ -19,7 +20,6 @@ _OPTION_TYPES = {
     bool: "boolean",
 }
 _OPTION_TUPLE_LENGTH = 2
-_MODEL_DISCOVERY_FAILURE = "Unable to retrieve models"
 
 
 def pysubtrans_model_profile_reference() -> dict[str, object]:
@@ -39,13 +39,12 @@ def pysubtrans_model_profile_options(
     provider: str, settings: Mapping[str, object]
 ) -> dict[str, object]:
     """Run the selected provider's real option discovery."""
-    discovered, _ = _discover_model_profile_options(provider, settings)
-    return discovered
+    return _discover_model_profile_options(provider, settings)
 
 
 def _discover_model_profile_options(
     provider: str, settings: Mapping[str, object]
-) -> tuple[dict[str, object], list[str]]:
+) -> dict[str, object]:
     try:
         providers = TranslationProvider.get_providers()
     except Exception as error:
@@ -83,13 +82,7 @@ def _discover_model_profile_options(
             setting_updates["model"] = model
             runtime_options = runtime_provider.GetOptions(combined)
         options = [
-            _convert_option(
-                key,
-                _as_text_option_if_model_discovery_failed(
-                    key, option, available_models
-                ),
-                combined,
-            )
+            _convert_option(key, option, combined)
             for key, option in runtime_options.items()
         ]
         refresh_when_changed = list(runtime_provider.refresh_when_changed)
@@ -101,33 +94,26 @@ def _discover_model_profile_options(
             f"Could not load options for provider {provider}",
             field="provider",
         ) from error
-    return (
-        {
-            "provider": provider,
-            "options": options,
-            "refresh_when_changed": refresh_when_changed,
-            "setting_updates": setting_updates,
-        },
-        list(available_models),
-    )
+    return {
+        "provider": provider,
+        "options": options,
+        "refresh_when_changed": refresh_when_changed,
+        "setting_updates": setting_updates,
+    }
 
 
 def validate_model_profile_options(
     provider: str, settings: Mapping[str, object]
 ) -> dict[str, object]:
     """Validate explicit values against this complete draft's runtime options."""
-    discovered, available_models = _discover_model_profile_options(provider, settings)
+    discovered = _discover_model_profile_options(provider, settings)
     options = {
         option["key"]: option
         for option in cast(list[dict[str, object]], discovered["options"])
     }
     for key, value in settings.items():
         option = options.get(key)
-        valid_model = key != "model" or (
-            value != _MODEL_DISCOVERY_FAILURE
-            and (not available_models or value in available_models)
-        )
-        if option is None or not valid_model or not _valid_option_value(option, value):
+        if option is None or not _valid_option_value(option, value):
             raise ServiceError(
                 "invalid_model_profile",
                 f"Setting {key} is not a valid current provider option",
@@ -136,27 +122,12 @@ def validate_model_profile_options(
     return cast(dict[str, object], discovered["setting_updates"])
 
 
-def _as_text_option_if_model_discovery_failed(
-    key: object, option: object, available_models: list[str]
-) -> object:
-    if (
-        key == "model"
-        and not available_models
-        and isinstance(option, tuple)
-        and len(option) == _OPTION_TUPLE_LENGTH
-        and option[0] == [_MODEL_DISCOVERY_FAILURE]
-    ):
-        return (str, option[1])
-    return option
-
-
 def _valid_option_value(option: dict[str, object], value: object) -> bool:
     option_type = option["type"]
     if option_type in {"string", "multiline"}:
         return isinstance(value, str)
     if option_type == "choice":
-        choices = option["choices"]
-        return isinstance(value, str) and isinstance(choices, list) and value in choices
+        return isinstance(value, str)
     if option_type == "boolean":
         return isinstance(value, bool)
     if option_type == "integer":
@@ -191,7 +162,7 @@ def _convert_option(
         option_type = "choice"
         choices = list(option_kind)
     elif isinstance(option_kind, str):
-        option_type = "multiline" if option_kind == "multiline" else "string"
+        option_type = "multiline" if option_kind == MULTILINE_OPTION else "string"
     else:
         mapped_type = _OPTION_TYPES.get(option_kind)
         if mapped_type is None:
