@@ -222,6 +222,15 @@ async function addProvider(name: string) {
   });
 }
 
+async function renderNamedOpenAiProfile() {
+  const { saves } = renderEditor("/model-profiles/new");
+  fireEvent.change(await screen.findByLabelText("Name"), {
+    target: { value: "Synthetic profile" },
+  });
+  await addProvider("OpenAI");
+  return saves;
+}
+
 async function settingRow(key: string): Promise<HTMLElement> {
   await screen.findByRole("combobox", { name: "Search settings" });
   const row = [...document.querySelectorAll<HTMLElement>(".profile-setting")].find(
@@ -355,6 +364,39 @@ describe("Model Profile setting references", () => {
     expectNoPendingReasoningEffort();
   });
 
+  it("removes a completed session addition unsupported by the new provider", async () => {
+    const saves = await renderNamedOpenAiProfile();
+    await addSetting("reasoning_effort");
+    fireEvent.change(
+      within(await settingRow("reasoning_effort")).getByRole("textbox"),
+      {
+        target: { value: "high" },
+      },
+    );
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+
+    await addProvider("DeepSeek");
+    expect(document.querySelectorAll(".profile-setting")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].body.settings).toEqual([
+      { key: "provider", kind: "literal", value: "DeepSeek" },
+    ]);
+  });
+
+  it("retains a completed session addition supported by the new provider", async () => {
+    const saves = await renderNamedOpenAiProfile();
+    await addSetting("temperature");
+    fireEvent.change(within(await settingRow("temperature")).getByLabelText("Value"), {
+      target: { value: "0.5" },
+    });
+
+    await addProvider("DeepSeek");
+    expect(await settingRow("temperature")).toHaveTextContent("0.5");
+    fireEvent.click(screen.getByRole("button", { name: "Save Model Profile" }));
+    await expectSavedLiteralSetting(saves, "temperature", 0.5);
+  });
+
   it("discards unfinished additions when a new parent changes the effective provider", async () => {
     const openAiBase = profile(
       "openai-base",
@@ -388,6 +430,17 @@ describe("Model Profile setting references", () => {
       target: { value: "deepseek-base" },
     });
     expectNoPendingReasoningEffort();
+
+    await addSetting("deepseek_limit");
+    fireEvent.change(
+      within(await settingRow("deepseek_limit")).getByLabelText("Value"),
+      { target: { value: "12" } },
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Parent Model Profile" }), {
+      target: { value: "openai-base" },
+    });
+    expect(document.querySelectorAll(".profile-setting")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
   });
 
   it.each(["Unset", "Remove local"])(
@@ -467,11 +520,7 @@ describe("Model Profile setting references", () => {
   });
 
   it("allows custom values for settings with static choice suggestions", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
-    });
-    await addProvider("OpenAI");
+    const saves = await renderNamedOpenAiProfile();
     await addSetting("reasoning_effort");
 
     const row = await settingRow("reasoning_effort");
@@ -688,11 +737,7 @@ describe("Model Profile setting references", () => {
   });
 
   it("keeps referenced numeric settings incomplete until a value is entered", async () => {
-    const { saves } = renderEditor("/model-profiles/new");
-    fireEvent.change(await screen.findByLabelText("Name"), {
-      target: { value: "Synthetic profile" },
-    });
-    await addProvider("OpenAI");
+    const saves = await renderNamedOpenAiProfile();
 
     await addSetting("temperature");
     let rows = [...document.querySelectorAll(".profile-setting")];

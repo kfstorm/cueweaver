@@ -217,6 +217,9 @@ function ProfileForm({
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(initial);
+  const [persistedKeys] = useState(
+    () => new Set(initial.settings.map((entry) => entry.key)),
+  );
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
   const [listOpen, setListOpen] = useState(false);
@@ -311,17 +314,38 @@ function ProfileForm({
   const providerNotReady =
     requiresKnownProvider && (!reference || referencePending || !!referenceError);
   const updateDraft = (next: ProfileInput) => {
-    if (providerForDraft(next) !== providerValue) {
-      // Unfinished additions belong to the old provider; persisted settings do not.
+    const nextProvider = providerForDraft(next);
+    if (nextProvider !== providerValue) {
+      const supportedKeys = new Set(
+        (typeof nextProvider === "string"
+          ? reference?.providers?.[nextProvider]
+          : undefined
+        )?.map((item) => item.key) ?? [],
+      );
+      // Only settings created in this editing session must match the new provider.
+      const removedKeys = next.settings
+        .filter(
+          (entry) =>
+            entry.key !== "provider" &&
+            !persistedKeys.has(entry.key) &&
+            !supportedKeys.has(entry.key),
+        )
+        .map((entry) => entry.key);
       setParseErrors((previous) => {
         const remaining = new Map(previous);
-        for (const key of pendingEditorTypes.keys()) remaining.delete(key);
+        for (const key of [...pendingEditorTypes.keys(), ...removedKeys])
+          remaining.delete(key);
         return remaining;
       });
       setPendingEditorTypes(new Map());
       setSearch("");
       setSelectedKey("");
       setListOpen(false);
+      setDraft({
+        ...next,
+        settings: next.settings.filter((entry) => !removedKeys.includes(entry.key)),
+      });
+      return;
     }
     setDraft(next);
   };
