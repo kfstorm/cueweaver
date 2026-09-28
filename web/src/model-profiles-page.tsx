@@ -252,12 +252,14 @@ function ProfileForm({
     .filter((key) => key !== "provider")
     .sort();
   const localProvider = local.get("provider");
-  const providerValue =
-    localProvider?.kind === "unset"
-      ? undefined
-      : localProvider?.kind === "literal"
-        ? localProvider.value
-        : inherited.get("provider")?.value;
+  const providerForDraft = (input: ProfileInput): unknown => {
+    const own = input.settings.find((item) => item.key === "provider");
+    if (own) return own.kind === "unset" ? undefined : own.value;
+    return profiles
+      .find((item) => item.id === input.parent_id)
+      ?.effective_settings.find((item) => item.key === "provider")?.value;
+  };
+  const providerValue = providerForDraft(draft);
   const effectiveProvider =
     typeof providerValue === "string" ? providerValue : undefined;
   const providerNames = Object.keys(reference?.providers ?? {}).sort();
@@ -308,6 +310,21 @@ function ProfileForm({
     draft.selectable || affected.some((item) => item.selectable);
   const providerNotReady =
     requiresKnownProvider && (!reference || referencePending || !!referenceError);
+  const updateDraft = (next: ProfileInput) => {
+    if (providerForDraft(next) !== providerValue) {
+      // Unfinished additions belong to the old provider; persisted settings do not.
+      setParseErrors((previous) => {
+        const remaining = new Map(previous);
+        for (const key of pendingEditorTypes.keys()) remaining.delete(key);
+        return remaining;
+      });
+      setPendingEditorTypes(new Map());
+      setSearch("");
+      setSelectedKey("");
+      setListOpen(false);
+    }
+    setDraft(next);
+  };
   const change = (entry: ProfileSetting) => {
     if (entry.kind === "unset") setParseError(entry.key, "");
     setPendingEditorTypes((previous) => {
@@ -316,10 +333,10 @@ function ProfileForm({
       next.delete(entry.key);
       return next;
     });
-    setDraft((previous) => ({
-      ...previous,
-      settings: [...previous.settings.filter((item) => item.key !== entry.key), entry],
-    }));
+    updateDraft({
+      ...draft,
+      settings: [...draft.settings.filter((item) => item.key !== entry.key), entry],
+    });
   };
   const remove = (key: string) => {
     setParseError(key, "");
@@ -329,10 +346,10 @@ function ProfileForm({
       next.delete(key);
       return next;
     });
-    setDraft((previous) => ({
-      ...previous,
-      settings: previous.settings.filter((item) => item.key !== key),
-    }));
+    updateDraft({
+      ...draft,
+      settings: draft.settings.filter((item) => item.key !== key),
+    });
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -373,7 +390,7 @@ function ProfileForm({
     setListOpen(false);
   };
   const selectParent = (value: string) => {
-    setDraft({ ...draft, parent_id: value || null });
+    updateDraft({ ...draft, parent_id: value || null });
     setSearch("");
     setSelectedKey("");
     setListOpen(false);

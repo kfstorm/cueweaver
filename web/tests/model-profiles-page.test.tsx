@@ -231,6 +231,15 @@ async function settingRow(key: string): Promise<HTMLElement> {
   return row;
 }
 
+function expectNoPendingReasoningEffort() {
+  expect(document.querySelectorAll(".profile-setting")).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+  const search = screen.getByRole("combobox", { name: "Search settings" });
+  fireEvent.change(search, { target: { value: "reasoning_effort" } });
+  expect(screen.queryByRole("option", { name: /reasoning_effort/ })).toBeNull();
+  expect(screen.getByRole("button", { name: "Add setting" })).toBeDisabled();
+}
+
 async function expectSavedLiteralSetting(
   saves: Array<{ method: string; body: Record<string, unknown> }>,
   key: string,
@@ -328,6 +337,94 @@ describe("Model Profile setting references", () => {
     ).not.toBeInTheDocument();
     expect(keyInput).toHaveValue("");
   });
+
+  it("discards unfinished additions and their parse errors when the provider changes", async () => {
+    renderEditor("/model-profiles/new");
+    await addProvider("OpenAI");
+    await addSetting("reasoning_effort");
+    expect(await settingRow("reasoning_effort")).toBeInTheDocument();
+
+    await addSetting("temperature");
+    const pendingTemperature = await settingRow("temperature");
+    fireEvent.change(within(pendingTemperature).getByLabelText("Value"), {
+      target: { value: "invalid" },
+    });
+    expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeDisabled();
+
+    await addProvider("DeepSeek");
+    expectNoPendingReasoningEffort();
+  });
+
+  it("discards unfinished additions when a new parent changes the effective provider", async () => {
+    const openAiBase = profile(
+      "openai-base",
+      null,
+      [{ key: "provider", kind: "literal", value: "OpenAI" }],
+      [
+        {
+          key: "provider",
+          value: "OpenAI",
+          source: { id: "openai-base", name: "openai-base" },
+        },
+      ],
+    );
+    const deepSeekBase = profile(
+      "deepseek-base",
+      null,
+      [{ key: "provider", kind: "literal", value: "DeepSeek" }],
+      [
+        {
+          key: "provider",
+          value: "DeepSeek",
+          source: { id: "deepseek-base", name: "deepseek-base" },
+        },
+      ],
+    );
+    renderEditor("/model-profiles/new?parent=openai-base", [openAiBase, deepSeekBase]);
+    await addSetting("reasoning_effort");
+    expect(await settingRow("reasoning_effort")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Parent Model Profile" }), {
+      target: { value: "deepseek-base" },
+    });
+    expectNoPendingReasoningEffort();
+  });
+
+  it.each(["Unset", "Remove local"])(
+    "discards unfinished additions when %s changes the effective provider",
+    async (action) => {
+      const parent = profile(
+        "parent",
+        null,
+        [{ key: "provider", kind: "literal", value: "DeepSeek" }],
+        [
+          {
+            key: "provider",
+            value: "DeepSeek",
+            source: { id: "parent", name: "parent" },
+          },
+        ],
+      );
+      const child = profile(
+        "child",
+        "parent",
+        [{ key: "provider", kind: "literal", value: "OpenAI" }],
+        [
+          {
+            key: "provider",
+            value: "OpenAI",
+            source: { id: "child", name: "child" },
+          },
+        ],
+      );
+      renderEditor("/model-profiles/child", [parent, child]);
+      await addSetting("reasoning_effort");
+      const providerArea = document.querySelector(".profile-provider") as HTMLElement;
+      fireEvent.click(within(providerArea).getByRole("button", { name: action }));
+      expect(document.querySelectorAll(".profile-setting")).toHaveLength(0);
+      expect(screen.getByRole("button", { name: "Save Model Profile" })).toBeEnabled();
+    },
+  );
 
   it("preserves an existing value whose type differs from the provider reference", async () => {
     const current = existingStringTemperatureProfile();
