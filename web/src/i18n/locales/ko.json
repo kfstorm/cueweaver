@@ -355,7 +355,7 @@
   "jobs.none": "없음",
   "jobs.timeInformation": "시간 정보",
   "jobs.statusUnavailable": "이 작업의 상태 기록을 사용할 수 없습니다.",
-  "jobs.showDiagnostics": "승인된 진단 컨텍스트 표시",
+  "jobs.showDiagnostics": "진단 세부 정보 표시",
   "jobs.errorCode": "오류 코드",
   "jobs.select": "작업 선택",
   "jobs.selectDetail": "기록에서 작업을 선택하여 구성, 출력 및 진단 정보를 확인합니다.",

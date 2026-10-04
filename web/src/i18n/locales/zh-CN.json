@@ -355,7 +355,7 @@
   "jobs.none": "无",
   "jobs.timeInformation": "时间信息",
   "jobs.statusUnavailable": "此任务的状态历史不可用。",
-  "jobs.showDiagnostics": "显示批准的诊断上下文",
+  "jobs.showDiagnostics": "查看诊断详情",
   "jobs.errorCode": "错误代码",
   "jobs.select": "选择任务",
   "jobs.selectDetail": "从历史中选择一个任务，查看其配置、输出和诊断信息。",

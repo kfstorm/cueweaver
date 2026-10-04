@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "timestamped": {
+      "()": "cueweaver.logging_config.TimestampedFormatter",
+      "format": "%(asctime)s %(levelname)s %(name)s %(message)s"
+    }
+  },
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "formatter": "timestamped",
+      "stream": "ext://sys.stderr"
+    }
+  },
+  "root": {
+    "handlers": ["console"],
+    "level": "INFO"
+  },
+  "loggers": {
+    "uvicorn": { "handlers": [], "level": "INFO", "propagate": true },
+    "uvicorn.error": { "handlers": [], "level": "INFO", "propagate": true },
+    "uvicorn.access": { "handlers": [], "level": "INFO", "propagate": true }
+  }
+}

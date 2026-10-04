@@ -355,7 +355,7 @@
   "jobs.none": "Nenhum",
   "jobs.timeInformation": "Informações de data e hora",
   "jobs.statusUnavailable": "O histórico de status não está disponível para esta tarefa.",
-  "jobs.showDiagnostics": "Mostrar contexto de diagnóstico aprovado",
+  "jobs.showDiagnostics": "Mostrar detalhes do diagnóstico",
   "jobs.errorCode": "Código do erro",
   "jobs.select": "Selecionar uma tarefa",
   "jobs.selectDetail": "Escolha uma tarefa do histórico para inspecionar sua configuração, saída e diagnósticos.",

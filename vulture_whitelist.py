@@ -3,6 +3,10 @@
 # PySubtrans project attributes are accessed dynamically.
 _.write_translation
 
+# The logging JSON config loads this formatter dynamically.
+TimestampedFormatter
+TimestampedFormatter.formatTime
+
 # HTTP application contracts are public adapter APIs.
 CueWeaverApplication
 TranslateRequest.subtitle_path

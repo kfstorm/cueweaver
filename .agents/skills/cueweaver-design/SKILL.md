@@ -85,8 +85,10 @@ when reused.
 - When Model Profiles have no selectable profile or fail to load, preserve Media
   browsing and nearby Settings management actions. Explain the state beside the
   Model Profile field and disable Translation submission.
-- Keep errors friendly and expose approved structured context on demand. Never
-  render tracebacks, credentials, provider details, or absolute roots.
+- Show the original translation exception message directly in failed Job details,
+  including provider error messages. Preserve multiline text and wrap long values.
+  Put error codes and structured context in expandable diagnostic details.
+  Do not add tracebacks or dump provider configuration into the UI.
 
 ## Accessibility
 

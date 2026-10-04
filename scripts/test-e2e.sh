@@ -42,6 +42,7 @@ docker run --detach --name "$CONTAINER" \
   --volume "$ROOTS/media:/media" \
   --volume "$ROOTS/work:/work" \
   "$IMAGE" uvicorn cueweaver.e2e:create_e2e_app_from_env --factory \
+  --log-config cueweaver/logging.json \
   --host 0.0.0.0 --port 8000 >/dev/null
 
 for _attempt in {1..30}; do
@@ -56,6 +57,7 @@ for _attempt in {1..30}; do
       --volume "$ROOTS/media:/media" \
       --volume "$ROOTS/corrupt-work:/work" \
       "$IMAGE" uvicorn cueweaver.e2e:create_e2e_app_from_env --factory \
+      --log-config cueweaver/logging.json \
       --host 0.0.0.0 --port 8000 >"$CORRUPT_LOG" 2>&1
     _corrupt_status=$?
     set -e
