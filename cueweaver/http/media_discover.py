@@ -53,8 +53,12 @@ def register_media_discover(
 def result_body(
     result: DiscoverResult, media_root: Path, relative_media_path: Path
 ) -> dict[str, object]:
+    # Jobs resolve file links before choosing a Directory default; previews must
+    # use the same directory while retaining the browsed path as the Media label.
+    directory = result.media_path.parent.relative_to(media_root)
     return {
         "path": str(relative_media_path),
+        "directory": "" if str(directory) == "." else directory.as_posix(),
         "candidates": [
             candidate_body(candidate, media_root) for candidate in result.candidates
         ],

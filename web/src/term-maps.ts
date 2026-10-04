@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { validateTermMapContent } from "./term-map-validation";
 import { localizedError } from "./i18n/errors";
 
@@ -25,6 +30,11 @@ export interface DirectoryTermMapState {
   local: TermMapSummary | null;
   effective: TermMapSummary | null;
   source_directory: string | null;
+}
+
+export interface DirectoryTermMapRule {
+  directory: string;
+  term_map: TermMapSummary;
 }
 
 interface TermMapListResponse {
@@ -56,6 +66,7 @@ function refreshTermMapQueries(
   void queryClient.invalidateQueries({ queryKey: ["term-maps"] });
   void queryClient.invalidateQueries({ queryKey: ["term-maps", id] });
   void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
+  void queryClient.invalidateQueries({ queryKey: ["directory-term-map-rules"] });
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -83,12 +94,32 @@ export function useTermMap(id: string | null) {
   });
 }
 
-export function useDirectoryTermMap(path: string) {
-  return useQuery({
+function directoryTermMapQuery(path: string) {
+  return {
     queryKey: ["directory-term-map", path],
     queryFn: async () =>
       readResponse<DirectoryTermMapState>(
         await fetch(`/api/term-maps/directory?path=${encodeURIComponent(path)}`),
+      ),
+  };
+}
+
+export function useDirectoryTermMap(path: string) {
+  return useQuery(directoryTermMapQuery(path));
+}
+
+export function useDirectoryTermMaps(paths: string[]) {
+  return useQueries({
+    queries: paths.map((path) => directoryTermMapQuery(path)),
+  });
+}
+
+export function useDirectoryRules() {
+  return useQuery({
+    queryKey: ["directory-term-map-rules"],
+    queryFn: async () =>
+      readResponse<{ rules: DirectoryTermMapRule[] }>(
+        await fetch("/api/term-maps/directory-rules"),
       ),
   });
 }
@@ -108,6 +139,7 @@ export function useBindDirectoryTermMap() {
       queryClient.setQueryData(["directory-term-map", state.directory], state);
       queryClient.setQueryData(["directory-term-map", variables.path], state);
       void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map-rules"] });
     },
   });
 }
@@ -127,6 +159,7 @@ export function useRemoveDirectoryTermMap() {
       queryClient.setQueryData(["directory-term-map", state.directory], state);
       queryClient.setQueryData(["directory-term-map", path], state);
       void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map-rules"] });
     },
   });
 }
@@ -186,6 +219,7 @@ export function useDeleteTermMap() {
     onSuccess: (_, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["term-maps"] });
       void queryClient.invalidateQueries({ queryKey: ["directory-term-map"] });
+      void queryClient.invalidateQueries({ queryKey: ["directory-term-map-rules"] });
       queryClient.removeQueries({ queryKey: ["term-maps", variables.id] });
     },
   });

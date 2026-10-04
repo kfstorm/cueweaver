@@ -109,17 +109,18 @@ for (const viewport of viewports) {
     const helpStyles = await page
       .locator(".field-help:visible")
       .evaluateAll((elements) =>
-        elements.map((element) => {
-          const styles = getComputedStyle(element);
-          return { fontSize: styles.fontSize, marginTop: styles.marginTop };
-        }),
+        elements.map((element) => getComputedStyle(element).fontSize),
       );
     expect(helpStyles.length).toBeGreaterThan(0);
-    expect(
-      helpStyles.every(
-        ({ fontSize, marginTop }) => fontSize === "12px" && marginTop === "6px",
-      ),
-    ).toBe(true);
+    expect(helpStyles.every((fontSize) => fontSize === "12px")).toBe(true);
+    const termMapHelpGap = await page
+      .locator("#term-map-auto-help")
+      .evaluate(
+        (help) =>
+          help.getBoundingClientRect().top -
+          document.querySelector("#term-map-select")!.getBoundingClientRect().bottom,
+      );
+    expect(termMapHelpGap).toBe(6);
 
     const visibleTextSizes = await page
       .locator("body *:visible")

@@ -18,6 +18,12 @@ class DirectoryTermMapState:
     source_directory: str | None
 
 
+@dataclass(frozen=True)
+class DirectoryTermMapRule:
+    directory: str
+    term_map: TermMapSummary
+
+
 class DirectoryTermMapStore(Protocol):
     def snapshot_bindings(self) -> dict[str, str]: ...
 
@@ -54,6 +60,16 @@ class DirectoryTermMaps:
             effective=self._summary(effective_id),
             source_directory=source,
         )
+
+    def list_rules(self) -> list[DirectoryTermMapRule]:
+        return [
+            DirectoryTermMapRule(
+                directory=directory, term_map=self._term_maps.get(term_map_id)
+            )
+            for directory, term_map_id in sorted(
+                self._store.snapshot_bindings().items()
+            )
+        ]
 
     def bind(self, directory: str, term_map_id: str) -> DirectoryTermMapState:
         canonical = self._canonical_directory(directory, require_existing=True)
