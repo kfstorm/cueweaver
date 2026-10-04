@@ -172,6 +172,36 @@ def test_http_queues_ordered_batch_results_with_mixed_item_errors():
     }
 
 
+def test_http_projects_active_output_conflict_with_relative_path_and_job_id():
+    class ActiveOutputJobs(JobsApplicationFixture):
+        def create(self, _request: object) -> dict[str, object]:
+            raise ServiceError(
+                "output_job_active",
+                "Another active Job is already targeting this output path",
+                output_path="Movie.zh-Hans.srt",
+                job_id="active-job",
+            )
+
+    response = TestClient(create_app(ActiveOutputJobs())).post(
+        "/api/jobs",
+        json={
+            "media_path": "Movie.mkv",
+            "subtitle_path": "Movie.en.srt",
+            "target_language_code": "zh-Hans",
+            "model_profile_id": "profile-1",
+            "term_map_mode": "none",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error_code": "output_job_active",
+        "message": "Another active Job is already targeting this output path",
+        "output_path": "Movie.zh-Hans.srt",
+        "job_id": "active-job",
+    }
+
+
 def test_http_lists_jobs_with_search_and_status_filters():
     application = JobsApplicationFixture()
     client = TestClient(create_app(application))
