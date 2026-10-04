@@ -3,6 +3,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -40,12 +41,12 @@ class CreateJobRequest(ActualCreateJobRequest):
     model_profile_id: str = PROFILE_ID
 
 
-def add_test_profile(database: SqliteDatabase) -> None:
+def add_test_profile(database: SqliteDatabase, profile_id: str = PROFILE_ID) -> None:
     with database.write_transaction() as session:
-        if session.get(ModelProfileRow, PROFILE_ID) is None:
+        if session.get(ModelProfileRow, profile_id) is None:
             session.add(
                 ModelProfileRow(
-                    id=PROFILE_ID,
+                    id=profile_id,
                     name="Test profile",
                     provider="OpenAI",
                     created_at="2026-08-13T12:00:00Z",
@@ -54,7 +55,7 @@ def add_test_profile(database: SqliteDatabase) -> None:
             )
             session.add(
                 ModelProfileSettingRow(
-                    profile_id=PROFILE_ID,
+                    profile_id=profile_id,
                     key="model",
                     value="synthetic-model",
                 )
@@ -1202,6 +1203,200 @@ def create_blocked_jobs(tmp_path: Path):
     assert started.wait(timeout=5)
     queued = jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none"))
     return jobs, translator, running, queued, release, subtitle
+
+
+def test_create_rejects_output_targeted_by_a_queued_job(tmp_path: Path):
+    jobs, _translator, _running, queued, release, _subtitle = create_blocked_jobs(
+        tmp_path
+    )
+    try:
+        assert jobs.get(str(queued["id"]))["status"] == "Queued"
+        with pytest.raises(ServiceError) as raised:
+            jobs.create(CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none"))
+
+        assert raised.value.error_code == "output_job_active"
+        assert raised.value.message == (
+            "Another active Job is already targeting this output path"
+        )
+        assert raised.value.context == {
+            "output_path": "Movie.ja.srt",
+            "job_id": queued["id"],
+        }
+        assert len(jobs.list()) == 2
+        store = SqliteJobRecordStore(
+            SqliteDatabase(tmp_path / "work" / "cueweaver.sqlite3")
+        )
+        assert len(store.load()) == 2
+    finally:
+        release.set()
+        jobs.wait_closed()
+
+
+def test_http_rejects_active_output_even_with_different_translation_options(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    alternate_profile_id = "00000000000000000000000000000002"
+    add_test_profile(
+        SqliteDatabase(work_root / "cueweaver.sqlite3"), alternate_profile_id
+    )
+    (media_root / "Movie.fr.srt").write_bytes(SRT)
+    release = threading.Event()
+    with make_client(media_root, work_root, FakeTranslator(delay=release)) as client:
+        try:
+            original = create_job(client).json()
+            term_map = client.post(
+                "/api/term-maps",
+                json={"name": "Alternate terms", "content": {"Captain": "队长"}},
+            ).json()
+            response = client.post(
+                "/api/jobs",
+                json=job_body(
+                    subtitle_path="Movie.fr.srt",
+                    target_language_code="ja",
+                    output_suffix="zh-Hans",
+                    model_profile_id=alternate_profile_id,
+                    term_map_mode="selected",
+                    term_map_id=term_map["id"],
+                    dynamic_terminology_enabled=False,
+                    subtitle_terminology_filter_enabled=False,
+                    output_conflict_policy="overwrite",
+                ),
+            )
+
+            assert response.status_code == 400
+            assert response.json() == {
+                "error_code": "output_job_active",
+                "message": "Another active Job is already targeting this output path",
+                "output_path": "Movie.zh-Hans.srt",
+                "job_id": original["id"],
+            }
+            assert client.get("/api/jobs").json()["matching_count"] == 1
+        finally:
+            release.set()
+
+
+@pytest.mark.parametrize("status", ["Completed", "Failed", "Cancelled", "Interrupted"])
+def test_create_allows_output_targeted_by_a_terminal_job(tmp_path: Path, status: str):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    store = SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3"))
+    store.write(persisted_job_record("terminal-job", status))
+    jobs = Jobs(FakeTranslator(), media_root, work_root, record_store=store)
+    try:
+        created = jobs.create(
+            CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+        )
+
+        assert created["id"] != "terminal-job"
+        assert created["request"]["output_path"] == "Movie.zh-Hans.srt"
+        assert len(jobs.list()) == 2
+    finally:
+        jobs.wait_closed()
+
+
+def test_create_allows_different_active_outputs_and_reuses_cancelled_output(
+    tmp_path: Path,
+):
+    jobs, _translator, running, queued, release, _subtitle = create_blocked_jobs(
+        tmp_path
+    )
+    try:
+        assert jobs.get(str(running["id"]))["status"] == "Translating"
+        assert queued["request"]["output_path"] == "Movie.ja.srt"
+        jobs.cancel(str(queued["id"]))
+        replacement = jobs.create(
+            CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none")
+        )
+
+        assert replacement["status"] == "Queued"
+        assert replacement["id"] != queued["id"]
+        assert len(jobs.list()) == 3
+    finally:
+        release.set()
+        jobs.wait_closed()
+
+
+def test_batch_isolates_active_output_conflicts_and_creates_other_items(tmp_path: Path):
+    jobs, _translator, _running, queued, release, _subtitle = create_blocked_jobs(
+        tmp_path
+    )
+    add_batch_media(tmp_path / "media")
+    try:
+        results = jobs.create_batch(
+            [
+                CreateJobRequest("Movie.mkv", "Movie.en.srt", "ja", "none"),
+                CreateJobRequest("Second.mkv", "Second.en.srt", "ja", "none"),
+            ]
+        )
+
+        assert results[0] == {
+            "error_code": "output_job_active",
+            "message": "Another active Job is already targeting this output path",
+            "output_path": "Movie.ja.srt",
+            "job_id": queued["id"],
+        }
+        assert results[1]["status"] == "Queued"
+        assert results[1]["request"]["output_path"] == "Second.ja.srt"
+        assert len(jobs.list()) == 3
+    finally:
+        release.set()
+        jobs.wait_closed()
+
+
+def test_concurrent_creates_cannot_target_the_same_active_output(tmp_path: Path):
+    jobs, _translator, _running, _queued, release, _subtitle = create_blocked_jobs(
+        tmp_path
+    )
+    barrier = threading.Barrier(2)
+
+    def create():
+        barrier.wait(timeout=5)
+        try:
+            return jobs.create(
+                CreateJobRequest("Movie.mkv", "Movie.en.srt", "ko", "none")
+            )
+        except ServiceError as error:
+            return error
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(create) for _ in range(2)]
+            results = [future.result(timeout=5) for future in futures]
+
+        created = [result for result in results if isinstance(result, dict)]
+        errors = [result for result in results if isinstance(result, ServiceError)]
+        assert len(created) == len(errors) == 1
+        assert errors[0].error_code == "output_job_active"
+        assert errors[0].context["job_id"] == created[0]["id"]
+        assert len(jobs.list()) == 3
+    finally:
+        release.set()
+        jobs.wait_closed()
+
+
+def test_http_batch_isolates_active_output_conflict(tmp_path: Path):
+    release = threading.Event()
+    with two_media_batch_client(tmp_path, FakeTranslator(delay=release)) as client:
+        try:
+            original = create_job(client).json()
+            response = post_batch(
+                client,
+                [
+                    {"media_path": "Movie.mkv", "subtitle_path": "Movie.en.srt"},
+                    {"media_path": "Second.mkv", "subtitle_path": "Second.en.srt"},
+                ],
+            )
+
+            assert response.status_code == 200
+            results = response.json()["results"]
+            assert results[0]["error_code"] == "output_job_active"
+            assert results[0]["output_path"] == "Movie.zh-Hans.srt"
+            assert results[0]["job_id"] == original["id"]
+            assert results[1]["status"] == "Queued"
+            assert results[1]["request"]["output_path"] == "Second.zh-Hans.srt"
+            assert client.get("/api/jobs").json()["matching_count"] == 2
+        finally:
+            release.set()
 
 
 def test_jobs_uses_a_falsy_injected_record_store_for_all_record_operations(
@@ -2475,8 +2670,8 @@ def test_job_history_paginates_long_unicode_searches(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     with make_client(media_root, work_root, FakeTranslator()) as client:
         search = "你" * 100
-        jobs = [
-            client.post(
+        for _ in range(2):
+            job = client.post(
                 "/api/jobs",
                 json=job_body(
                     target_language_code=search,
@@ -2484,9 +2679,6 @@ def test_job_history_paginates_long_unicode_searches(tmp_path: Path):
                     output_conflict_policy="append-number",
                 ),
             ).json()
-            for _ in range(2)
-        ]
-        for job in jobs:
             wait_for_status(client, job["id"], "Completed")
         first_page = client.get(
             "/api/jobs", params={"limit": 1, "search": search}
@@ -3322,17 +3514,17 @@ def test_retry_preserves_overwrite_output_policy_and_atomic_replacement(
     jobs.close()
 
 
-def test_queued_jobs_choose_append_numbers_at_execution_time(tmp_path: Path):
+def test_jobs_choose_append_numbers_after_the_previous_job_completes(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     release = threading.Event()
     with make_client(media_root, work_root, FakeTranslator(delay=release)) as client:
         first = create_job(client, "zh").json()
-        second = create_job(client, "zh").json()
 
         assert first["request"]["output_path"] == "Movie.zh.srt"
-        assert second["request"]["output_path"] == "Movie.zh.srt"
         release.set()
         first_completed = wait_for_status(client, first["id"], "Completed")
+        second = create_job(client, "zh").json()
+        assert second["request"]["output_path"] == "Movie.zh.srt"
         second_completed = wait_for_status(client, second["id"], "Completed")
 
     assert first_completed["request"]["output_path"] == "Movie.zh.srt"

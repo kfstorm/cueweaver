@@ -161,6 +161,20 @@ class Jobs:
             if request.output_conflict_policy == "skip" and output.exists():
                 return _skipped_result(media, output, self._media_root)
             _require_writable_directory(output.parent)
+            output_path = str(output.relative_to(self._media_root))
+            with self._lock:
+                for existing in self._records.values():
+                    existing_request = cast(dict[str, object], existing["request"])
+                    if (
+                        existing["status"] not in TERMINAL_JOB_STATUSES
+                        and existing_request["output_path"] == output_path
+                    ):
+                        raise ServiceError(
+                            "output_job_active",
+                            "Another active Job is already targeting this output path",
+                            output_path=output_path,
+                            job_id=existing["id"],
+                        )
             self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
@@ -178,7 +192,7 @@ class Jobs:
                     else request.output_suffix
                 ),
                 "output_conflict_policy": request.output_conflict_policy,
-                "output_path": str(output.relative_to(self._media_root)),
+                "output_path": output_path,
                 "source_format": source_format,
             }
             if subtitle is not None:

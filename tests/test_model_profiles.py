@@ -1,6 +1,7 @@
 """Public standalone Model Profile behavior."""
 
 import threading
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -349,7 +350,7 @@ def test_each_translation_attempt_resolves_latest_profile_without_a_snapshot(
         )
         jobs.create(request)
         assert first_started.wait(5)
-        jobs.create(request)
+        jobs.create(replace(request, output_suffix="second"))
         profiles.replace(
             profile["id"], "Selected", "Synthetic", [setting("model", "latest")]
         )
