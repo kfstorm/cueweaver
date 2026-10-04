@@ -100,12 +100,14 @@ class PySubtransTranslator:
             )
         try:
             project.TranslateSubtitles(engine)
+            if engine.errors:
+                # PySubtrans collects batch failures instead of raising them.
+                # Preserve their messages even if the engine also aborted.
+                raise RuntimeError(
+                    "\n".join(dict.fromkeys(str(error) for error in engine.errors))
+                )
             if engine.aborted:
                 raise RuntimeError("PySubtrans translation was aborted")
-            if engine.errors:
-                raise RuntimeError(
-                    f"PySubtrans reported {len(engine.errors)} translation error(s)"
-                )
             if not project.subtitles.all_translated:
                 raise RuntimeError("PySubtrans did not translate every subtitle")
             return _save_translation_bytes(project, source.suffix)

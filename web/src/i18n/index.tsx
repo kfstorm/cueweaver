@@ -449,7 +449,7 @@ const ENGLISH = {
   "jobs.none": "None",
   "jobs.timeInformation": "Time information",
   "jobs.statusUnavailable": "Status history unavailable for this Job.",
-  "jobs.showDiagnostics": "Show approved diagnostic context",
+  "jobs.showDiagnostics": "Show diagnostic details",
   "jobs.errorCode": "Error code",
   "jobs.select": "Select a Job",
   "jobs.selectDetail":

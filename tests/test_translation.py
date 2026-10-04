@@ -154,6 +154,43 @@ def _patch_translation_dependencies(
     monkeypatch.setattr("cueweaver.translation.SubtitleTranslator", engine)
 
 
+@pytest.mark.parametrize("aborted", [False, True])
+def test_translation_preserves_provider_errors_even_when_aborted(
+    tmp_path, monkeypatch, aborted
+):
+    source = tmp_path / "source.srt"
+    source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+
+    class Project:
+        subtitles = SimpleNamespace(terminology_map={}, all_translated=False)
+
+        def TranslateSubtitles(self, engine):
+            engine.errors = [
+                RuntimeError("Client error: 401 Synthetic account missing.")
+            ]
+            engine.aborted = aborted
+
+        def SaveProjectFile(self):
+            pass
+
+    _patch_translation_dependencies(
+        monkeypatch,
+        Project(),
+        MinimalEngine,
+        lambda _path: pytest.fail("Failed translation must not be published"),
+        lambda **_kwargs: SimpleNamespace(
+            provider="OpenRouter", model="synthetic-model"
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="Client error: 401 Synthetic account missing"
+    ):
+        PySubtransTranslator().translate(
+            source, "zh-Hans", work_directory=tmp_path / "work"
+        )
+
+
 @pytest.mark.parametrize(
     ("provider_name", "model", "thinking_disabled"),
     [

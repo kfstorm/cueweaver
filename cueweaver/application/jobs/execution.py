@@ -133,11 +133,11 @@ class JobExecution:
             return _interrupted_outcome()
         except ServiceError as error:
             return self._outcome_for_error(error)
-        except Exception:
+        except Exception as error:
             return self._outcome_for_error(
                 ServiceError(
                     "extraction_failed" if extracting else "translation_failed",
-                    "Extraction failed" if extracting else "Translation failed",
+                    str(error) or type(error).__name__,
                 )
             )
 

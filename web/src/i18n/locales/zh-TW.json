@@ -355,7 +355,7 @@
   "jobs.none": "無",
   "jobs.timeInformation": "時間資訊",
   "jobs.statusUnavailable": "此任務的狀態歷史不可用。",
-  "jobs.showDiagnostics": "顯示已核准的診斷內容",
+  "jobs.showDiagnostics": "查看診斷詳情",
   "jobs.errorCode": "錯誤代碼",
   "jobs.select": "選擇任務",
   "jobs.selectDetail": "從歷史記錄選擇一個任務，以檢視其設定、輸出與診斷資訊。",

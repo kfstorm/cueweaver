@@ -1238,7 +1238,7 @@ describe("product shell", () => {
       },
       error: {
         code: "translation_failed",
-        message: "Translation failed",
+        message: "Client error: 401 Synthetic account missing.",
         field: "subtitle",
       },
     });
@@ -1253,10 +1253,13 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "Action needed" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Translation failed")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Show approved diagnostic context"));
-    expect(screen.getByText("translation_failed")).toBeInTheDocument();
-    expect(screen.getByText("subtitle")).toBeInTheDocument();
+    const message = screen.getByText("Client error: 401 Synthetic account missing.");
+    expect(message).toBeVisible();
+    const summary = message.closest("section")?.querySelector("summary");
+    if (!summary) throw new Error("Job failure diagnostics must be expandable");
+    fireEvent.click(summary);
+    expect(screen.getByText("translation_failed")).toBeVisible();
+    expect(screen.getByText("subtitle")).toBeVisible();
   });
 
   it("opens a durable Job detail with time information and status history", async () => {
