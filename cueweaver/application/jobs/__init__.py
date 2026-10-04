@@ -163,18 +163,7 @@ class Jobs:
             _require_writable_directory(output.parent)
             output_path = str(output.relative_to(self._media_root))
             with self._lock:
-                for existing in self._records.values():
-                    existing_request = cast(dict[str, object], existing["request"])
-                    if (
-                        existing["status"] not in TERMINAL_JOB_STATUSES
-                        and existing_request["output_path"] == output_path
-                    ):
-                        raise ServiceError(
-                            "output_job_active",
-                            "Another active Job is already targeting this output path",
-                            output_path=output_path,
-                            job_id=existing["id"],
-                        )
+                self._require_output_not_active(output_path)
             self._next_queue_sequence += 1
             job_id = uuid.uuid4().hex
             now = _timestamp()
@@ -318,6 +307,10 @@ class Jobs:
                     self._write_record(failed_record)
                 raise safe_error from error
             with self._lock:
+                output_path = str(
+                    self._base_output_path(request).relative_to(self._media_root)
+                )
+                self._require_output_not_active(output_path)
                 retry_record = copy_job_record(record)
                 retry_request = retry_record["request"]
                 assert isinstance(retry_request, dict)
@@ -336,9 +329,7 @@ class Jobs:
                 retry_record["started_at"] = None
                 retry_record["finished_at"] = None
                 retry_record["error"] = None
-                retry_request["output_path"] = str(
-                    self._base_output_path(retry_request).relative_to(self._media_root)
-                )
+                retry_request["output_path"] = output_path
                 retry_record["queue_sequence"] = next_queue_sequence
                 self._write_record(retry_record)
                 self._next_queue_sequence = next_queue_sequence
@@ -1182,6 +1173,21 @@ class Jobs:
                         job_id,
                         persistence_error,
                     )
+
+    def _require_output_not_active(self, output_path: str) -> None:
+        """Require callers to hold both lifecycle and record locks."""
+        for existing in self._records.values():
+            existing_request = cast(dict[str, object], existing["request"])
+            if (
+                existing["status"] not in TERMINAL_JOB_STATUSES
+                and existing_request["output_path"] == output_path
+            ):
+                raise ServiceError(
+                    "output_job_active",
+                    "Another active Job is already targeting this output path",
+                    output_path=output_path,
+                    job_id=existing["id"],
+                )
 
     def _write_record(self, record: dict[str, object]) -> None:
         persisted = copy_job_record(record)

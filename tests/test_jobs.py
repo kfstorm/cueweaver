@@ -2026,6 +2026,51 @@ def test_embedded_retry_reuses_checkpoint_and_output_policy(
     jobs.close()
 
 
+@pytest.mark.parametrize("status", ["Failed", "Interrupted"])
+def test_retry_rejects_base_output_targeted_by_an_active_job(
+    tmp_path: Path, status: str
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    store = SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3"))
+    record = persisted_job_record("retry-job", status)
+    # A previous attempt may have selected an append-numbered output.
+    record["request"]["output_path"] = "Movie.zh-Hans.2.srt"
+    store.write(record)
+    started = threading.Event()
+    release = threading.Event()
+    jobs = Jobs(
+        FakeTranslator(started=started, release=release),
+        media_root,
+        work_root,
+        record_store=store,
+    )
+    try:
+        active = jobs.create(
+            CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+        )
+        assert started.wait(timeout=5)
+        original_before = jobs.get("retry-job")
+        active_before = jobs.get(str(active["id"]))
+        persisted_before = store.load()
+        assert original_before["status"] == status
+        assert active_before["status"] == "Translating"
+
+        with pytest.raises(ServiceError) as raised:
+            jobs.retry("retry-job")
+
+        assert raised.value.error_code == "output_job_active"
+        assert raised.value.context == {
+            "output_path": "Movie.zh-Hans.srt",
+            "job_id": active["id"],
+        }
+        assert jobs.get("retry-job") == original_before
+        assert jobs.get(str(active["id"])) == active_before
+        assert store.load() == persisted_before
+    finally:
+        release.set()
+        jobs.wait_closed()
+
+
 def test_retry_source_validation_keeps_failed_job_terminal_and_updates_error(
     tmp_path: Path,
 ):
