@@ -33,12 +33,18 @@ _Avoid_: demux
 **Term map**:
 An explicit, reusable JSON object mapping non-empty source terms to non-empty
 target terms. A Job can select one, follow a Directory default, or explicitly
-disable terminology mapping.
+disable terminology mapping. Each Job uses at most one complete Term map;
+directory inheritance selects one map rather than merging maps. A map can
+include character names, places, titles, and other terms for the same work.
 _Avoid_: glossary
 
 **Directory default**:
 The Term map associated with a Media directory for translations beneath it,
 unless a Job explicitly selects or disables its Term map.
+
+**Directory rule**:
+An explicit Directory default managed in Settings under Term maps → Automatic
+use. A subdirectory's rule takes priority over its ancestors' rules.
 
 **Term map for this translation**:
 The Term map policy selected for one Job: follow the Directory default, use a

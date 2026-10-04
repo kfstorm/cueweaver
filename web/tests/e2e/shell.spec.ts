@@ -781,7 +781,7 @@ test("batch Translate creates independent Jobs in request order through the real
   );
 });
 
-test("Translate manages the current Directory default binding", async ({ page }) => {
+test("Settings manages explicit directory rules and inheritance", async ({ page }) => {
   const termMap = {
     id: "map-directory",
     name: "Series terms",
@@ -847,6 +847,18 @@ test("Translate manages the current Directory default binding", async ({ page })
   );
   await page.route("**/api/term-maps/directory**", async (route) => {
     const request = route.request();
+    if (new URL(request.url()).pathname.endsWith("/directory-rules")) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          rules: [...directoryStates].map(([directory, state]) => ({
+            directory,
+            term_map: state.local,
+          })),
+        }),
+      });
+      return;
+    }
     const path = new URL(request.url()).searchParams.get("path") ?? "";
     if (request.method() === "GET") {
       const directory = canonicalDirectory(path);
@@ -879,45 +891,40 @@ test("Translate manages the current Directory default binding", async ({ page })
     });
   });
   const expectEffectiveTermMap = async (name: string) => {
-    await expect(
-      page
-        .getByRole("region", { name: "Directory default" })
-        .locator(".directory-term-map-state dd")
-        .filter({ hasText: name })
-        .first(),
-    ).toBeVisible();
+    await expect(page.locator("#directory-rule-result")).toContainText(name);
   };
 
-  await page.goto("/translate");
-  await page.getByRole("button", { name: "Open Series" }).click();
-  await expect(page.getByText("Effective Term map")).toBeVisible();
+  await page.goto("/settings/term-maps/automatic");
+  await page.getByRole("button", { name: "Add directory rule" }).click();
+  await page.getByRole("button", { name: "Series", exact: true }).click();
   await page
-    .getByRole("combobox", { name: "Directory default" })
+    .getByRole("combobox", { name: "Default Term map" })
     .selectOption(termMap.id);
-  await page.getByRole("button", { name: "Bind Term map" }).click();
+  await page.getByRole("button", { name: "Save directory rule" }).click();
   await expectEffectiveTermMap("Series terms");
   await expect(
-    page.getByRole("button", { name: "Remove local binding" }),
+    page.getByRole("button", { name: "Delete directory rule" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Open Season 1" }).click();
+  await page.getByRole("button", { name: "Season 1", exact: true }).click();
   await expectEffectiveTermMap("Series terms");
-  await expect(page.getByText("Inherited from Series")).toBeVisible();
+  await page.getByText("View source", { exact: true }).click();
+  await expect(page.locator(".directory-rule-editor details")).toContainText("Series");
   await page
-    .getByRole("combobox", { name: "Directory default" })
+    .getByRole("combobox", { name: "Default Term map" })
     .selectOption(childTermMap.id);
-  await page.getByRole("button", { name: "Bind Term map" }).click();
+  await page.getByRole("button", { name: "Save directory rule" }).click();
   await expectEffectiveTermMap("Season terms");
-  await page.getByRole("button", { name: "alias", exact: true }).click();
+  await page.getByRole("button", { name: "Parent directory", exact: true }).click();
   await page
-    .getByRole("combobox", { name: "Directory default" })
+    .getByRole("combobox", { name: "Default Term map" })
     .selectOption(replacementTermMap.id);
-  await page.getByRole("button", { name: "Replace local binding" }).click();
+  await page.getByRole("button", { name: "Save directory rule" }).click();
   await expectEffectiveTermMap("Replacement terms");
-  await page.getByRole("button", { name: "Open Season 1" }).click();
+  await page.getByRole("button", { name: "Season 1", exact: true }).click();
   await expectEffectiveTermMap("Season terms");
-  await page.getByRole("button", { name: "alias", exact: true }).click();
-  await page.getByRole("button", { name: "Remove local binding" }).click();
-  await expect(page.getByText("No default")).toBeVisible();
+  await page.getByRole("button", { name: "Parent directory", exact: true }).click();
+  await page.getByRole("button", { name: "Delete directory rule" }).click();
+  await expectEffectiveTermMap("No Term map");
 });
 
 test("Translate Term map controls are keyboard-operable", async ({ page }) => {
@@ -935,13 +942,6 @@ test("Translate Term map controls are keyboard-operable", async ({ page }) => {
   });
 
   await page.goto("/translate");
-  const directoryDefault = page.getByRole("combobox", { name: "Directory default" });
-  await expect(directoryDefault).toBeEnabled();
-  await directoryDefault.focus();
-  await directoryDefault.press("ArrowDown");
-  await directoryDefault.press("Enter");
-  await expect(directoryDefault).toHaveValue(termMap.id);
-
   await page.getByRole("button", { name: "Select Example movie" }).click();
   await page
     .getByRole("button", {
@@ -1241,7 +1241,7 @@ test("missing Model Profiles are actionable and cannot submit", async ({ page })
   ).toHaveAttribute("href", "/settings/model-profiles");
   await expect(page.getByRole("link", { name: "Manage Term Maps" })).toHaveAttribute(
     "href",
-    "/settings/term-maps",
+    "/settings/term-maps?directory=&from=translate",
   );
   await expect(page.getByRole("button", { name: "Start translation" })).toBeDisabled();
 });

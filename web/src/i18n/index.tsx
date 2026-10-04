@@ -43,6 +43,42 @@ export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
 ];
 
 const ENGLISH = {
+  "termMaps.optional": "(optional)",
+  "termMaps.selectionUnavailable":
+    "The selected Term map no longer exists. Choose another or use no Term map.",
+  "termMaps.autoChoose": "Automatic (by Media directory)",
+  "termMaps.autoResult": "Automatic · {name}",
+  "termMaps.batchDirectoryMismatch":
+    "Batch Media must share one directory. Select Media from the same directory.",
+  "termMaps.autoHelp":
+    "Automatic uses the default Term map for each Media's directory.",
+  "termMaps.autoUnavailable": "Cannot determine the automatic Term map",
+  "termMaps.returnTranslate": "Return to translation",
+  "termMaps.automatic": "Automatic use",
+  "termMaps.automaticDetail":
+    "Choose where Term maps are used automatically for new translations.",
+  "termMaps.directoryRules": "Directory rules",
+  "termMaps.addRule": "Add directory rule",
+  "termMaps.noRules":
+    "No directory rules. Automatic selection uses no Term map until you add a rule.",
+  "termMaps.editRuleFor": "Edit rule for {name}",
+  "termMaps.editRule": "Directory rule",
+  "termMaps.chooseDirectory": "Choose a directory",
+  "termMaps.parentDirectory": "Parent directory",
+  "termMaps.ruleScope":
+    "Used for automatic selection in this directory and its subdirectories. A subdirectory's own rule takes priority.",
+  "termMaps.currentResult": "Currently used: {name}",
+  "termMaps.viewSource": "View source",
+  "termMaps.defaultTermMap": "Default Term map",
+  "termMaps.saveRule": "Save directory rule",
+  "termMaps.deleteRule": "Delete directory rule",
+  "termMaps.ruleSaved": "Directory rule saved",
+  "termMaps.ruleRemoved": "Rule deleted. Automatic selection now uses: {name}",
+  "termMaps.removeResult":
+    "After deleting this rule, automatic selection will use: {name}",
+  "termMaps.searchLibrary": "Search Term maps",
+  "termMaps.newMap": "New Term map",
+  "termMaps.noMatches": "No matching Term maps.",
   "language.label": "Language",
   "language.change": "Change interface language",
   "language.interfaceDetail":
@@ -275,7 +311,7 @@ const ENGLISH = {
   "translate.appliedEvery": "Applied to every queued translation.",
   "translate.outputFilename": "Output filename:",
   "translate.loadingTermMaps": "Loading Term maps",
-  "translate.noTermMapJob": "No Term map for this Job",
+  "translate.noTermMapJob": "No Term map",
   "translate.termMapPolicyHelp":
     "Follow the Directory default, explicitly use no Term map, or choose a specific Term map for this translation.",
   "translate.directoryOption": "Directory: {name}",

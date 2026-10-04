@@ -57,6 +57,15 @@ def register_term_maps(app: FastAPI, application: TermMapsApplication) -> None:
     ) -> dict[str, object]:
         return directory_state_body(application.directory_term_maps.get(path))
 
+    @app.get("/api/term-maps/directory-rules")
+    def list_directory_rules() -> dict[str, object]:
+        return {
+            "rules": [
+                {"directory": rule.directory, "term_map": summary_body(rule.term_map)}
+                for rule in application.directory_term_maps.list_rules()
+            ]
+        }
+
     @app.put("/api/term-maps/directory")
     def bind_directory_term_map(body: DirectoryTermMapBody) -> dict[str, object]:
         if body.term_map_id is None:

@@ -35,7 +35,7 @@ describe("CSS density tokens", () => {
     for (const [contract, expectedMatches] of [
       [/\.job-list\s*\{[^}]*?gap: var\(--space-3\);/gu, 1],
       [/\.term-map-upload form\s*\{[^}]*?gap: var\(--space-4\);/gu, 1],
-      [/\.term-map-layout\s*\{[^}]*?gap: var\(--space-5\);/gu, 2],
+      [/\.term-map-layout\s*\{[^}]*?gap: var\(--space-5\);/gu, 1],
       [/\.job-list-panel > section\s*\{[^}]*?margin-top: var\(--space-5\);/gu, 1],
       [/\.job-layout\s*\{[^}]*?gap: var\(--space-5\);/gu, 1],
       [/\.workflow-panel\s*\{[^}]*?padding: var\(--space-5\) 0;/gu, 1],

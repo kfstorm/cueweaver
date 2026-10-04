@@ -195,8 +195,9 @@ function expectModelProfileFieldStatus() {
 }
 
 async function selectDirectoryTermMap(id: string, optionName: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "Add directory rule" }));
   const directorySelect = await screen.findByRole("combobox", {
-    name: "Directory default",
+    name: "Default Term map",
   });
   await screen.findByRole("option", { name: optionName });
   fireEvent.change(directorySelect, { target: { value: id } });
@@ -290,6 +291,13 @@ function createDirectoryMutationFetchMock(
     .mockImplementation(async (input: string, init?: RequestInit) => {
       if (input === "/api/term-maps") {
         return jsonResponse({ term_maps: termMaps });
+      }
+      if (input === "/api/term-maps/directory-rules") {
+        return jsonResponse({
+          rules: scenario.localTermMap
+            ? [{ directory: "", term_map: scenario.localTermMap }]
+            : [],
+        });
       }
       if (input.startsWith("/api/term-maps/directory")) {
         const state = () => ({
@@ -777,6 +785,11 @@ function renderTermMapsWithFetch(fetchImplementation: typeof fetch) {
   return renderWithFetch("/term-maps", fetchImplementation);
 }
 
+async function openTermMapCreation() {
+  await screen.findByRole("heading", { name: "No Term maps yet" });
+  fireEvent.click(screen.getByRole("button", { name: "New Term map" }));
+}
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
@@ -795,6 +808,7 @@ describe("product shell", () => {
       window.localStorage.setItem("cueweaver.ui-locale", locale);
 
       renderTermMaps();
+      fireEvent.click(screen.getByRole("button", { name: table["termMaps.newMap"] }));
 
       expect(await screen.findByText(nameHelp)).toBeInTheDocument();
       expect(document.querySelector(".concept-help pre")?.textContent).toBe(
@@ -1037,7 +1051,7 @@ describe("product shell", () => {
     );
     expect(screen.getByRole("link", { name: "Manage Term Maps" })).toHaveAttribute(
       "href",
-      "/settings/term-maps",
+      "/settings/term-maps?directory=&from=translate",
     );
     expect(screen.queryByText(/provider ready/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start translation" })).toBeDisabled();
@@ -2456,6 +2470,7 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Term maps yet" }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New Term map" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Pending" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: '{"Other":"Value"}' },
@@ -2471,7 +2486,7 @@ describe("product shell", () => {
       }),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Upload Term map" })).toBeEnabled(),
+      expect(screen.getByRole("button", { name: "New Term map" })).toBeEnabled(),
     );
   });
 
@@ -2679,6 +2694,8 @@ describe("product shell", () => {
     expect(
       await screen.findByRole("heading", { name: "No Term maps yet" }),
     ).toBeInTheDocument();
+    expect(screen.queryByLabelText("JSON content")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New Term map" }));
     expect(screen.getByLabelText("Name")).toHaveAttribute(
       "placeholder",
       "Name it by media, season, language pair, and version.",
@@ -2707,7 +2724,7 @@ describe("product shell", () => {
     const fetchMock = termMapFetch();
     renderTermMapsWithFetch(fetchMock);
 
-    await screen.findByRole("heading", { name: "No Term maps yet" });
+    await openTermMapCreation();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Broken" } });
     fireEvent.change(screen.getByLabelText("JSON content"), { target: { value: "{" } });
     fireEvent.click(screen.getByRole("button", { name: "Upload Term map" }));
@@ -2728,7 +2745,7 @@ describe("product shell", () => {
     });
     renderTermMapsWithFetch(fetchMock);
 
-    await screen.findByRole("heading", { name: "No Term maps yet" });
+    await openTermMapCreation();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Imported" } });
     fireEvent.change(screen.getByLabelText("JSON file"), {
       target: {
@@ -2751,6 +2768,10 @@ describe("product shell", () => {
         content: { Captain: "队长", Ship: "舰船" },
       }),
     );
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "New Term map" }));
     expect(screen.getByLabelText("Name")).toHaveValue("");
     expect(screen.getByLabelText("JSON content")).toHaveValue("");
   });
@@ -2759,7 +2780,7 @@ describe("product shell", () => {
     const fetchMock = termMapFetch();
     renderTermMapsWithFetch(fetchMock);
 
-    await screen.findByRole("heading", { name: "No Term maps yet" });
+    await openTermMapCreation();
     fireEvent.drop(screen.getByText("Import JSON file").parentElement!, {
       dataTransfer: {
         files: [new File(['{"Source":"one","source":"two"}'], "terms.json")],
@@ -2790,7 +2811,7 @@ describe("product shell", () => {
     const fetchMock = termMapFetch();
     renderTermMapsWithFetch(fetchMock);
 
-    await screen.findByRole("heading", { name: "No Term maps yet" });
+    await openTermMapCreation();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Duplicate" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: duplicateContent },
@@ -2807,7 +2828,7 @@ describe("product shell", () => {
     );
     renderTermMapsWithFetch(fetchMock);
 
-    await screen.findByRole("heading", { name: "No Term maps yet" });
+    await openTermMapCreation();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Names" } });
     fireEvent.change(screen.getByLabelText("JSON content"), {
       target: { value: '{"Source":"Target"}' },
@@ -3516,27 +3537,293 @@ describe("product shell", () => {
     expect(screen.getByLabelText("Target language code")).toHaveValue("x-custom");
   });
 
-  it("explains the Directory default and Job-level Term map scopes", async () => {
+  it("keeps directory configuration out of Translate and preserves its draft across Settings", async () => {
     renderRoute("/translate");
 
     await selectExternalSubtitle();
-
+    await enterCustomTargetLanguage("zh-Hans");
+    fireEvent.change(screen.getByLabelText("Subtitle suffix"), {
+      target: { value: "example" },
+    });
+    const select = screen.getByRole("combobox", {
+      name: "Term map for this translation",
+    });
+    fireEvent.change(select, { target: { value: "" } });
     expect(
-      screen.getByRole("region", { name: "Directory default" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("region", { name: "Directory default" }),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByText(
-        "Applies to Media beneath the current directory unless a Job overrides or disables it.",
-      ),
+      screen.queryByRole("button", { name: "Bind Term map" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Manage Term Maps" }));
+    expect(
+      await screen.findByRole("link", { name: "Automatic use" }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Return to translation" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled(),
+    );
+    expect(screen.getByLabelText("Subtitle suffix")).toHaveValue("example");
+    expect(screen.getByLabelText("Target language code")).toHaveValue("zh-Hans");
     expect(
       screen.getByRole("combobox", { name: "Term map for this translation" }),
-    ).toHaveAttribute("aria-describedby", "term-map-policy-help");
+    ).toHaveValue("");
+  });
+
+  it("previews one complete batch Term map from the resolved directory of file links", async () => {
+    const exampleMap = { ...CHARACTERS_TERM_MAP, name: "Example series" };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/jobs/batch" && init?.method === "POST")
+          return jsonResponse({
+            results: [{ id: "job-example-1" }, { id: "job-example-2" }],
+          });
+        if (input === "/api/term-maps")
+          return jsonResponse({ term_maps: [exampleMap] });
+        if (input === "/api/media/browse")
+          return jsonResponse({
+            path: "",
+            entries: [
+              { kind: "media", name: "Movie.mkv", path: "Movie.mkv" },
+              { kind: "media", name: "Second.mkv", path: "Second.mkv" },
+            ],
+          });
+        if (input.startsWith("/api/term-maps/directory?")) {
+          const directory = new URL(input, "https://example.com").searchParams.get(
+            "path",
+          );
+          return jsonResponse({
+            directory,
+            local: null,
+            effective: exampleMap,
+            source_directory: "Series",
+          });
+        }
+        if (input === "/api/media/discover") {
+          const path = JSON.parse(String(init?.body)).path;
+          return jsonResponse({
+            path,
+            directory: "Series/Season 1",
+            candidates: [
+              {
+                kind: "external",
+                path: `Series/Season 1/${path.replace(".mkv", ".en.srt")}`,
+                format: "srt",
+              },
+            ],
+            unsupported_candidates: [],
+          });
+        }
+        return jobListResponse([]);
+      });
+    renderWithFetch("/translate", fetchMock);
+    fireEvent.click(await screen.findByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select Movie.mkv" }));
     expect(
-      screen.getByText(
-        "Follow the Directory default, explicitly use no Term map, or choose a specific Term map for this translation.",
-      ),
+      await screen.findByRole("option", { name: "Automatic · Example series" }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select Second.mkv" }));
+    expect(
+      await screen.findByRole("option", { name: "Automatic · Example series" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Series")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/term-maps/directory?path=Series%2FSeason%201",
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/term-maps/directory?path=");
+    const selector = screen.getByRole("combobox", {
+      name: "Term map for this translation",
+    });
+    expect(selector).not.toHaveAttribute("multiple");
+    fireEvent.change(selector, { target: { value: exampleMap.id } });
+    await submitBatch();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/jobs/batch",
+        expect.objectContaining({
+          body: expect.stringContaining('"term_map_id":"map-1"'),
+        }),
+      ),
+    );
+  });
+
+  it("keeps the same-directory batch constraint when file links resolve to different directories", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      BATCH_MEDIA,
+      undefined,
+      false,
+      UNIQUE_BATCH_DISCOVERIES.map((item, index) => ({
+        ...item,
+        directory: index === 0 ? "Example Series" : "Example Film",
+      })),
+      [CHARACTERS_TERM_MAP],
+    );
+    await selectBatchMedia();
+    await enterCustomTargetLanguage("zh-Hans");
+    const submit = screen.getByRole("button", { name: "Queue selected translations" });
+    expect(submit).toBeDisabled();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Term map for this translation" }),
+      { target: { value: "" } },
+    );
+    expect(submit).toBeDisabled();
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      "/api/jobs/batch",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("waits for refreshed directory rules before deleting or retrying a deletion", async () => {
+    const seriesMap = { ...CHARACTERS_TERM_MAP, name: "Example series" };
+    const parentMap = { ...seriesMap, id: "map-parent", name: "Example collection" };
+    const nextParent = { ...parentMap, name: "Updated collection" };
+    let resolveRules!: (value: unknown) => void;
+    const pendingRules = new Promise((resolve) => {
+      resolveRules = resolve;
+    });
+    let calls = 0;
+    let deleteCalls = 0;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/term-maps/directory" && init?.method === "DELETE") {
+          deleteCalls += 1;
+          return jsonResponse({ message: "Deletion failed" }, false);
+        }
+        if (input === "/api/term-maps/directory-rules") {
+          if (++calls > 1) return pendingRules;
+          return jsonResponse({
+            rules: [
+              { directory: "", term_map: parentMap },
+              { directory: "Series", term_map: seriesMap },
+            ],
+          });
+        }
+        if (input === "/api/term-maps")
+          return jsonResponse({ term_maps: [seriesMap, parentMap] });
+        if (input.startsWith("/api/term-maps/directory?"))
+          return jsonResponse({
+            directory: "Series",
+            local: seriesMap,
+            effective: seriesMap,
+            source_directory: "Series",
+          });
+        if (input === "/api/media/browse") return emptyMediaResponse();
+        return jobListResponse([]);
+      });
+    const { queryClient } = renderWithFetch("/settings/term-maps/automatic", fetchMock);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit rule for Series" }),
+    );
+    const remove = await screen.findByRole("button", { name: "Delete directory rule" });
+    expect(document.getElementById("directory-rule-delete-help")).toHaveTextContent(
+      parentMap.name,
+    );
+    fireEvent.click(remove);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    const refresh = queryClient.invalidateQueries({
+      queryKey: ["directory-term-map-rules"],
+    });
+    await waitFor(() => expect(remove).toBeDisabled());
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(deleteCalls).toBe(1);
+    expect(
+      document.getElementById("directory-rule-delete-help"),
+    ).not.toBeInTheDocument();
+    resolveRules(
+      jsonResponse({
+        rules: [
+          { directory: "", term_map: nextParent },
+          { directory: "Series", term_map: seriesMap },
+        ],
+      }),
+    );
+    await refresh;
+    await waitFor(() => expect(remove).toBeEnabled());
+    expect(retry).toBeEnabled();
+    expect(document.getElementById("directory-rule-delete-help")).toHaveTextContent(
+      nextParent.name,
+    );
+  });
+
+  it("lists explicit directory rules, pre-fills a new rule, and explains the result of deletion", async () => {
+    const rootMap = { ...CHARACTERS_TERM_MAP, name: "Example collection" };
+    const seriesMap = { ...rootMap, id: "map-series", name: "Example series" };
+    let local = seriesMap as TermMapSummary | null;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/term-maps")
+          return jsonResponse({ term_maps: [rootMap, seriesMap] });
+        if (input === "/api/term-maps/directory-rules")
+          return jsonResponse({
+            rules: [
+              { directory: "", term_map: rootMap },
+              ...(local ? [{ directory: "Series", term_map: local }] : []),
+            ],
+          });
+        if (input.startsWith("/api/term-maps/directory")) {
+          if (init?.method === "DELETE") local = null;
+          if (init?.method === "PUT") local = seriesMap;
+          return jsonResponse({
+            directory: "Series",
+            local,
+            effective: local ?? rootMap,
+            source_directory: local ? "Series" : "",
+          });
+        }
+        if (input === "/api/media/browse") return emptyMediaResponse();
+        return jobListResponse([]);
+      });
+    renderWithFetch(
+      "/settings/term-maps/automatic?directory=Series&from=translate",
+      fetchMock,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Edit rule for Series" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Default Term map" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add directory rule" }));
+    expect(screen.getByText("Current directory: Series")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(document.getElementById("directory-rule-delete-help")).toHaveTextContent(
+        rootMap.name,
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete directory rule" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(rootMap.name),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Edit rule for Series" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(document.getElementById("directory-rule-result")).toHaveTextContent(
+      rootMap.name,
+    );
+    fireEvent.click(screen.getByText("View source"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Default Term map" }), {
+      target: { value: "map-series" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save directory rule" }));
+    expect(
+      await screen.findByRole("button", { name: "Edit rule for Series" }),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/term-maps/directory",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ path: "Series", term_map_id: "map-series" }),
+      }),
+    );
   });
 
   it("announces queueing while Job creation is pending and after success", async () => {
@@ -3756,7 +4043,7 @@ describe("product shell", () => {
     expect(first).not.toHaveTextContent("Stream 4");
   });
 
-  it("keeps the Term map control disabled while its list is loading", async () => {
+  it("keeps automatic and no-map choices available while the saved list is loading", async () => {
     const pending = new Promise<never>(() => undefined);
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/term-maps") return pending;
@@ -3767,9 +4054,12 @@ describe("product shell", () => {
     renderWithFetch("/translate", fetchMock);
     await selectExternalSubtitle();
     expect(screen.getByText("Loading Term maps")).toBeInTheDocument();
-    expect(
-      screen.getByRole("combobox", { name: "Term map for this translation" }),
-    ).toBeDisabled();
+    const selector = screen.getByRole("combobox", {
+      name: "Term map for this translation",
+    });
+    expect(selector).toBeEnabled();
+    fireEvent.change(selector, { target: { value: "" } });
+    expect(selector).toHaveValue("");
   });
 
   it("recovers the Term map control after its list request fails", async () => {
@@ -3806,7 +4096,7 @@ describe("product shell", () => {
     expect(termMapSelect).toHaveFocus();
   });
 
-  it("recovers the Directory default after its binding request fails", async () => {
+  it("recovers automatic selection without presenting its failure as no Term map", async () => {
     let directoryCalls = 0;
     const fetchMock = vi.fn().mockImplementation(async (input: string) => {
       if (input === "/api/term-maps") return jsonResponse({ term_maps: [] });
@@ -3829,22 +4119,60 @@ describe("product shell", () => {
       }
       return jsonResponse({
         path: "Movie.mkv",
-        candidates: [],
+        candidates: [
+          {
+            kind: "external",
+            path: "Movie.en.srt",
+            format: "srt",
+            tags: { language: "en" },
+          },
+        ],
         unsupported_candidates: [],
       });
     });
     renderWithFetch("/translate", fetchMock);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Directory binding unavailable",
-    );
+    await selectExternalSubtitle();
+    expect(
+      await screen.findByText("Cannot determine the automatic Term map", {
+        selector: '[role="alert"]',
+      }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
-    expect(await screen.findByText("No default")).toBeInTheDocument();
     expect(
-      screen.getByRole("region", { name: "Directory default" }),
+      await screen.findByRole("option", { name: /Automatic · No Term map/ }),
     ).toBeInTheDocument();
   });
+
+  it.each(["loading", "error"])(
+    "allows an explicit Term map or none while automatic selection is %s",
+    async (status) => {
+      const fetchMock = vi.fn().mockImplementation(async (input: string) => {
+        if (input === "/api/term-maps")
+          return jsonResponse({ term_maps: [CHARACTERS_TERM_MAP] });
+        if (input.startsWith("/api/term-maps/directory?"))
+          return status === "loading"
+            ? new Promise<never>(() => undefined)
+            : jsonResponse({ message: "Unavailable" }, false);
+        return singleExternalMediaResponse(input) ?? jobListResponse([]);
+      });
+      renderWithFetch("/translate", fetchMock);
+      await selectExternalSubtitleWithLanguage();
+      expectJobSubmissionBlocked();
+      const select = screen.getByRole("combobox", {
+        name: "Term map for this translation",
+      });
+      fireEvent.change(select, { target: { value: "map-1" } });
+      expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
+      fireEvent.change(select, { target: { value: "" } });
+      expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
+      expect(
+        screen.queryByText("Cannot determine the automatic Term map", {
+          selector: '[role="alert"]',
+        }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("retries a failed Directory default binding and restores focus", async () => {
     const { fetchMock, scenario } = createDirectoryMutationFetchMock(
@@ -3862,14 +4190,15 @@ describe("product shell", () => {
       },
       null,
     );
-    renderWithFetch("/translate", fetchMock);
+    renderWithFetch("/settings/term-maps/automatic", fetchMock);
+    fireEvent.click(await screen.findByRole("button", { name: "Add directory rule" }));
 
     const directorySelect = await screen.findByRole("combobox", {
-      name: "Directory default",
+      name: "Default Term map",
     });
     await screen.findByRole("option", { name: "Characters" });
     fireEvent.change(directorySelect, { target: { value: "map-1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Bind Term map" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save directory rule" }));
     await waitFor(() => expect(scenario.bindCalls).toBe(1));
     expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
 
@@ -3900,15 +4229,19 @@ describe("product shell", () => {
         },
       },
     );
-    renderWithFetch("/translate", fetchMock);
+    renderWithFetch("/settings/term-maps/automatic", fetchMock);
 
-    await selectDirectoryTermMap("map-settings", "Directory: Settings");
-    fireEvent.click(screen.getByRole("button", { name: "Replace local binding" }));
+    await selectDirectoryTermMap("map-settings", "Settings");
+    fireEvent.click(screen.getByRole("button", { name: "Save directory rule" }));
     expect(await screen.findByText("Directory binding failed")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove local binding" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete directory rule" }));
     await waitFor(() => expect(scenario.removeCalls).toBe(1));
-    await waitFor(() => expect(screen.getByText("No default")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(document.getElementById("directory-rule-result")).toHaveTextContent(
+        "No Term map",
+      ),
+    );
 
     expect(scenario.bindCalls).toBe(1);
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
@@ -3934,16 +4267,13 @@ describe("product shell", () => {
             : jsonResponse(state()),
       },
     );
-    renderWithFetch("/translate", fetchMock);
+    renderWithFetch("/settings/term-maps/automatic", fetchMock);
 
-    const directorySelect = await selectDirectoryTermMap(
-      "map-settings",
-      "Directory: Settings",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Remove local binding" }));
+    const directorySelect = await selectDirectoryTermMap("map-settings", "Settings");
+    fireEvent.click(screen.getByRole("button", { name: "Delete directory rule" }));
     expect(await screen.findByText("Directory removal failed")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Replace local binding" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save directory rule" }));
     await waitFor(() => expect(scenario.bindCalls).toBe(1));
     await waitFor(() => expect(directorySelect).toHaveValue("map-settings"));
 
@@ -3965,9 +4295,7 @@ describe("product shell", () => {
     await selectExternalSubtitle();
     fireEvent.click(screen.getByText("Advanced settings"));
     const termMap = screen.getByLabelText("Term map for this translation");
-    expect(
-      screen.getByRole("option", { name: "No Term map for this Job" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "No Term map" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Characters" })).toBeInTheDocument();
     fireEvent.change(termMap, { target: { value: "map-1" } });
     await enterCustomTargetLanguage("zh-Hans");
@@ -4037,7 +4365,7 @@ describe("product shell", () => {
     );
   });
 
-  it("clears a Term map selection after the refreshed list removes it", async () => {
+  it("requires a new choice after a selected Term map is deleted", async () => {
     const termMaps = [CHARACTERS_TERM_MAP];
     const { queryClient } = renderRoute(
       "/translate",
@@ -4049,7 +4377,7 @@ describe("product shell", () => {
       termMaps,
     );
 
-    fireEvent.click(screen.getByText("Advanced settings"));
+    await selectExternalSubtitleWithLanguage();
     await screen.findByRole("option", { name: "Characters" });
     const termMap = screen.getByLabelText("Term map for this translation");
     fireEvent.change(termMap, { target: { value: "map-1" } });
@@ -4058,7 +4386,11 @@ describe("product shell", () => {
     termMaps.length = 0;
     await queryClient.invalidateQueries({ queryKey: ["term-maps"] });
 
-    await waitFor(() => expect(termMap).toHaveValue(""));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(termMap).toHaveValue("map-1");
+    expectJobSubmissionBlocked();
+    fireEvent.change(termMap, { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "Start translation" })).toBeEnabled();
   });
 
   it("composes a safe output name and supports atomic overwrite", async () => {

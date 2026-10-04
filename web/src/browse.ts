@@ -55,6 +55,7 @@ export interface UnsupportedSubtitleCandidate {
 
 export interface MediaDiscovery {
   path: string;
+  directory?: string;
   candidates: SubtitleCandidate[];
   unsupported_candidates: UnsupportedSubtitleCandidate[];
 }

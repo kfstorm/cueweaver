@@ -1,17 +1,29 @@
 # Separate Directory Defaults from Translation Selection
 
-CueWeaver keeps a reusable Directory default separate from the Term map policy
-for an individual translation. The Translate flow must expose both concepts:
-the Directory default can be inherited, while a Job can explicitly select a
-specific Term map or disable terminology mapping. This preserves reusable
-directory configuration without removing per-Job control, and the UI must name
-and explain the two scopes distinctly.
+CueWeaver manages reusable Directory defaults in Settings under Term maps →
+Automatic use. Translate exposes only the Term map choice for the current
+translation: automatic selection, one specific map, or no map.
+
+Automatic selection shows the resolved map name without an inheritance path.
+It resolves each Media item's actual directory, including in batch mode. Source
+directories are available in the settings editor when needed. Directory rules
+are listed explicitly; inherited child directories do not create extra rows.
+Batch translation retains its same-directory constraint and selects one map
+for the batch. Discovery reports the resolved directory so file links use the
+same default in the preview and in the created Job.
+
+Each Job uses at most one complete map. A more specific Directory rule replaces
+the ancestor's choice rather than merging its content. Jobs already created
+retain their captured Term map content. Translate drafts survive navigation to
+Settings without writing Media paths to browser storage.
 
 ## Considered Options
 
-- Hide the Directory default from Translate and keep only per-Job selection.
+- Manage Directory defaults in Settings and show the resolved automatic choice
+  in Translate.
 - Always follow the Directory default and remove per-Job override choices.
-- Keep both scopes with explicit inheritance, selection, and disable states.
+- Keep editable directory and per-Job settings together in Translate.
 
-The third option was accepted because the first two discard existing control
-over directory-wide behavior or individual translation behavior.
+The first option is accepted. Putting long-lived directory edits beside a
+single translation made the scope of changes unclear. Settings keeps directory
+control available while Translate focuses on the result for the current Job.

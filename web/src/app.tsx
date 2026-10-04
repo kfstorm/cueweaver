@@ -20,7 +20,6 @@ import {
   type FormEvent,
   type MutableRefObject,
   type ReactNode,
-  type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -61,12 +60,14 @@ import {
   isSkippedJobResult,
   type OutputConflictPolicy,
   type SkippedJobResult,
-  type TermMapMode,
 } from "./jobs";
 import { JobNotificationRegion, JobsPage, SummaryItem } from "./job-history";
 import { ModelProfilesPage, ModelProfileEditor } from "./model-profiles-page";
 import { useModelProfiles } from "./model-profiles";
 import { ThemeProvider } from "./theme-provider";
+import { TranslationDraftProvider, useTranslationDraft } from "./translation-draft";
+import { DirectoryRulesPage } from "./directory-rules-page";
+import { TermMapNavigation } from "./term-map-navigation";
 import { GeneralSettingsPage, SettingsArea } from "./settings-page";
 import {
   formatError,
@@ -79,10 +80,8 @@ import { COMMON_TARGET_LANGUAGES, localizedLanguageLabel } from "./languages";
 import {
   useCreateTermMap,
   useDeleteTermMap,
-  useBindDirectoryTermMap,
-  useDirectoryTermMap,
+  useDirectoryTermMaps,
   useRenameTermMap,
-  useRemoveDirectoryTermMap,
   useReplaceTermMap,
   useTermMap,
   useTermMaps,
@@ -298,63 +297,80 @@ function Translate() {
   const profiles = useModelProfiles();
   const modelProfiles = profiles.data ?? [];
   const hasModelProfiles = profiles.isSuccess && modelProfiles.length > 0;
-  const [modelProfileId, setModelProfileId] = useState("");
+  const [modelProfileId, setModelProfileId] = useTranslationDraft("profile", "");
   const selectedProfile = profiles.data?.find(
     (profile) => profile.id === modelProfileId,
   );
-  const [directory, setDirectory] = useState("");
-  const [filter, setFilter] = useState("");
-  const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
-  const [batchMode, setBatchMode] = useState(false);
-  const [selectedBatchMedia, setSelectedBatchMedia] = useState<Set<string>>(
+  const [directory, setDirectory] = useTranslationDraft("directory", "");
+  const [filter, setFilter] = useTranslationDraft("filter", "");
+  const [selectedMedia, setSelectedMedia] = useTranslationDraft("media", null);
+  const [batchMode, setBatchMode] = useTranslationDraft("batch", false);
+  const [selectedBatchMedia, setSelectedBatchMedia] = useTranslationDraft(
+    "batchMedia",
     () => new Set(),
   );
-  const [batchSubtitleSelections, setBatchSubtitleSelections] = useState<
-    Map<string, string>
-  >(() => new Map());
-  const [expandedBatchMedia, setExpandedBatchMedia] = useState<Set<string>>(
+  const [batchSubtitleSelections, setBatchSubtitleSelections] = useTranslationDraft(
+    "batchSubtitles",
+    () => new Map(),
+  );
+  const [expandedBatchMedia, setExpandedBatchMedia] = useTranslationDraft(
+    "expandedMedia",
     () => new Set(),
   );
-  const [mediaBrowserExpanded, setMediaBrowserExpanded] = useState(true);
-  const [batchSubtitleFilter, setBatchSubtitleFilter] = useState("");
-  const [selectedSubtitle, setSelectedSubtitle] = useState<string | null>(null);
-  const [targetLanguage, setTargetLanguage] = useState(readTargetLanguage);
-  const [targetLanguageChoice, setTargetLanguageChoice] = useState(() => {
-    const remembered = readTargetLanguage();
-    if (remembered === "") return "";
-    return COMMON_TARGET_LANGUAGES.some(({ code }) => code === remembered)
-      ? remembered
-      : "custom";
-  });
-  const [outputSuffix, setOutputSuffix] = useState(() => targetLanguage);
+  const [mediaBrowserExpanded, setMediaBrowserExpanded] = useTranslationDraft(
+    "browserExpanded",
+    true,
+  );
+  const [batchSubtitleFilter, setBatchSubtitleFilter] = useTranslationDraft(
+    "subtitleFilter",
+    "",
+  );
+  const [selectedSubtitle, setSelectedSubtitle] = useTranslationDraft("subtitle", null);
+  const [targetLanguage, setTargetLanguage] = useTranslationDraft(
+    "language",
+    readTargetLanguage,
+  );
+  const [targetLanguageChoice, setTargetLanguageChoice] = useTranslationDraft(
+    "languageChoice",
+    () => {
+      const remembered = readTargetLanguage();
+      if (remembered === "") return "";
+      return COMMON_TARGET_LANGUAGES.some(({ code }) => code === remembered)
+        ? remembered
+        : "custom";
+    },
+  );
+  const [outputSuffix, setOutputSuffix] = useTranslationDraft(
+    "suffix",
+    () => targetLanguage,
+  );
   const customTargetLanguage = targetLanguageChoice === "custom";
-  const [outputConflictPolicy, setOutputConflictPolicy] =
-    useState<OutputConflictPolicy>("skip");
-  const suffixEdited = useRef(false);
-  const [termMapMode, setTermMapMode] = useState<TermMapMode>("follow");
-  const [termMapId, setTermMapId] = useState<string | null>(null);
-  const [directoryTermMapSelection, setDirectoryTermMapSelection] = useState<
-    string | null
-  >(null);
-  const directorySelectRef = useRef<HTMLSelectElement>(null);
-  const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useState(true);
+  const [outputConflictPolicy, setOutputConflictPolicy] = useTranslationDraft(
+    "conflictPolicy",
+    "skip",
+  );
+  const [suffixWasEdited, setSuffixWasEdited] = useTranslationDraft(
+    "suffixEdited",
+    false,
+  );
+  const [termMapMode, setTermMapMode] = useTranslationDraft("termMapMode", "follow");
+  const [termMapId, setTermMapId] = useTranslationDraft("termMapId", null);
+  const [dynamicTerminologyEnabled, setDynamicTerminologyEnabled] = useTranslationDraft(
+    "dynamicTerminology",
+    true,
+  );
   const [subtitleTerminologyFilterEnabled, setSubtitleTerminologyFilterEnabled] =
-    useState(true);
+    useTranslationDraft("subtitleTerminology", true);
   const termMapSelectRef = useRef<HTMLSelectElement>(null);
   const focusTermMapAfterRetry = useRef(false);
   const mediaButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const termMaps = useTermMaps();
-  const directoryTermMap = useDirectoryTermMap(directory);
-  const bindDirectoryTermMap = useBindDirectoryTermMap();
-  const removeDirectoryTermMap = useRemoveDirectoryTermMap();
   useEffect(() => {
     if (focusTermMapAfterRetry.current && termMaps.isSuccess) {
       focusTermMapAfterRetry.current = false;
       termMapSelectRef.current?.focus();
     }
   }, [termMaps.isSuccess]);
-  const selectedDirectoryTermMapId =
-    directoryTermMapSelection ?? directoryTermMap.data?.local?.id ?? "";
   const selectedTermMapId =
     termMapMode === "selected" &&
     termMapId !== null &&
@@ -362,12 +378,45 @@ function Translate() {
       termMaps.data.term_maps.some((termMap) => termMap.id === termMapId))
       ? termMapId
       : null;
-  const submissionTermMapMode: TermMapMode =
-    termMapMode === "selected" && selectedTermMapId === null ? "none" : termMapMode;
+  const selectedTermMapMissing =
+    termMapMode === "selected" && termMaps.isSuccess && selectedTermMapId === null;
   const browser = useMediaDirectory(directory);
   const discovery = useMediaDiscovery(selectedMedia);
   const batchPaths = [...selectedBatchMedia];
   const batchDiscoveries = useMediaDiscoveries(batchPaths);
+  const termMapMediaPaths = batchMode
+    ? batchPaths
+    : selectedMedia
+      ? [selectedMedia]
+      : [];
+  const termMapDirectories = [
+    ...new Set(
+      termMapMediaPaths.flatMap((path, index) => {
+        const result = batchMode ? batchDiscoveries[index]?.data : discovery.data;
+        return result
+          ? [result.directory ?? path.slice(0, Math.max(0, path.lastIndexOf("/")))]
+          : [];
+      }),
+    ),
+  ];
+  const batchDirectoryMismatch = batchMode && termMapDirectories.length > 1;
+  const directoryTermMaps = useDirectoryTermMaps(termMapDirectories);
+  const automaticPending =
+    (batchMode ? batchDiscoveries : selectedMedia ? [discovery] : []).some(
+      (query) => query.isPending || query.isFetching,
+    ) || directoryTermMaps.some((query) => query.isPending || query.isFetching);
+  const automaticError = directoryTermMaps.some((query) => query.isError);
+  const automaticLabel = automaticPending
+    ? t("common.loading")
+    : automaticError
+      ? t("termMaps.autoUnavailable")
+      : termMapDirectories.length === 0 || batchDirectoryMismatch
+        ? t("termMaps.autoChoose")
+        : t("termMaps.autoResult", {
+            name:
+              directoryTermMaps[0]?.data?.effective?.name ??
+              t("translate.noTermMapJob"),
+          });
   const focusBatchMedia = (path: string, fallbackPath?: string) => {
     queueMicrotask(() => {
       (
@@ -442,7 +491,7 @@ function Translate() {
   const outputSuffixError = validateOutputSuffix(outputSuffix, t);
   const updateTargetLanguage = (value: string) => {
     setTargetLanguage(value);
-    if (!suffixEdited.current) setOutputSuffix(value);
+    if (!suffixWasEdited) setOutputSuffix(value);
   };
   const canSubmit =
     (batchMode
@@ -458,26 +507,38 @@ function Translate() {
     outputSuffixError === null &&
     hasModelProfiles &&
     !!selectedProfile &&
+    !batchDirectoryMismatch &&
+    (termMapMode !== "follow" || (!automaticPending && !automaticError)) &&
+    (termMapMode !== "selected" ||
+      (termMaps.isSuccess && !termMaps.isFetching && selectedTermMapId !== null)) &&
     !createJob.isSuccess &&
     !createBatchJobs.isSuccess &&
     !createJob.isPending &&
     !createBatchJobs.isPending;
   const queuedJob =
     createJob.data && !isSkippedJobResult(createJob.data) ? createJob.data : undefined;
-  const nextTranslationStep = getNextTranslationStep({
-    batchMode,
-    selectedMedia,
-    batchMediaCount: batchPaths.length,
-    batchReadyCount: batchItems.length,
-    selectedCandidate,
-    targetLanguage,
-    outputSuffixError,
-    profilesPending: profiles.isPending,
-    profilesError: profiles.isError,
-    hasModelProfiles,
-    hasSelectedProfile: selectedProfile !== undefined,
-    t,
-  });
+  const nextTranslationStep = batchDirectoryMismatch
+    ? t("termMaps.batchDirectoryMismatch")
+    : selectedTermMapMissing
+      ? t("termMaps.selectionUnavailable")
+      : termMapMode === "follow" && automaticPending
+        ? t("common.loading")
+        : termMapMode === "follow" && automaticError
+          ? t("termMaps.autoUnavailable")
+          : getNextTranslationStep({
+              batchMode,
+              selectedMedia,
+              batchMediaCount: batchPaths.length,
+              batchReadyCount: batchItems.length,
+              selectedCandidate,
+              targetLanguage,
+              outputSuffixError,
+              profilesPending: profiles.isPending,
+              profilesError: profiles.isError,
+              hasModelProfiles,
+              hasSelectedProfile: selectedProfile !== undefined,
+              t,
+            });
 
   const resetTranslationWorkflow = () => {
     clearMedia(selectedMedia);
@@ -493,7 +554,7 @@ function Translate() {
     setSubtitleTerminologyFilterEnabled(true);
     setOutputSuffix(targetLanguage);
     setOutputConflictPolicy("skip");
-    suffixEdited.current = false;
+    setSuffixWasEdited(false);
     createJob.reset();
     createBatchJobs.reset();
   };
@@ -531,7 +592,7 @@ function Translate() {
                 if (nextBatchMode) {
                   setOutputSuffix(targetLanguage);
                   setOutputConflictPolicy("skip");
-                  suffixEdited.current = false;
+                  setSuffixWasEdited(false);
                 }
               }}
             />
@@ -546,7 +607,6 @@ function Translate() {
                 setDirectory(path);
                 setTermMapMode("follow");
                 setTermMapId(null);
-                setDirectoryTermMapSelection(null);
                 setFilter("");
                 clearMedia(selectedMedia);
                 setSelectedBatchMedia(new Set());
@@ -691,66 +751,6 @@ function Translate() {
               )}
             </div>
           </div>
-          <DirectoryTermMapPanel
-            directory={directory}
-            termMaps={termMaps.data?.term_maps ?? []}
-            query={directoryTermMap}
-            selectRef={directorySelectRef}
-            selectedId={selectedDirectoryTermMapId}
-            onSelectedIdChange={(value) => {
-              bindDirectoryTermMap.reset();
-              removeDirectoryTermMap.reset();
-              setDirectoryTermMapSelection(value);
-            }}
-            onBind={() => {
-              if (selectedDirectoryTermMapId) {
-                bindDirectoryTermMap.reset();
-                removeDirectoryTermMap.reset();
-                bindDirectoryTermMap.mutate(
-                  {
-                    path: directory,
-                    termMapId: selectedDirectoryTermMapId,
-                  },
-                  {
-                    onSuccess: () => directorySelectRef.current?.focus(),
-                  },
-                );
-              }
-            }}
-            onRemove={() => {
-              bindDirectoryTermMap.reset();
-              removeDirectoryTermMap.reset();
-              removeDirectoryTermMap.mutate(directory, {
-                onSuccess: () => directorySelectRef.current?.focus(),
-              });
-            }}
-            onRetry={() => {
-              if (bindDirectoryTermMap.error && selectedDirectoryTermMapId) {
-                bindDirectoryTermMap.mutate(
-                  {
-                    path: directory,
-                    termMapId: selectedDirectoryTermMapId,
-                  },
-                  {
-                    onSuccess: () => directorySelectRef.current?.focus(),
-                  },
-                );
-              } else if (removeDirectoryTermMap.error) {
-                removeDirectoryTermMap.mutate(directory, {
-                  onSuccess: () => directorySelectRef.current?.focus(),
-                });
-              }
-            }}
-            isBinding={bindDirectoryTermMap.isPending}
-            isRemoving={removeDirectoryTermMap.isPending}
-            error={
-              bindDirectoryTermMap.error ? (
-                <LocalizedErrorMessage error={bindDirectoryTermMap.error} />
-              ) : removeDirectoryTermMap.error ? (
-                <LocalizedErrorMessage error={removeDirectoryTermMap.error} />
-              ) : null
-            }
-          />
         </div>
       </section>
       <section
@@ -877,79 +877,118 @@ function Translate() {
           </span>
           <div className="term-map-field">
             <div className="selector-heading">
-              <label htmlFor="term-map-select">{t("translate.termMap")}</label>
-              <Link to="/settings/term-maps" aria-label={t("settings.manageTermMaps")}>
-                {t("settings.manage")}
+              <label htmlFor="term-map-select">
+                {t("translate.termMap")}{" "}
+                <span className="optional-field-marker">{t("termMaps.optional")}</span>
+              </label>
+              <Link
+                to={`/settings/term-maps?directory=${encodeURIComponent(termMapDirectories[0] ?? directory)}&from=translate`}
+                aria-label={t("settings.manageTermMaps")}
+              >
+                {t("settings.manageTermMaps")}
               </Link>
             </div>
-            <Select
-              id="term-map-select"
-              ref={termMapSelectRef}
-              aria-label={t("translate.termMap")}
-              aria-describedby="term-map-policy-help"
-              value={
-                termMapMode === "follow"
-                  ? DIRECTORY_TERM_MAP_VALUE
-                  : termMapMode === "selected"
-                    ? (selectedTermMapId ?? "")
-                    : ""
-              }
-              onChange={(event) => {
-                const value = event.target.value;
-                if (value === DIRECTORY_TERM_MAP_VALUE) {
-                  setTermMapMode("follow");
-                  setTermMapId(null);
-                } else if (value === "") {
-                  setTermMapMode("none");
-                  setTermMapId(null);
-                } else {
-                  setTermMapMode("selected");
-                  setTermMapId(value);
+            <div className="term-map-choice">
+              <Select
+                id="term-map-select"
+                ref={termMapSelectRef}
+                aria-label={t("translate.termMap")}
+                aria-describedby="term-map-auto-help"
+                value={
+                  termMapMode === "follow"
+                    ? DIRECTORY_TERM_MAP_VALUE
+                    : termMapMode === "selected"
+                      ? (termMapId ?? "")
+                      : ""
                 }
-              }}
-              disabled={termMaps.isPending || termMaps.isError}
-            >
-              <option value={DIRECTORY_TERM_MAP_VALUE}>
-                {directoryTermMap.data?.effective
-                  ? `${t("translate.directoryDefault")} (${directoryTermMap.data.effective.name})`
-                  : `${t("translate.directoryDefault")} (${t("jobs.none")})`}
-              </option>
-              <option value="">{t("translate.noTermMapJob")}</option>
-              {(termMaps.data?.term_maps ?? []).map((termMap) => (
-                <option key={termMap.id} value={termMap.id}>
-                  {termMap.name}
-                </option>
-              ))}
-            </Select>
-            <span id="term-map-policy-help" className="field-help">
-              {t("translate.termMapPolicyHelp")}
-            </span>
-            <span className="field-help">{t("translate.termMapHelp")}</span>
-            {termMaps.data?.term_maps.length === 0 && (
-              <span className="field-help">{t("translate.noTermMapsHelp")}</span>
-            )}
-            {termMaps.isPending && (
-              <span className="field-help" role="status">
-                {t("translate.loadingTermMaps")}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === DIRECTORY_TERM_MAP_VALUE) {
+                    setTermMapMode("follow");
+                    setTermMapId(null);
+                  } else if (value === "") {
+                    setTermMapMode("none");
+                    setTermMapId(null);
+                  } else {
+                    setTermMapMode("selected");
+                    setTermMapId(value);
+                  }
+                }}
+              >
+                <option value={DIRECTORY_TERM_MAP_VALUE}>{automaticLabel}</option>
+                <option value="">{t("translate.noTermMapJob")}</option>
+                {selectedTermMapMissing && termMapId && (
+                  <option value={termMapId} disabled>
+                    {t("termMaps.selectionUnavailable")}
+                  </option>
+                )}
+                <optgroup label={t("termMaps.saved")} disabled={!termMaps.isSuccess}>
+                  {(termMaps.data?.term_maps ?? []).map((termMap) => (
+                    <option key={termMap.id} value={termMap.id}>
+                      {termMap.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </Select>
+              <span id="term-map-auto-help" className="field-help">
+                {t("termMaps.autoHelp")}
               </span>
-            )}
-            {termMaps.isError && (
-              <div className="field-recovery">
+              {selectedTermMapMissing && (
                 <div className="form-error" role="alert">
-                  <LocalizedErrorMessage error={termMaps.error} />
+                  {t("termMaps.selectionUnavailable")}
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    focusTermMapAfterRetry.current = true;
-                    void termMaps.refetch();
-                  }}
-                >
-                  {t("common.tryAgain")}
-                </Button>
-              </div>
-            )}
+              )}
+              {termMapMode === "follow" && automaticPending && (
+                <span className="field-help" role="status">
+                  {t("common.loading")}
+                </span>
+              )}
+              {termMapMode === "follow" && automaticError && (
+                <div className="field-recovery">
+                  <div className="form-error" role="alert">
+                    {t("termMaps.autoUnavailable")}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      void Promise.all(
+                        directoryTermMaps.map((query) => query.refetch()),
+                      )
+                    }
+                  >
+                    {t("common.tryAgain")}
+                  </Button>
+                </div>
+              )}
+              {batchDirectoryMismatch && (
+                <div className="form-error" role="alert">
+                  {t("termMaps.batchDirectoryMismatch")}
+                </div>
+              )}
+              {(termMaps.isPending || termMaps.isFetching) && (
+                <span className="field-help" role="status">
+                  {t("translate.loadingTermMaps")}
+                </span>
+              )}
+              {termMaps.isError && (
+                <div className="field-recovery">
+                  <div className="form-error" role="alert">
+                    <LocalizedErrorMessage error={termMaps.error} />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      focusTermMapAfterRetry.current = true;
+                      void termMaps.refetch();
+                    }}
+                  >
+                    {t("common.tryAgain")}
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
           <details className="advanced-settings">
             <summary>{t("translate.advanced")}</summary>
@@ -997,7 +1036,7 @@ function Translate() {
                     aria-describedby="batch-output-suffix-help"
                     value={outputSuffix}
                     onChange={(event) => {
-                      suffixEdited.current = true;
+                      setSuffixWasEdited(true);
                       setOutputSuffix(event.target.value);
                     }}
                   />
@@ -1027,7 +1066,7 @@ function Translate() {
                     aria-describedby="output-suffix-help"
                     value={outputSuffix}
                     onChange={(event) => {
-                      suffixEdited.current = true;
+                      setSuffixWasEdited(true);
                       setOutputSuffix(event.target.value);
                     }}
                   />
@@ -1090,7 +1129,7 @@ function Translate() {
                       model_profile_id: selectedProfile!.id,
                       output_suffix: outputSuffix,
                       output_conflict_policy: outputConflictPolicy,
-                      term_map_mode: submissionTermMapMode,
+                      term_map_mode: termMapMode,
                       term_map_id: selectedTermMapId,
                       dynamic_terminology_enabled: dynamicTerminologyEnabled,
                       subtitle_terminology_filter_enabled:
@@ -1120,7 +1159,7 @@ function Translate() {
                     model_profile_id: selectedProfile!.id,
                     output_suffix: outputSuffix,
                     output_conflict_policy: outputConflictPolicy,
-                    term_map_mode: submissionTermMapMode,
+                    term_map_mode: termMapMode,
                     term_map_id: selectedTermMapId,
                     dynamic_terminology_enabled: dynamicTerminologyEnabled,
                     subtitle_terminology_filter_enabled:
@@ -1152,156 +1191,6 @@ function Translate() {
         </div>
       )}
     </>
-  );
-}
-
-function DirectoryTermMapPanel({
-  directory,
-  termMaps,
-  query,
-  selectRef,
-  selectedId,
-  onSelectedIdChange,
-  onBind,
-  onRemove,
-  onRetry,
-  isBinding,
-  isRemoving,
-  error,
-}: {
-  directory: string;
-  termMaps: Array<{ id: string; name: string }>;
-  query: ReturnType<typeof useDirectoryTermMap>;
-  selectRef: RefObject<HTMLSelectElement | null>;
-  selectedId: string;
-  onSelectedIdChange: (value: string) => void;
-  onBind: () => void;
-  onRemove: () => void;
-  onRetry: () => void;
-  isBinding: boolean;
-  isRemoving: boolean;
-  error: ReactNode;
-}) {
-  const { t } = useI18n();
-  const local = query.data?.local;
-  const effective = query.data?.effective;
-  const focusAfterRetry = useRef(false);
-  useEffect(() => {
-    if (focusAfterRetry.current && query.isSuccess) {
-      focusAfterRetry.current = false;
-      selectRef.current?.focus();
-    }
-  }, [query.isSuccess, selectRef]);
-  return (
-    <section className="directory-term-map" aria-labelledby="directory-term-map-title">
-      <div className="directory-term-map-heading">
-        <div>
-          <h3 id="directory-term-map-title">{t("translate.directoryDefault")}</h3>
-          <p className="field-help">
-            {directory
-              ? t("translate.currentDirectory", { name: directory })
-              : t("translate.currentDirectoryRoot")}
-          </p>
-          <p id="directory-default-help" className="field-help">
-            {t("translate.directoryDefaultHelp")}
-          </p>
-          <p className="field-help">{t("translate.directoryDefaultScopeHelp")}</p>
-        </div>
-        {query.isPending && <span role="status">{t("common.loading")}</span>}
-      </div>
-      {query.isError ? (
-        <div className="field-recovery">
-          <div className="form-error" role="alert">
-            <LocalizedErrorMessage error={query.error} />
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              focusAfterRetry.current = true;
-              void query.refetch();
-            }}
-          >
-            {t("common.tryAgain")}
-          </Button>
-        </div>
-      ) : (
-        <>
-          <dl className="directory-term-map-state">
-            <div>
-              <dt>{t("translate.localBinding")}</dt>
-              <dd>{local?.name ?? t("jobs.none")}</dd>
-            </div>
-            <div>
-              <dt>{t("translate.effectiveTermMap")}</dt>
-              <dd>
-                {effective?.name ?? t("translate.noDefault")}
-                {effective && !local && query.data?.source_directory !== null && (
-                  <span className="field-help">
-                    {t("translate.inheritedFrom", {
-                      name: query.data?.source_directory || t("translate.mediaRoot"),
-                    })}
-                  </span>
-                )}
-              </dd>
-            </div>
-          </dl>
-          <div className="directory-term-map-controls">
-            <Select
-              ref={selectRef}
-              aria-label={t("translate.directoryDefault")}
-              aria-describedby="directory-default-help"
-              value={selectedId}
-              onChange={(event) => onSelectedIdChange(event.target.value)}
-              disabled={
-                query.isPending || termMaps.length === 0 || isBinding || isRemoving
-              }
-            >
-              <option value="">{t("translate.chooseTermMap")}</option>
-              {termMaps.map((termMap) => (
-                <option key={termMap.id} value={termMap.id}>
-                  {t("translate.directoryOption", { name: termMap.name })}
-                </option>
-              ))}
-            </Select>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!selectedId || isBinding || isRemoving}
-              onClick={onBind}
-            >
-              {isBinding
-                ? t("translate.binding")
-                : local
-                  ? t("translate.replaceLocalBinding")
-                  : t("translate.bindTermMap")}
-            </Button>
-            {local && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isBinding || isRemoving}
-                onClick={onRemove}
-              >
-                {isRemoving
-                  ? t("translate.removing")
-                  : t("translate.removeLocalBinding")}
-              </Button>
-            )}
-          </div>
-          {error && (
-            <div className="field-recovery">
-              <div className="form-error" role="alert">
-                {error}
-              </div>
-              <Button type="button" variant="outline" onClick={onRetry}>
-                {t("common.tryAgain")}
-              </Button>
-            </div>
-          )}
-        </>
-      )}
-    </section>
   );
 }
 
@@ -2173,6 +2062,9 @@ function MediaEntry({
 function TermMapsPage() {
   const { t } = useI18n();
   const maps = useTermMaps();
+  const [creating, setCreating] = useState(false);
+  const newMapRef = useRef<HTMLButtonElement>(null);
+  const [librarySearch, setLibrarySearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -2183,6 +2075,12 @@ function TermMapsPage() {
   const remove = useDeleteTermMap();
   const [name, setName] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (creating) {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [creating]);
   const [content, setContent] = useState("");
   const [contentTouched, setContentTouched] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -2287,6 +2185,8 @@ function TermMapsPage() {
       {
         onSuccess: () => {
           setSuccessMessage(t("termMaps.savedSuccess"));
+          setCreating(false);
+          newMapRef.current?.focus();
           fileReadGeneration.current += 1;
           setFileLoading(false);
           setName("");
@@ -2342,137 +2242,178 @@ function TermMapsPage() {
   return (
     <>
       <PageHeader title={t("settings.termMaps")} detail={t("termMaps.detail")} />
-      <Guidance title={t("termMaps.guidanceTitle")}>{t("termMaps.guidance")}</Guidance>
-      <section className="concept-help" aria-label={t("termMaps.createHelpLabel")}>
-        <strong>{t("termMaps.createHelpTitle")}</strong>
-        <ol>
-          <li>{t("termMaps.createStepOne")}</li>
-          <li>{t("termMaps.createStepTwo")}</li>
-          <li>{t("termMaps.createStepThree")}</li>
-        </ol>
-        <pre>{t("termMaps.exampleJson")}</pre>
-        <p>{t("termMaps.createHelpDetail")}</p>
-      </section>
+      <TermMapNavigation />
+      <div className="term-map-library-toolbar">
+        <div className="section-heading">
+          <label htmlFor="term-map-library-search">{t("termMaps.searchLibrary")}</label>
+          <Button
+            ref={newMapRef}
+            disabled={create.isPending}
+            onClick={() => setCreating(true)}
+          >
+            {t("termMaps.newMap")}
+          </Button>
+        </div>
+        <Input
+          id="term-map-library-search"
+          type="search"
+          value={librarySearch}
+          onChange={(event) => setLibrarySearch(event.target.value)}
+        />
+      </div>
+      {creating && (
+        <>
+          <Guidance title={t("termMaps.guidanceTitle")}>
+            {t("termMaps.guidance")}
+          </Guidance>
+          <section className="concept-help" aria-label={t("termMaps.createHelpLabel")}>
+            <strong>{t("termMaps.createHelpTitle")}</strong>
+            <ol>
+              <li>{t("termMaps.createStepOne")}</li>
+              <li>{t("termMaps.createStepTwo")}</li>
+              <li>{t("termMaps.createStepThree")}</li>
+            </ol>
+            <pre>{t("termMaps.exampleJson")}</pre>
+            <p>{t("termMaps.createHelpDetail")}</p>
+          </section>
+        </>
+      )}
       {successMessage && (
         <Guidance title={t("common.saved")} tone="success" role="status">
           {successMessage}
         </Guidance>
       )}
       <div className="term-map-layout">
-        <section className="term-map-upload" aria-labelledby="upload-title">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">{t("termMaps.newResource")}</p>
-              <h2 id="upload-title">{t("termMaps.upload")}</h2>
-            </div>
-            <UploadSimpleIcon size={20} aria-hidden="true" />
-          </div>
-          <form onSubmit={submit}>
-            <label>
-              {t("termMaps.name")}
-              <Input
-                ref={nameInputRef}
-                required
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={t("termMaps.namePlaceholder")}
-              />
-            </label>
-            <span className="field-help">{t("termMaps.nameHelp")}</span>
-            <div
-              className="term-map-dropzone"
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={handleFileDrop}
-            >
-              <strong>{t("termMaps.importJson")}</strong>
-              <span>{t("termMaps.jsonHelp")}</span>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                {t("termMaps.selectJson")}
-              </Button>
-              <input
-                ref={fileInputRef}
-                className="sr-only"
-                type="file"
-                accept=".json,application/json"
-                aria-label={t("termMaps.jsonFile")}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void loadTermMapFile(file);
-                }}
-              />
-              {fileName && (
-                <span className="field-help">
-                  {t("termMaps.loaded", { name: fileName })}
-                </span>
-              )}
-            </div>
-            <label htmlFor="term-map-content">
-              {t("termMaps.pasteJson")}
-              <Textarea
-                id="term-map-content"
-                aria-label={t("termMaps.jsonContent")}
-                required
-                value={content}
-                onChange={(event) => {
-                  fileReadGeneration.current += 1;
-                  setContent(event.target.value);
-                  setContentTouched(true);
-                  setFileName(null);
-                  setFileError(null);
-                  setFileLoading(false);
-                }}
-                rows={6}
-                spellCheck={false}
-                placeholder={t("termMaps.jsonPlaceholder")}
-                aria-describedby="upload-help"
-              />
-            </label>
-            <p id="upload-help" className="field-help">
-              {t("termMaps.pasteHelp")}
-            </p>
-            {fileLoading ? (
-              <p className="upload-status" role="status">
-                {t("termMaps.readingJson")}
-              </p>
-            ) : contentError ? (
-              <p className="form-error" role="alert">
-                {contentError}
-              </p>
-            ) : !content.trim() ? (
-              <p className="field-help" role="status">
-                {t("termMaps.previewHelp")}
-              </p>
-            ) : (
-              <p className="term-map-validation valid" role="status">
-                {t("termMaps.valid", {
-                  count: contentValidation.entryCount,
-                  unit: t("termMaps.mapping", { count: contentValidation.entryCount }),
-                })}
-              </p>
-            )}
-            {create.isError && (
-              <div className="form-error" role="alert">
-                <LocalizedErrorMessage error={create.error} />
+        {creating && (
+          <section className="term-map-upload" aria-labelledby="upload-title">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{t("termMaps.newResource")}</p>
+                <h2 id="upload-title">{t("termMaps.upload")}</h2>
               </div>
-            )}
-            {create.isPending && (
-              <p className="upload-status" role="status">
-                {t("termMaps.uploading")}
+              <UploadSimpleIcon size={20} aria-hidden="true" />
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setCreating(false);
+                  newMapRef.current?.focus();
+                }}
+                disabled={create.isPending}
+              >
+                {t("common.close")}
+              </Button>
+            </div>
+            <form onSubmit={submit}>
+              <label>
+                {t("termMaps.name")}
+                <Input
+                  ref={nameInputRef}
+                  required
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder={t("termMaps.namePlaceholder")}
+                />
+              </label>
+              <span className="field-help">{t("termMaps.nameHelp")}</span>
+              <div
+                className="term-map-dropzone"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handleFileDrop}
+              >
+                <strong>{t("termMaps.importJson")}</strong>
+                <span>{t("termMaps.jsonHelp")}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {t("termMaps.selectJson")}
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept=".json,application/json"
+                  aria-label={t("termMaps.jsonFile")}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void loadTermMapFile(file);
+                  }}
+                />
+                {fileName && (
+                  <span className="field-help">
+                    {t("termMaps.loaded", { name: fileName })}
+                  </span>
+                )}
+              </div>
+              <label htmlFor="term-map-content">
+                {t("termMaps.pasteJson")}
+                <Textarea
+                  id="term-map-content"
+                  aria-label={t("termMaps.jsonContent")}
+                  required
+                  value={content}
+                  onChange={(event) => {
+                    fileReadGeneration.current += 1;
+                    setContent(event.target.value);
+                    setContentTouched(true);
+                    setFileName(null);
+                    setFileError(null);
+                    setFileLoading(false);
+                  }}
+                  rows={6}
+                  spellCheck={false}
+                  placeholder={t("termMaps.jsonPlaceholder")}
+                  aria-describedby="upload-help"
+                />
+              </label>
+              <p id="upload-help" className="field-help">
+                {t("termMaps.pasteHelp")}
               </p>
-            )}
-            <Button
-              className="primary-action"
-              type="submit"
-              disabled={create.isPending || fileLoading || contentError !== null}
-            >
-              {create.isPending ? t("termMaps.uploadingButton") : t("termMaps.upload")}
-            </Button>
-          </form>
-        </section>
+              {fileLoading ? (
+                <p className="upload-status" role="status">
+                  {t("termMaps.readingJson")}
+                </p>
+              ) : contentError ? (
+                <p className="form-error" role="alert">
+                  {contentError}
+                </p>
+              ) : !content.trim() ? (
+                <p className="field-help" role="status">
+                  {t("termMaps.previewHelp")}
+                </p>
+              ) : (
+                <p className="term-map-validation valid" role="status">
+                  {t("termMaps.valid", {
+                    count: contentValidation.entryCount,
+                    unit: t("termMaps.mapping", {
+                      count: contentValidation.entryCount,
+                    }),
+                  })}
+                </p>
+              )}
+              {create.isError && (
+                <div className="form-error" role="alert">
+                  <LocalizedErrorMessage error={create.error} />
+                </div>
+              )}
+              {create.isPending && (
+                <p className="upload-status" role="status">
+                  {t("termMaps.uploading")}
+                </p>
+              )}
+              <Button
+                className="primary-action"
+                type="submit"
+                disabled={create.isPending || fileLoading || contentError !== null}
+              >
+                {create.isPending
+                  ? t("termMaps.uploadingButton")
+                  : t("termMaps.upload")}
+              </Button>
+            </form>
+          </section>
+        )}
 
         <section className="term-map-list" aria-labelledby="maps-title">
           <div className="section-heading">
@@ -2510,7 +2451,7 @@ function TermMapsPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => nameInputRef.current?.focus()}
+                  onClick={() => setCreating(true)}
                 >
                   {t("termMaps.createFirst")}
                 </Button>
@@ -2518,38 +2459,49 @@ function TermMapsPage() {
             )}
           </div>
           <div className="term-map-items">
-            {maps.data?.term_maps?.map((map) => (
-              <button
-                className={`term-map-item${selectedId === map.id ? " selected" : ""}`}
-                aria-label={`${map.name}, ${t("termMaps.entry", { count: map.entry_count })}`}
-                aria-pressed={selectedId === map.id}
-                key={map.id}
-                type="button"
-                onClick={() => {
-                  selectedIdRef.current = map.id;
-                  setSelectedId(map.id);
-                  setSuccessMessage(null);
-                  setRenameName(map.name);
-                  setLoadedName(map.name);
-                  setReplacement(null);
-                  setConfirmation("");
-                }}
-              >
-                <span className="term-map-item-name" title={map.name}>
-                  {map.name}
-                </span>
-                <span>
-                  {map.entry_count} {t("termMaps.entry", { count: map.entry_count })}
-                </span>
-                <time
-                  dateTime={map.updated_at}
-                  title={formatLocalTimestamp(map.updated_at)}
+            {maps.data?.term_maps
+              ?.filter((map) =>
+                map.name
+                  .toLocaleLowerCase()
+                  .includes(librarySearch.toLocaleLowerCase()),
+              )
+              .map((map) => (
+                <button
+                  className={`term-map-item${selectedId === map.id ? " selected" : ""}`}
+                  aria-label={`${map.name}, ${t("termMaps.entry", { count: map.entry_count })}`}
+                  aria-pressed={selectedId === map.id}
+                  key={map.id}
+                  type="button"
+                  onClick={() => {
+                    selectedIdRef.current = map.id;
+                    setSelectedId(map.id);
+                    setSuccessMessage(null);
+                    setRenameName(map.name);
+                    setLoadedName(map.name);
+                    setReplacement(null);
+                    setConfirmation("");
+                  }}
                 >
-                  {formatRelativeTimestamp(map.updated_at)}
-                </time>
-              </button>
-            ))}
+                  <span className="term-map-item-name" title={map.name}>
+                    {map.name}
+                  </span>
+                  <span>
+                    {map.entry_count} {t("termMaps.entry", { count: map.entry_count })}
+                  </span>
+                  <time
+                    dateTime={map.updated_at}
+                    title={formatLocalTimestamp(map.updated_at)}
+                  >
+                    {formatRelativeTimestamp(map.updated_at)}
+                  </time>
+                </button>
+              ))}
           </div>
+          {maps.isSuccess &&
+            maps.data.term_maps.length > 0 &&
+            !maps.data.term_maps.some((map) =>
+              map.name.toLocaleLowerCase().includes(librarySearch.toLocaleLowerCase()),
+            ) && <p className="field-help">{t("termMaps.noMatches")}</p>}
         </section>
       </div>
 
@@ -2755,33 +2707,36 @@ export function App() {
   return (
     <ThemeProvider>
       <I18nProvider>
-        <Routes>
-          <Route element={<Shell />}>
-            <Route index element={<Navigate to="/translate" replace />} />
-            <Route path="translate" element={<Translate />} />
-            <Route path="jobs" element={<JobsPage />} />
-            <Route path="jobs/:jobId" element={<JobsPage />} />
-            <Route path="settings" element={<SettingsArea />}>
-              <Route index element={<Navigate to="general" replace />} />
-              <Route path="general" element={<GeneralSettingsPage />} />
-              <Route path="model-profiles" element={<ModelProfilesPage />} />
+        <TranslationDraftProvider>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route index element={<Navigate to="/translate" replace />} />
+              <Route path="translate" element={<Translate />} />
+              <Route path="jobs" element={<JobsPage />} />
+              <Route path="jobs/:jobId" element={<JobsPage />} />
+              <Route path="settings" element={<SettingsArea />}>
+                <Route index element={<Navigate to="general" replace />} />
+                <Route path="general" element={<GeneralSettingsPage />} />
+                <Route path="model-profiles" element={<ModelProfilesPage />} />
+                <Route
+                  path="model-profiles/:profileId"
+                  element={<ModelProfileEditor />}
+                />
+                <Route path="term-maps" element={<TermMapsPage />} />
+                <Route path="term-maps/automatic" element={<DirectoryRulesPage />} />
+              </Route>
               <Route
-                path="model-profiles/:profileId"
-                element={<ModelProfileEditor />}
+                path="model-profiles/*"
+                element={<LegacySettingsRedirect section="model-profiles" />}
               />
-              <Route path="term-maps" element={<TermMapsPage />} />
+              <Route
+                path="term-maps/*"
+                element={<LegacySettingsRedirect section="term-maps" />}
+              />
+              <Route path="*" element={<Navigate to="/translate" replace />} />
             </Route>
-            <Route
-              path="model-profiles/*"
-              element={<LegacySettingsRedirect section="model-profiles" />}
-            />
-            <Route
-              path="term-maps/*"
-              element={<LegacySettingsRedirect section="term-maps" />}
-            />
-            <Route path="*" element={<Navigate to="/translate" replace />} />
-          </Route>
-        </Routes>
+          </Routes>
+        </TranslationDraftProvider>
       </I18nProvider>
     </ThemeProvider>
   );

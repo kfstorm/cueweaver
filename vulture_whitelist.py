@@ -26,6 +26,7 @@ rename_term_map
 replace_term_map
 delete_term_map
 get_directory_term_map
+list_directory_rules
 bind_directory_term_map
 remove_directory_term_map
 product_status

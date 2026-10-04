@@ -397,6 +397,31 @@ def test_http_deletes_one_job_and_clears_completed_jobs_without_a_request_body()
     assert application.cleared_completed is True
 
 
+def test_product_discover_reports_resolved_media_directory_for_file_links(
+    tmp_path: Path,
+):
+    media_root = tmp_path / "media"
+    series = media_root / "Example Series"
+    series.mkdir(parents=True)
+    media = series / "Episode.mkv"
+    media.write_bytes(b"synthetic media")
+    (media_root / "Linked.mkv").symlink_to(media)
+
+    class LinkedApplication(ApplicationFixture):
+        def discover(self, request: DiscoverRequest) -> DiscoverResult:
+            return DiscoverResult(request.media_path)
+
+    application = LinkedApplication()
+    client = TestClient(create_app(application, media_root))
+
+    response = client.post("/api/media/discover", json={"path": "Linked.mkv"})
+
+    assert response.status_code == 200
+    assert response.json()["path"] == "Linked.mkv"
+    assert response.json()["directory"] == "Example Series"
+    assert str(media_root) not in response.text
+
+
 def test_product_discover_resolves_relative_media_path_and_redacts_absolute_paths(
     tmp_path: Path,
 ):
@@ -428,6 +453,7 @@ def test_product_discover_resolves_relative_media_path_and_redacts_absolute_path
     assert response.status_code == 200
     assert response.json() == {
         "path": "Movie.mkv",
+        "directory": "",
         **expected_discovery_payload("Movie.en.srt"),
     }
     assert application.discover_request == DiscoverRequest(media_root / "Movie.mkv")

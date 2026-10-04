@@ -65,6 +65,50 @@ def test_directory_term_map_supports_root_local_inherited_and_remove(tmp_path: P
     )
 
 
+def test_directory_rules_list_only_explicit_settings_and_reflect_changes(
+    tmp_path: Path,
+):
+    client = make_client(tmp_path)
+    (tmp_path / "media" / "Series" / "Season 1").mkdir(parents=True)
+    assert client.get("/api/term-maps/directory-rules").json() == {"rules": []}
+    root_map = create_term_map(client, "Example library")
+    series_map = create_term_map(client, "Example series")
+    directory_request(client, "PUT", term_map_id=root_map["id"])
+    bind_series(client, series_map["id"])
+
+    response = client.get("/api/term-maps/directory-rules")
+    assert response.status_code == 200
+    assert response.json() == {
+        "rules": [
+            {"directory": "", "term_map": root_map},
+            {"directory": "Series", "term_map": series_map},
+        ]
+    }
+    directory_request(client, "DELETE", "Series")
+    assert client.get("/api/term-maps/directory-rules").json()["rules"] == [
+        {"directory": "", "term_map": root_map}
+    ]
+    assert (
+        directory_request(client, "GET", "Series/Season 1").json()["effective"]["id"]
+        == root_map["id"]
+    )
+    client.patch(
+        f"/api/term-maps/{root_map['id']}", json={"name": "Example collection"}
+    )
+    assert (
+        client.get("/api/term-maps/directory-rules").json()["rules"][0]["term_map"][
+            "name"
+        ]
+        == "Example collection"
+    )
+    client.request(
+        "DELETE",
+        f"/api/term-maps/{root_map['id']}",
+        json={"name": "Example collection"},
+    )
+    assert client.get("/api/term-maps/directory-rules").json() == {"rules": []}
+
+
 def test_directory_term_map_persists_and_delete_cleans_bindings(tmp_path: Path):
     client = make_client(tmp_path)
     (tmp_path / "media" / "Series").mkdir(parents=True)
