@@ -954,12 +954,12 @@ class Jobs:
             raise
         except ServiceError as error:
             outcome = JobExecutionOutcome("Failed", error=error)
-        except Exception:
+        except Exception as error:
             outcome = JobExecutionOutcome(
                 "Failed",
                 error=ServiceError(
                     "extraction_failed" if embedded else "translation_failed",
-                    "Extraction failed" if embedded else "Translation failed",
+                    str(error) or type(error).__name__,
                 ),
             )
         self._finish_execution(job_id, outcome, request, embedded, work_directory)

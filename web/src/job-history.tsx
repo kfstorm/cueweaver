@@ -775,15 +775,13 @@ function JobError({ error }: { error: NonNullable<Job["error"]> }) {
         <WarningCircleIcon size={19} aria-hidden="true" />
         <div>
           <h3 id="job-error-title">{t("jobs.actionNeeded")}</h3>
-          <p>{t("jobs.diagnosticsDetail")}</p>
+          <p>{error.message}</p>
         </div>
       </div>
       <details>
         <summary>{t("jobs.showDiagnostics")}</summary>
-        <p className="field-help">{t("jobs.diagnosticsDetail")}</p>
         <dl className="job-summary">
           <SummaryItem label={t("jobs.errorCode")} value={error.code} />
-          <SummaryItem label={t("jobs.error")} value={error.message} />
           {context.map(([key, value]) => (
             <SummaryItem key={key} label={key} value={String(value)} />
           ))}

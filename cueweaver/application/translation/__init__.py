@@ -79,7 +79,9 @@ class Translation:
                 subtitle_terminology_filter_enabled=request.subtitle_terminology_filter_enabled,
             )
         except Exception as error:
-            raise ServiceError("translation_failed", "Translation failed") from error
+            raise ServiceError(
+                "translation_failed", str(error) or type(error).__name__
+            ) from error
 
         def write(temporary_path: Path) -> None:
             temporary_path.write_bytes(content)

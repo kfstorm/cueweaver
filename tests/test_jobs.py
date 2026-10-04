@@ -1395,16 +1395,28 @@ def test_restart_appends_interrupted_without_fabricating_earlier_history(
 def test_failed_job_retains_work_directory_and_structured_error(tmp_path: Path):
     media_root, work_root, _media, _subtitle = make_roots(tmp_path)
     client = make_client(
-        media_root, work_root, FakeTranslator(error=RuntimeError("boom"))
+        media_root,
+        work_root,
+        FakeTranslator(
+            error=RuntimeError("Client error: 401 Synthetic account missing.")
+        ),
     )
 
     queued = create_job(client).json()
     failed = wait_for_status(client, queued["id"], "Failed")
 
     assert failed["error"]["code"] == "translation_failed"
-    assert failed["error"]["message"] == "Translation failed"
+    assert failed["error"]["message"] == "Client error: 401 Synthetic account missing."
     assert (work_root / "jobs" / queued["id"]).is_dir()
     assert not (media_root / "Movie.zh-Hans.srt").exists()
+    restarted = make_client(media_root, work_root, FakeTranslator())
+    try:
+        response = restarted.get(f"/api/jobs/{queued['id']}")
+        assert response.status_code == 200
+        assert response.json()["error"] == failed["error"]
+    finally:
+        restarted.app.state.application.close()
+        restarted.close()
 
 
 def test_failed_external_job_retries_in_place_and_reuses_work_directory(

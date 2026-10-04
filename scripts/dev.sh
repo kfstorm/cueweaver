@@ -71,7 +71,7 @@ printf '%s\n' "Starting API on http://127.0.0.1:${API_PORT}"
 CUEWEAVER_MEDIA_ROOT="$MEDIA_ROOT" \
   CUEWEAVER_WORK_ROOT="$WORK_ROOT" \
   setsid uv run --no-sync uvicorn cueweaver.product:create_development_app_from_env \
-  --factory --reload --host 127.0.0.1 --port "$API_PORT" \
+  --factory --log-config cueweaver/logging.json --reload --host 127.0.0.1 --port "$API_PORT" \
   > >(sed 's/^/[api] /') 2> >(sed 's/^/[api] /' >&2) &
 api_pid=$!
 

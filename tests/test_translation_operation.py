@@ -148,6 +148,7 @@ def test_translation_maps_translator_failures_without_publishing(tmp_path):
         )
 
     assert error.value.error_code == "translation_failed"
+    assert error.value.message == "cannot parse"
     assert output.output_path is None
 
 

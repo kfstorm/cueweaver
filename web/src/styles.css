@@ -1762,6 +1762,16 @@ a {
   color: var(--error);
   font-size: var(--font-small);
   line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.job-error-heading > div {
+  min-width: 0;
+}
+
+.job-error-heading > svg {
+  flex-shrink: 0;
 }
 
 .job-error details {

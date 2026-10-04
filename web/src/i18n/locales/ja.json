@@ -355,7 +355,7 @@
   "jobs.none": "なし",
   "jobs.timeInformation": "時間情報",
   "jobs.statusUnavailable": "このジョブの状態履歴は利用できません。",
-  "jobs.showDiagnostics": "承認済みの診断コンテキストを表示",
+  "jobs.showDiagnostics": "診断の詳細を表示",
   "jobs.errorCode": "エラーコード",
   "jobs.select": "ジョブを選択",
   "jobs.selectDetail": "履歴からジョブを選択して、その設定、出力、診断情報を確認します。",

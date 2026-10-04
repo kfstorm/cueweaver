@@ -355,7 +355,7 @@
   "jobs.none": "Ninguno",
   "jobs.timeInformation": "Información de fecha y hora",
   "jobs.statusUnavailable": "El historial de estados no está disponible para este trabajo.",
-  "jobs.showDiagnostics": "Mostrar el contexto de diagnóstico aprobado",
+  "jobs.showDiagnostics": "Mostrar detalles del diagnóstico",
   "jobs.errorCode": "Código de error",
   "jobs.select": "Seleccionar un trabajo",
   "jobs.selectDetail": "Elige un trabajo del historial para revisar su configuración, salida y diagnósticos.",

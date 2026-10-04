@@ -355,7 +355,7 @@
   "jobs.none": "Keine",
   "jobs.timeInformation": "Zeitangaben",
   "jobs.statusUnavailable": "Der Statusverlauf ist für diesen Auftrag nicht verfügbar.",
-  "jobs.showDiagnostics": "Freigegebenen Diagnosekontext anzeigen",
+  "jobs.showDiagnostics": "Diagnosedetails anzeigen",
   "jobs.errorCode": "Fehlercode",
   "jobs.select": "Auftrag auswählen",
   "jobs.selectDetail": "Wählen Sie einen Auftrag aus dem Verlauf aus, um seine Konfiguration, Ausgabe und Diagnosen zu prüfen.",
