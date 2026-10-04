@@ -1177,11 +1177,13 @@ class Jobs:
     def _require_output_not_active(self, output_path: str) -> None:
         """Require callers to hold both lifecycle and record locks."""
         for existing in self._records.values():
+            if existing["status"] in TERMINAL_JOB_STATUSES:
+                continue
             existing_request = cast(dict[str, object], existing["request"])
-            if (
-                existing["status"] not in TERMINAL_JOB_STATUSES
-                and existing_request["output_path"] == output_path
-            ):
+            # Execution may replace output_path with an append-numbered path.
+            existing_output = self._base_output_path(existing_request)
+            existing_output_path = str(existing_output.relative_to(self._media_root))
+            if existing_output_path == output_path:
                 raise ServiceError(
                     "output_job_active",
                     "Another active Job is already targeting this output path",

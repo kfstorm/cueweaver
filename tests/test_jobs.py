@@ -1232,6 +1232,44 @@ def test_create_rejects_output_targeted_by_a_queued_job(tmp_path: Path):
         jobs.wait_closed()
 
 
+def test_create_rejects_active_base_output_after_append_number_selection(
+    tmp_path: Path,
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    (media_root / "Movie.zh-Hans.srt").write_bytes(b"existing output")
+    started = threading.Event()
+    release = threading.Event()
+    jobs = Jobs(FakeTranslator(started=started, release=release), media_root, work_root)
+    request = CreateJobRequest(
+        "Movie.mkv",
+        "Movie.en.srt",
+        "zh-Hans",
+        "none",
+        output_conflict_policy="append-number",
+    )
+    try:
+        active = jobs.create(request)
+        assert started.wait(timeout=5)
+        active_before = jobs.get(str(active["id"]))
+        assert active_before["status"] == "Translating"
+        assert active_before["request"]["output_path"] == "Movie.zh-Hans.2.srt"
+
+        with pytest.raises(ServiceError) as raised:
+            jobs.create(request)
+
+        assert raised.value.error_code == "output_job_active"
+        assert raised.value.context == {
+            "output_path": "Movie.zh-Hans.srt",
+            "job_id": active["id"],
+        }
+        assert jobs.list() == [active_before]
+        store = SqliteJobRecordStore(SqliteDatabase(work_root / "cueweaver.sqlite3"))
+        assert len(store.load()) == 1
+    finally:
+        release.set()
+        jobs.wait_closed()
+
+
 def test_http_rejects_active_output_even_with_different_translation_options(
     tmp_path: Path,
 ):
@@ -2036,6 +2074,7 @@ def test_retry_rejects_base_output_targeted_by_an_active_job(
     # A previous attempt may have selected an append-numbered output.
     record["request"]["output_path"] = "Movie.zh-Hans.2.srt"
     store.write(record)
+    (media_root / "Movie.zh-Hans.srt").write_bytes(b"existing output")
     started = threading.Event()
     release = threading.Event()
     jobs = Jobs(
@@ -2046,7 +2085,13 @@ def test_retry_rejects_base_output_targeted_by_an_active_job(
     )
     try:
         active = jobs.create(
-            CreateJobRequest("Movie.mkv", "Movie.en.srt", "zh-Hans", "none")
+            CreateJobRequest(
+                "Movie.mkv",
+                "Movie.en.srt",
+                "zh-Hans",
+                "none",
+                output_conflict_policy="append-number",
+            )
         )
         assert started.wait(timeout=5)
         original_before = jobs.get("retry-job")
@@ -2054,6 +2099,7 @@ def test_retry_rejects_base_output_targeted_by_an_active_job(
         persisted_before = store.load()
         assert original_before["status"] == status
         assert active_before["status"] == "Translating"
+        assert active_before["request"]["output_path"] == "Movie.zh-Hans.2.srt"
 
         with pytest.raises(ServiceError) as raised:
             jobs.retry("retry-job")
