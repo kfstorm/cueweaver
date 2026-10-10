@@ -24,6 +24,7 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 - Run commands from the repository root.
 - Run the local development environment with `scripts/dev.sh`. Vite serves the Web app and proxies `/api` to the loopback-only API backend; use `CUEWEAVER_MEDIA_ROOT`, `CUEWEAVER_WORK_ROOT`, `API_PORT`, and `WEB_PORT` to override defaults.
 - Run backend tests with `scripts/test-backend.sh`, frontend tests with `scripts/test-frontend.sh`, and Docker E2E with `scripts/test-e2e.sh`.
+- For frontend layout, styling, or responsive behavior changes, run `pnpm --dir web test:layout http://127.0.0.1:<web-port>` against a running local Web server. This requires `agent-browser` and is separate from the regular test suites. Follow `.agents/skills/cueweaver-design/SKILL.md` for visual verification requirements.
 - Run static checks and the frontend build with `scripts/lint-backend.sh --check` and `scripts/lint-frontend.sh --check`; the `--check` flag prevents formatting changes.
 - Run focused tests with `uv run pytest -q tests/test_product_app.py` or `pnpm --dir web exec vitest run tests/app.test.tsx`.
 - Test localization behavior and invariants, not translation wording. Do not assert exact translated strings unless the wording is a product contract; semantically equivalent rewrites should normally not require test changes. Prefer checking key completeness and non-empty values, placeholder preservation, pluralization behavior, structured-value parseability, and forbidden untranslated product-domain terms.
