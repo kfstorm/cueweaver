@@ -1558,6 +1558,7 @@ a {
 
 .job-detail-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   min-height: 48px;

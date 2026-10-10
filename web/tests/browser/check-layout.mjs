@@ -27,8 +27,14 @@ function audit(context) {
     failures.push(`${context}: ${failure}`);
   checks += 1;
 }
-function open(path) {
+function open(path, ready = []) {
   browser("open", new URL(path, url).href);
+  if (ready.length)
+    browser(
+      "wait",
+      "--fn",
+      `${JSON.stringify(ready)}.every(selector => document.querySelector(selector))`,
+    );
 }
 try {
   browser("--init-script", fixture, "open", new URL("/translate", url).href);
@@ -38,18 +44,28 @@ try {
         "eval",
         `sessionStorage.setItem('layout-locale', '${locale}'); sessionStorage.setItem('layout-theme', '${theme}')`,
       );
-      for (const width of [390, 767, 768, 769, 1024, 1280]) {
+      for (const width of [320, 360, 390, 767, 768, 769, 1024, 1280]) {
         browser("set", "viewport", String(width), width < 768 ? "844" : "800");
-        for (const path of [
-          "/translate",
-          "/jobs",
-          "/jobs/example-job-0123456789abcdef0123456789abcdef",
-          "/settings/general",
-          "/settings/model-profiles",
-          "/settings/term-maps",
-          "/settings/term-maps/automatic",
+        for (const [path, ready] of [
+          [
+            "/translate",
+            [
+              ".media-entry",
+              '#model-profile-select option[value="example-profile"]',
+              '#term-map-select option[value="example-map"]',
+            ],
+          ],
+          ["/jobs", [".job-item"]],
+          [
+            "/jobs/example-job-0123456789abcdef0123456789abcdef",
+            [".job-detail-actions button:nth-of-type(2)"],
+          ],
+          ["/settings/general", []],
+          ["/settings/model-profiles", [".profile-row"]],
+          ["/settings/term-maps", [".term-map-item"]],
+          ["/settings/term-maps/automatic", [".directory-rule-list button"]],
         ]) {
-          open(path);
+          open(path, ready);
           audit(`${locale}/${theme}/${width}${path}`);
           if (path === "/translate") {
             browser("click", ".checkbox-field input");
