@@ -1,0 +1,83 @@
+.section-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.toolbar-content {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.section-toolbar h2,
+.section-toolbar h3 {
+  margin: 0;
+  color: var(--text-heading);
+  font-size: var(--font-heading);
+  line-height: 1.5;
+  font-weight: 650;
+}
+.workflow {
+  display: grid;
+  grid-template-columns: var(--workflow-gutter) minmax(0, 1fr);
+}
+.workflow > * {
+  grid-column: 2;
+  min-width: 0;
+}
+.workflow > .workflow-panel {
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+.form-field {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+.form-field > label {
+  color: var(--text-label);
+  font-size: var(--font-label);
+  line-height: 1.5;
+}
+.form-field > .field-help {
+  margin: 0;
+}
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-4) 0;
+}
+.settings-row h2 {
+  margin: 0;
+  color: var(--text-heading);
+  font-size: var(--font-heading);
+  font-weight: 650;
+  line-height: 1.4;
+}
+.settings-row .field-help {
+  margin-top: var(--space-2);
+}
+.settings-row-control {
+  min-width: 0;
+}
+@container workspace (max-width: 600px) {
+  .settings-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+}
+@media (max-width: 767px) {
+  .workflow {
+    --workflow-gutter: var(--space-6);
+  }
+}

@@ -1,0 +1,80 @@
+.button-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: 6px;
+  padding: 0 var(--space-3);
+  font-size: var(--font-control);
+  line-height: 20px;
+  font-weight: 500;
+}
+.button-control > svg {
+  flex: none;
+}
+.button-action {
+  flex: none;
+  min-height: var(--control-height);
+  white-space: nowrap;
+}
+.button-item {
+  min-height: var(--control-height);
+  white-space: normal;
+}
+.form-control,
+.select-control {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height);
+  min-height: var(--control-height);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 0 var(--space-3);
+  color: var(--text-heading);
+  font-family: inherit;
+  font-size: var(--font-control);
+  line-height: 20px;
+  font-weight: 400;
+}
+.textarea-control {
+  height: auto;
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+.code-control {
+  font-family: ui-monospace, monospace;
+}
+.input-chrome {
+  display: flex;
+  min-width: 0;
+  height: var(--control-height);
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  padding-left: var(--space-3);
+}
+.input-chrome > svg {
+  flex: none;
+}
+.input-chrome .form-control {
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+.input-chrome:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.input-chrome .form-control:focus-visible {
+  outline: none;
+}
+@media (max-width: 767px) {
+  .form-control,
+  .select-control {
+    font-size: var(--font-control-mobile);
+  }
+}

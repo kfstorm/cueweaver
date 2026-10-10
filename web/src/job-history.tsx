@@ -10,6 +10,8 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
+import { FormField } from "./components/layout";
+import { Input, Select } from "./components/ui/input";
 import { Guidance } from "./components/ui/guidance";
 import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
 import {
@@ -202,18 +204,18 @@ export function JobsPage() {
               role="search"
               aria-label={t("jobs.filterHistory")}
             >
-              <label>
-                {t("jobs.search")}
-                <input
+              <FormField id="job-search" label={t("jobs.search")}>
+                <Input
+                  id="job-search"
                   type="search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder={t("jobs.searchPlaceholder")}
                 />
-              </label>
-              <label>
-                {t("jobs.status")}
-                <select
+              </FormField>
+              <FormField id="job-status" label={t("jobs.status")}>
+                <Select
+                  id="job-status"
                   value={status}
                   onChange={(event) => {
                     const nextStatus = event.target.value;
@@ -234,8 +236,8 @@ export function JobsPage() {
                     {t("jobs.statusOption.Interrupted")}
                   </option>
                   <option value="Cancelled">{t("jobs.statusOption.Cancelled")}</option>
-                </select>
-              </label>
+                </Select>
+              </FormField>
             </div>
             <div className="job-list-actions">
               {jobs.data && (

@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 
 import { PageHeader } from "./components/page-header";
+import { SettingsRow } from "./components/layout";
 import { Select } from "./components/ui/input";
 import { useI18n } from "./i18n";
 import { useTheme } from "./theme-context";
@@ -47,13 +48,13 @@ export function GeneralSettingsPage() {
     <>
       <PageHeader title={t("settings.general")} detail={t("settings.generalDetail")} />
       <div className="general-settings">
-        <section className="settings-section" aria-labelledby="appearance-title">
-          <div>
-            <h2 id="appearance-title">{t("settings.appearance")}</h2>
-            <p className="field-help">{t("settings.themeHelp")}</p>
-          </div>
+        <SettingsRow
+          id="appearance-title"
+          title={t("settings.appearance")}
+          description={t("settings.themeHelp")}
+        >
           <fieldset className="theme-preference">
-            <legend>{t("settings.theme")}</legend>
+            <legend className="sr-only">{t("settings.theme")}</legend>
             {(["system", "light", "dark"] as const).map((value) => (
               <label className="theme-preference-option" key={value}>
                 <input
@@ -67,12 +68,12 @@ export function GeneralSettingsPage() {
               </label>
             ))}
           </fieldset>
-        </section>
-        <section className="settings-section" aria-labelledby="language-title">
-          <div>
-            <h2 id="language-title">{t("language.label")}</h2>
-            <p className="field-help">{t("language.interfaceDetail")}</p>
-          </div>
+        </SettingsRow>
+        <SettingsRow
+          id="language-title"
+          title={t("language.label")}
+          description={t("language.interfaceDetail")}
+        >
           <Select
             className="settings-language"
             value={locale}
@@ -86,7 +87,7 @@ export function GeneralSettingsPage() {
               </option>
             ))}
           </Select>
-        </section>
+        </SettingsRow>
       </div>
     </>
   );

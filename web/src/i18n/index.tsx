@@ -43,6 +43,10 @@ export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
 ];
 
 const ENGLISH = {
+  "common.pagination": "Pagination",
+  "common.previousPage": "Previous page",
+  "common.nextPage": "Next page",
+  "common.pageOf": "Page {page} of {pages}",
   "termMaps.optional": "(optional)",
   "termMaps.selectionUnavailable":
     "The selected Term map no longer exists. Choose another or use no Term map.",

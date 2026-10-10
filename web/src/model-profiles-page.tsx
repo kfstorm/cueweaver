@@ -9,6 +9,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { PageHeader } from "./components/page-header";
+import { FormField } from "./components/layout";
 import { Button } from "./components/ui/button";
 import { Input, Select, Textarea } from "./components/ui/input";
 import { useI18n } from "./i18n";
@@ -39,10 +40,11 @@ export function ModelProfilesPage() {
       <PageHeader
         title={t("settings.modelProfiles")}
         detail={t("modelProfiles.managementDetail")}
-      />
-      <Button asChild>
-        <Link to="/settings/model-profiles/new">{t("modelProfiles.create")}</Link>
-      </Button>
+      >
+        <Button asChild>
+          <Link to="/settings/model-profiles/new">{t("modelProfiles.create")}</Link>
+        </Button>
+      </PageHeader>
       {profiles.isPending && <p role="status">{t("modelProfiles.loading")}</p>}
       {profiles.isError && <p role="alert">{profiles.error.message}</p>}
       {profiles.data?.length === 0 && <p>{t("modelProfiles.empty")}</p>}
@@ -56,9 +58,11 @@ export function ModelProfilesPage() {
               </p>
             </div>
             <div className="profile-actions">
-              <Link to={`/settings/model-profiles/${profile.id}`}>
-                {t("modelProfiles.edit")}
-              </Link>
+              <Button asChild variant="outline">
+                <Link to={`/settings/model-profiles/${profile.id}`}>
+                  {t("modelProfiles.edit")}
+                </Link>
+              </Button>
               <Button
                 type="button"
                 variant="outline"
@@ -274,22 +278,32 @@ function ProfileForm({
         detail={t("modelProfiles.formDetail")}
       />
       <form onSubmit={submit} className="profile-form">
-        <label>
-          {t("modelProfiles.name")}
+        <FormField id="profile-name" label={t("modelProfiles.name")}>
           <Input
+            id="profile-name"
             required
             value={draft.name}
             onChange={(event) => setDraft({ ...draft, name: event.target.value })}
           />
-        </label>
-        <label>
-          <span className="profile-label-heading">
-            {t("modelProfiles.providerValue")}
-            <a href={PROVIDER_DOCS_URL} target="_blank" rel="noreferrer">
-              {t("modelProfiles.providerDocs")}
-            </a>
-          </span>
+        </FormField>
+        <FormField
+          id="profile-provider"
+          label={
+            <span className="profile-label-heading">
+              {t("modelProfiles.providerValue")}
+              <a
+                className="text-action"
+                href={PROVIDER_DOCS_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t("modelProfiles.providerDocs")}
+              </a>
+            </span>
+          }
+        >
           <Select
+            id="profile-provider"
             required
             value={draft.provider}
             disabled={referencePending || !!referenceError}
@@ -304,7 +318,7 @@ function ProfileForm({
               </option>
             ))}
           </Select>
-        </label>
+        </FormField>
         {referencePending && <p role="status">{t("modelProfiles.referenceLoading")}</p>}
         {referenceError && (
           <div className="field-recovery">
@@ -363,7 +377,9 @@ function ProfileForm({
           <Button type="submit" disabled={pending || !draft.provider}>
             {t(pending ? "modelProfiles.saving" : "modelProfiles.save")}
           </Button>
-          <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
+          <Button asChild variant="outline">
+            <Link to="/settings/model-profiles">{t("common.cancel")}</Link>
+          </Button>
         </div>
       </form>
     </>

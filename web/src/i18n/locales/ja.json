@@ -1,4 +1,8 @@
 {
+  "common.pagination": "ページ切り替え",
+  "common.previousPage": "前のページ",
+  "common.nextPage": "次のページ",
+  "common.pageOf": "{pages} ページ中 {page} ページ",
   "termMaps.optional": "（任意）",
   "termMaps.selectionUnavailable": "選択した用語マップは存在しません。別のマップを選ぶか、使用しない設定を選んでください。",
   "termMaps.autoChoose": "自動選択（メディアのディレクトリ別）",

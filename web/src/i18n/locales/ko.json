@@ -1,4 +1,8 @@
 {
+  "common.pagination": "페이지 탐색",
+  "common.previousPage": "이전 페이지",
+  "common.nextPage": "다음 페이지",
+  "common.pageOf": "{pages}페이지 중 {page}페이지",
   "termMaps.optional": "(선택 사항)",
   "termMaps.selectionUnavailable": "선택한 용어 맵이 더 이상 없습니다. 다른 맵이나 사용 안 함을 선택하세요.",
   "termMaps.autoChoose": "자동 선택 (미디어 디렉터리 기준)",

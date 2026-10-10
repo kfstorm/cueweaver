@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 
 const stylesheet = readFileSync("src/styles.css", "utf8");
 const buttonPrimitive = readFileSync("src/components/ui/button.tsx", "utf8");
+const controls = readFileSync("src/components/ui/controls.css", "utf8");
+const layouts = readFileSync("src/components/layout.css", "utf8");
 const rootBlock = stylesheet.match(/:root\s*\{[\s\S]*?\n\}/u)?.[0] ?? "";
-const pageStyles = stylesheet.replace(rootBlock, "");
+const pageStyles = stylesheet.replace(rootBlock, "") + layouts;
 
 describe("CSS density tokens", () => {
   it("keeps page font sizes behind root tokens", () => {
@@ -17,10 +19,24 @@ describe("CSS density tokens", () => {
     expect(declarations.every((value) => value.startsWith("var(--font-"))).toBe(true);
   });
 
-  it("keeps the Button primitive on the control typography token", () => {
-    expect(buttonPrimitive).toContain("text-[length:var(--font-control)]");
-    expect(buttonPrimitive).toContain("leading-5");
+  it("keeps control typography in the shared primitives", () => {
+    expect(buttonPrimitive).toContain("button-control");
+    expect(controls).toContain("font-size: var(--font-control)");
+    expect(controls).toContain("font-size: var(--font-control-mobile)");
     expect(buttonPrimitive).not.toMatch(/\btext-(?:xs|sm|base|lg|xl)\b/u);
+    for (const [, selector, declarations] of pageStyles.matchAll(
+      /([^{}]+)\{([^{}]*)\}/gu,
+    )) {
+      if (
+        !/\.(?:form-control|select-control|button-control|button-action)\b/u.test(
+          selector,
+        )
+      )
+        continue;
+      expect(declarations, selector.trim()).not.toMatch(
+        /(?:^|;)\s*(?:font(?:-size|-weight|-family)?|line-height|height|min-height|padding(?:-\w+)?)\s*:/u,
+      );
+    }
   });
 
   it("does not use negative margins for readable UI content", () => {

@@ -2363,6 +2363,41 @@ describe("product shell", () => {
     expect(clearButton).toBeDisabled();
   });
 
+  it("pages Term map entries and searches across every page", async () => {
+    const content = Object.fromEntries(
+      Array.from({ length: 52 }, (_, index) => [
+        `Source ${String(index + 1).padStart(3, "0")}`,
+        `Target ${index + 1}`,
+      ]),
+    );
+    renderTermMapsWithFetch(
+      vi
+        .fn()
+        .mockImplementation(async (input: string) =>
+          jsonResponse(
+            input === "/api/term-maps"
+              ? { term_maps: [CHARACTERS_TERM_MAP] }
+              : { ...CHARACTERS_TERM_MAP, content },
+          ),
+        ),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Characters/ }));
+    await screen.findByText("Source 001");
+    expect(screen.getAllByRole("row")).toHaveLength(26);
+    expect(screen.queryByText("Source 026")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(screen.getByText("Source 026")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search Source or Target" }), {
+      target: { value: "Target 52" },
+    });
+    await screen.findByText("Source 052");
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Next page" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("textbox", { name: "Replacement JSON content" }),
+    ).toHaveValue(JSON.stringify(content, null, 2));
+  });
+
   it("lists a Term map and supports keyboard inspection and search", async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
