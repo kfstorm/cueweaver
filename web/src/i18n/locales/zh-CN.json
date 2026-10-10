@@ -1,4 +1,8 @@
 {
+  "common.pagination": "分页",
+  "common.previousPage": "上一页",
+  "common.nextPage": "下一页",
+  "common.pageOf": "第 {page} 页，共 {pages} 页",
   "termMaps.optional": "（可选）",
   "termMaps.selectionUnavailable": "所选术语表已不存在，请重新选择或选择不使用术语表。",
   "termMaps.autoChoose": "自动选择（按媒体所在目录）",

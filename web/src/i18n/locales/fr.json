@@ -1,4 +1,8 @@
 {
+  "common.pagination": "Pagination",
+  "common.previousPage": "Page précédente",
+  "common.nextPage": "Page suivante",
+  "common.pageOf": "Page {page} sur {pages}",
   "termMaps.optional": "(facultatif)",
   "termMaps.selectionUnavailable": "La carte terminologique sélectionnée n'existe plus. Choisissez-en une autre ou aucune.",
   "termMaps.autoChoose": "Automatique (par répertoire du média)",

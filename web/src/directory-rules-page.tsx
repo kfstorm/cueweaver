@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "./components/page-header";
+import { FormField, SectionToolbar } from "./components/layout";
 import { Button } from "./components/ui/button";
 import { Select } from "./components/ui/input";
 import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
@@ -30,15 +31,18 @@ export function DirectoryRulesPage() {
       />
       <TermMapNavigation />
       <section className="directory-rules" aria-labelledby="directory-rules-title">
-        <div className="section-heading">
+        <SectionToolbar
+          actions={
+            <Button
+              ref={addRef}
+              onClick={() => setEditing(params.get("directory") ?? "")}
+            >
+              {t("termMaps.addRule")}
+            </Button>
+          }
+        >
           <h2 id="directory-rules-title">{t("termMaps.directoryRules")}</h2>
-          <Button
-            ref={addRef}
-            onClick={() => setEditing(params.get("directory") ?? "")}
-          >
-            {t("termMaps.addRule")}
-          </Button>
-        </div>
+        </SectionToolbar>
         {rules.isPending && <p role="status">{t("common.loading")}</p>}
         {rules.isFetching && !rules.isPending && (
           <p role="status">{t("common.loading")}</p>
@@ -172,14 +176,17 @@ function DirectoryRuleEditor({
   };
   return (
     <section className="directory-rule-editor" aria-labelledby="rule-editor-title">
-      <div className="section-heading">
+      <SectionToolbar
+        actions={
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            {t("common.close")}
+          </Button>
+        }
+      >
         <h3 id="rule-editor-title" ref={headingRef} tabIndex={-1}>
           {t("termMaps.editRule")}
         </h3>
-        <Button variant="outline" disabled={busy} onClick={onClose}>
-          {t("common.close")}
-        </Button>
-      </div>
+      </SectionToolbar>
       <p className="field-label">
         {t("translate.currentDirectory", {
           name: directory || t("translate.mediaRoot"),
@@ -211,6 +218,7 @@ function DirectoryRuleEditor({
           .map((entry) => (
             <Button
               variant="outline"
+              layout="item"
               key={entry.path}
               disabled={busy}
               onClick={() => changeDirectory(entry.path)}
@@ -261,8 +269,11 @@ function DirectoryRuleEditor({
           )}
         </>
       )}
-      <div className="directory-rule-map-field">
-        <label htmlFor="directory-rule-map">{t("termMaps.defaultTermMap")}</label>
+      <FormField
+        id="directory-rule-map"
+        label={t("termMaps.defaultTermMap")}
+        className="directory-rule-map-field"
+      >
         <Select
           id="directory-rule-map"
           aria-describedby="directory-rule-scope directory-rule-result"
@@ -283,7 +294,7 @@ function DirectoryRuleEditor({
             </option>
           ))}
         </Select>
-      </div>
+      </FormField>
       {maps.isPending && <p role="status">{t("translate.loadingTermMaps")}</p>}
       {maps.isError && (
         <div className="field-recovery">

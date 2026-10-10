@@ -197,7 +197,12 @@ for (const viewport of viewports) {
       const tabStop = await page.evaluate(() => {
         const active = document.activeElement;
         if (!active) return "";
-        const label = active.closest("label")?.firstChild?.textContent?.trim();
+        const label =
+          active instanceof HTMLInputElement ||
+          active instanceof HTMLSelectElement ||
+          active instanceof HTMLTextAreaElement
+            ? active.labels?.[0]?.textContent?.trim()
+            : undefined;
         return (
           label || active.textContent?.trim() || active.getAttribute("aria-label") || ""
         );

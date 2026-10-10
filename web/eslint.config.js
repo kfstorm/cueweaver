@@ -10,6 +10,13 @@ export default tseslint.config(
     ignores: ["dist", "coverage", "playwright-report", "test-results"],
   },
   {
+    files: ["tests/browser/*.{js,mjs}"],
+    extends: [js.configs.recommended, prettier],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
+  {
     extends: [js.configs.recommended, ...tseslint.configs.recommended, prettier],
     files: ["**/*.{ts,tsx}"],
     languageOptions: {

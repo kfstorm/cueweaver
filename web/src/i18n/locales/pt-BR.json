@@ -1,4 +1,8 @@
 {
+  "common.pagination": "Paginação",
+  "common.previousPage": "Página anterior",
+  "common.nextPage": "Próxima página",
+  "common.pageOf": "Página {page} de {pages}",
   "termMaps.optional": "(opcional)",
   "termMaps.selectionUnavailable": "O mapa de termos selecionado não existe mais. Escolha outro ou não use nenhum.",
   "termMaps.autoChoose": "Automático (por diretório da mídia)",

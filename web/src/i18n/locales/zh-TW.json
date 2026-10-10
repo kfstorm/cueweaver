@@ -1,4 +1,8 @@
 {
+  "common.pagination": "分頁",
+  "common.previousPage": "上一頁",
+  "common.nextPage": "下一頁",
+  "common.pageOf": "第 {page} 頁，共 {pages} 頁",
   "termMaps.optional": "（選填）",
   "termMaps.selectionUnavailable": "所選術語表已不存在，請重新選擇或選擇不使用術語表。",
   "termMaps.autoChoose": "自動選擇（依媒體所在目錄）",

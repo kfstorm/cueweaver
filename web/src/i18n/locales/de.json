@@ -1,4 +1,8 @@
 {
+  "common.pagination": "Seitennavigation",
+  "common.previousPage": "Vorherige Seite",
+  "common.nextPage": "Nächste Seite",
+  "common.pageOf": "Seite {page} von {pages}",
   "termMaps.optional": "(optional)",
   "termMaps.selectionUnavailable": "Die ausgewählte Begriffskarte existiert nicht mehr. Wählen Sie eine andere oder keine Begriffskarte.",
   "termMaps.autoChoose": "Automatisch (nach Medienverzeichnis)",

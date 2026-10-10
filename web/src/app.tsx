@@ -4,14 +4,12 @@ import {
   CheckCircleIcon,
   GearSixIcon,
   ListChecksIcon,
-  MagnifyingGlassIcon,
   SpinnerGapIcon,
   TranslateIcon,
   UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -35,6 +33,8 @@ import {
 
 import { Button } from "./components/ui/button";
 import { PageHeader } from "./components/page-header";
+import { SectionToolbar, Workflow, WorkflowStep } from "./components/layout";
+import { TermMapTable } from "./term-map-table";
 import { Guidance, QuickStart } from "./components/ui/guidance";
 import { Input, Select, Textarea } from "./components/ui/input";
 import { LocalizedErrorMessage } from "./components/ui/localized-error-message";
@@ -152,7 +152,9 @@ function Shell() {
         <Navigation />
       </aside>
       <main className="workspace">
-        <Outlet />
+        <div className="workspace-content">
+          <Outlet />
+        </div>
       </main>
       <Navigation mobile />
       <JobNotificationRegion {...jobNotifications} />
@@ -570,11 +572,9 @@ function Translate() {
           t("translate.quickStartStepThree"),
         ]}
       />
-      <p className="page-note">{t("translate.backgroundNote")}</p>
-      <section className="workflow-panel" aria-labelledby="source-title">
-        <div className="step-index">01</div>
-        <div className="step-content">
-          <h2 id="source-title">{t("translate.chooseMedia")}</h2>
+      <Workflow>
+        <p className="page-note">{t("translate.backgroundNote")}</p>
+        <WorkflowStep id="source-title" index="01" title={t("translate.chooseMedia")}>
           <label className="checkbox-field">
             <input
               type="checkbox"
@@ -751,18 +751,13 @@ function Translate() {
               )}
             </div>
           </div>
-        </div>
-      </section>
-      <section
-        className={cn(
-          "workflow-panel",
-          !batchMode && selectedCandidate === undefined && "muted",
-        )}
-        aria-labelledby="configure-title"
-      >
-        <div className="step-index">02</div>
-        <div className="step-content">
-          <h2 id="configure-title">{t("translate.configure")}</h2>
+        </WorkflowStep>
+        <WorkflowStep
+          id="configure-title"
+          index="02"
+          title={t("translate.configure")}
+          muted={!batchMode && selectedCandidate === undefined}
+        >
           <p>{t("translate.configureDetail")}</p>
           <div
             className="model-profile-field"
@@ -1082,49 +1077,79 @@ function Translate() {
                   />
                 </div>
               )}
-        </div>
-      </section>
-      <div
-        className={cn(
-          "submission-bar",
-          (createJob.isSuccess || createBatchJobs.isSuccess) && "queued",
-        )}
-      >
-        {createJob.isSuccess ? (
-          isSkippedJobResult(createJob.data) ? (
-            <SkipSuccess
-              result={createJob.data}
+        </WorkflowStep>
+        <div
+          className={cn(
+            "submission-bar",
+            (createJob.isSuccess || createBatchJobs.isSuccess) && "queued",
+          )}
+        >
+          {createJob.isSuccess ? (
+            isSkippedJobResult(createJob.data) ? (
+              <SkipSuccess
+                result={createJob.data}
+                onTranslateAnother={resetTranslationWorkflow}
+              />
+            ) : (
+              <QueueSuccess
+                job={queuedJob}
+                onViewJob={() => {
+                  if (queuedJob?.id)
+                    navigate(`/jobs/${encodeURIComponent(queuedJob.id)}`);
+                }}
+                onTranslateAnother={resetTranslationWorkflow}
+              />
+            )
+          ) : createBatchJobs.isSuccess ? (
+            <BatchQueueResults
+              mediaPaths={
+                createBatchJobs.variables?.items.map((item) => item.media_path) ?? []
+              }
+              results={createBatchJobs.data}
+              onViewJob={(jobId) => navigate(`/jobs/${encodeURIComponent(jobId)}`)}
               onTranslateAnother={resetTranslationWorkflow}
             />
           ) : (
-            <QueueSuccess
-              job={queuedJob}
-              onViewJob={() => {
-                if (queuedJob?.id)
-                  navigate(`/jobs/${encodeURIComponent(queuedJob.id)}`);
-              }}
-              onTranslateAnother={resetTranslationWorkflow}
-            />
-          )
-        ) : createBatchJobs.isSuccess ? (
-          <BatchQueueResults
-            mediaPaths={
-              createBatchJobs.variables?.items.map((item) => item.media_path) ?? []
-            }
-            results={createBatchJobs.data}
-            onViewJob={(jobId) => navigate(`/jobs/${encodeURIComponent(jobId)}`)}
-            onTranslateAnother={resetTranslationWorkflow}
-          />
-        ) : (
-          <>
-            <p className="next-action">{nextTranslationStep}</p>
-            <Button
-              disabled={!canSubmit}
-              onClick={() => {
-                if (batchMode) {
-                  createBatchJobs.mutate(
-                    {
-                      items: batchItems,
+            <>
+              <p className="next-action">{nextTranslationStep}</p>
+              <Button
+                disabled={!canSubmit}
+                onClick={() => {
+                  if (batchMode) {
+                    createBatchJobs.mutate(
+                      {
+                        items: batchItems,
+                        target_language_code: targetLanguage,
+                        model_profile_id: selectedProfile!.id,
+                        output_suffix: outputSuffix,
+                        output_conflict_policy: outputConflictPolicy,
+                        term_map_mode: termMapMode,
+                        term_map_id: selectedTermMapId,
+                        dynamic_terminology_enabled: dynamicTerminologyEnabled,
+                        subtitle_terminology_filter_enabled:
+                          subtitleTerminologyFilterEnabled,
+                      },
+                      {
+                        onSuccess: () => storeTargetLanguage(targetLanguage),
+                      },
+                    );
+                  } else if (
+                    selectedMedia &&
+                    selectedCandidate &&
+                    ((selectedCandidate.kind === "external" &&
+                      selectedCandidate.path) ||
+                      (selectedCandidate.kind === "embedded" &&
+                        selectedCandidate.stream_index !== undefined &&
+                        selectedCandidate.format))
+                  ) {
+                    const request = {
+                      media_path: selectedMedia,
+                      ...(selectedCandidate.kind === "external"
+                        ? { subtitle_path: selectedCandidate.path }
+                        : {
+                            stream_index: selectedCandidate.stream_index,
+                            source_format: selectedCandidate.format,
+                          }),
                       target_language_code: targetLanguage,
                       model_profile_id: selectedProfile!.id,
                       output_suffix: outputSuffix,
@@ -1134,62 +1159,33 @@ function Translate() {
                       dynamic_terminology_enabled: dynamicTerminologyEnabled,
                       subtitle_terminology_filter_enabled:
                         subtitleTerminologyFilterEnabled,
-                    },
-                    {
+                    };
+                    createJob.mutate(request, {
                       onSuccess: () => storeTargetLanguage(targetLanguage),
-                    },
-                  );
-                } else if (
-                  selectedMedia &&
-                  selectedCandidate &&
-                  ((selectedCandidate.kind === "external" && selectedCandidate.path) ||
-                    (selectedCandidate.kind === "embedded" &&
-                      selectedCandidate.stream_index !== undefined &&
-                      selectedCandidate.format))
-                ) {
-                  const request = {
-                    media_path: selectedMedia,
-                    ...(selectedCandidate.kind === "external"
-                      ? { subtitle_path: selectedCandidate.path }
-                      : {
-                          stream_index: selectedCandidate.stream_index,
-                          source_format: selectedCandidate.format,
-                        }),
-                    target_language_code: targetLanguage,
-                    model_profile_id: selectedProfile!.id,
-                    output_suffix: outputSuffix,
-                    output_conflict_policy: outputConflictPolicy,
-                    term_map_mode: termMapMode,
-                    term_map_id: selectedTermMapId,
-                    dynamic_terminology_enabled: dynamicTerminologyEnabled,
-                    subtitle_terminology_filter_enabled:
-                      subtitleTerminologyFilterEnabled,
-                  };
-                  createJob.mutate(request, {
-                    onSuccess: () => storeTargetLanguage(targetLanguage),
-                  });
-                }
-              }}
-            >
-              {createJob.isPending || createBatchJobs.isPending
-                ? t("translate.queueing")
-                : batchMode
-                  ? t("translate.queueSelected")
-                  : t("translate.start")}
-            </Button>
-          </>
+                    });
+                  }
+                }}
+              >
+                {createJob.isPending || createBatchJobs.isPending
+                  ? t("translate.queueing")
+                  : batchMode
+                    ? t("translate.queueSelected")
+                    : t("translate.start")}
+              </Button>
+            </>
+          )}
+        </div>
+        {createJob.isError && (
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={createJob.error} />
+          </div>
         )}
-      </div>
-      {createJob.isError && (
-        <div className="form-error" role="alert">
-          <LocalizedErrorMessage error={createJob.error} />
-        </div>
-      )}
-      {createBatchJobs.isError && (
-        <div className="form-error" role="alert">
-          <LocalizedErrorMessage error={createBatchJobs.error} />
-        </div>
-      )}
+        {createBatchJobs.isError && (
+          <div className="form-error" role="alert">
+            <LocalizedErrorMessage error={createBatchJobs.error} />
+          </div>
+        )}
+      </Workflow>
     </>
   );
 }
@@ -1751,6 +1747,7 @@ function SubtitleEntry({
       type="button"
       variant="outline"
       className={cn("subtitle-entry", candidate.kind === "embedded" && "embedded")}
+      layout="item"
       aria-pressed={selectable && selected}
       disabled={!selectable}
       aria-label={t("translate.selectSubtitle", {
@@ -2032,6 +2029,7 @@ function MediaEntry({
       type="button"
       variant="outline"
       className={cn("media-entry", collapsed && "collapsed")}
+      layout="item"
       ref={buttonRef}
       data-media-path={entry.path}
       onClick={() =>
@@ -2066,8 +2064,6 @@ function TermMapsPage() {
   const newMapRef = useRef<HTMLButtonElement>(null);
   const [librarySearch, setLibrarySearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
   const selected = useTermMap(selectedId);
   const create = useCreateTermMap();
   const rename = useRenameTermMap();
@@ -2200,14 +2196,6 @@ function TermMapsPage() {
     );
   }
 
-  const entries = selected.data
-    ? Object.entries(selected.data.content).filter(([source, target]) =>
-        `${source} ${target}`
-          .toLocaleLowerCase()
-          .includes(deferredSearch.toLocaleLowerCase()),
-      )
-    : [];
-
   function renameSelected() {
     if (!selectedId || !renameName.trim()) return;
     rename.mutate(
@@ -2244,22 +2232,27 @@ function TermMapsPage() {
       <PageHeader title={t("settings.termMaps")} detail={t("termMaps.detail")} />
       <TermMapNavigation />
       <div className="term-map-library-toolbar">
-        <div className="section-heading">
-          <label htmlFor="term-map-library-search">{t("termMaps.searchLibrary")}</label>
-          <Button
-            ref={newMapRef}
-            disabled={create.isPending}
-            onClick={() => setCreating(true)}
-          >
-            {t("termMaps.newMap")}
-          </Button>
-        </div>
-        <Input
-          id="term-map-library-search"
-          type="search"
-          value={librarySearch}
-          onChange={(event) => setLibrarySearch(event.target.value)}
-        />
+        <SectionToolbar
+          actions={
+            <Button
+              ref={newMapRef}
+              disabled={create.isPending}
+              onClick={() => setCreating(true)}
+            >
+              {t("termMaps.newMap")}
+            </Button>
+          }
+        >
+          <label className="form-field" htmlFor="term-map-library-search">
+            {t("termMaps.searchLibrary")}
+            <Input
+              id="term-map-library-search"
+              type="search"
+              value={librarySearch}
+              onChange={(event) => setLibrarySearch(event.target.value)}
+            />
+          </label>
+        </SectionToolbar>
       </div>
       {creating && (
         <>
@@ -2349,6 +2342,7 @@ function TermMapsPage() {
               <label htmlFor="term-map-content">
                 {t("termMaps.pasteJson")}
                 <Textarea
+                  monospace
                   id="term-map-content"
                   aria-label={t("termMaps.jsonContent")}
                   required
@@ -2416,13 +2410,16 @@ function TermMapsPage() {
         )}
 
         <section className="term-map-list" aria-labelledby="maps-title">
-          <div className="section-heading">
+          <SectionToolbar
+            actions={
+              <span className="count-badge">{maps.data?.term_maps?.length ?? 0}</span>
+            }
+          >
             <div>
               <p className="eyebrow">{t("termMaps.library")}</p>
               <h2 id="maps-title">{t("termMaps.saved")}</h2>
             </div>
-            <span className="count-badge">{maps.data?.term_maps?.length ?? 0}</span>
-          </div>
+          </SectionToolbar>
           <div
             className={cn(
               "term-map-list-state",
@@ -2587,41 +2584,12 @@ function TermMapsPage() {
             )}
             {selected.data && (
               <>
-                <label className="search-field">
-                  <MagnifyingGlassIcon size={17} aria-hidden="true" />
-                  <span>{t("termMaps.search")}</span>
-                  <Input
-                    aria-label={t("termMaps.search")}
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder={t("termMaps.filter")}
-                  />
-                </label>
-                <div className="term-table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{t("termMaps.source")}</th>
-                        <th>{t("termMaps.target")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {entries.map(([source, target]) => (
-                        <tr key={source}>
-                          <td>{source}</td>
-                          <td>{target}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {entries.length === 0 && (
-                    <p className="table-empty">{t("termMaps.noMatchingTerms")}</p>
-                  )}
-                </div>
+                <TermMapTable key={selectedId} content={selected.data.content} />
                 <div className="term-map-management">
                   <h3>{t("termMaps.replaceJson")}</h3>
                   <p className="field-help">{t("termMaps.replaceHelp")}</p>
                   <Textarea
+                    monospace
                     aria-label={t("termMaps.replacementJson")}
                     value={replacementText}
                     onChange={(event) => setReplacement(event.target.value)}

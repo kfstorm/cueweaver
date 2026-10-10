@@ -76,6 +76,28 @@ when reused.
 - A smaller type size is allowed only for non-functional decoration such as a
   brand mark or step number, and the exception must remain local and explicit.
 
+## Layout Ownership
+
+- Use `components/layout.tsx` for repeated layout patterns: `Workflow` and
+  `WorkflowStep` share the Translate content column; `SectionToolbar` centers
+  headings and actions; `SettingsRow` owns setting alignment; `FormField` owns
+  label spacing. Use `PageHeader`'s action slot for page-level creation actions.
+- Align workflow notes and submission content with the step content column.
+  Keep step numbers in their own column. Align flat list text with its heading;
+  keep normal inner padding for bordered controls and tables.
+- The shell's `workspace-content` centers one bounded canvas. Keep narrower
+  forms left-aligned inside it rather than centering each page child separately.
+- Ordinary Button actions keep their text on one line and do not shrink.
+  Use `layout="item"` for content-driven, multiline choices such as Media rows.
+  Give the neighboring content room to shrink or wrap the action group.
+- Keep control sizing in `components/ui/controls.css`. Page styles own widths
+  and arrangement; change primitive tokens or variants for sizing changes.
+- Use container queries for split views and setting rows. The navigation's
+  768px breakpoint does not determine whether content fits in two columns.
+- Bound Media result lists without bounding the whole workflow. Term map
+  pagination searches all entries and leaves complete content available to
+  replacement operations.
+
 ## Product States
 
 - Design loading, empty, error, disabled, and available states with the same layout
@@ -118,13 +140,20 @@ inspection alone.
 - Use the repository's `agent-browser` skill and Agent Browser tool as the only
   browser inspection path. Before running a browser command, load its current
   workflow with `agent-browser skills get core`.
-- Check 1280x800 and 390x844 viewports with Agent Browser.
+- Run `pnpm --dir web test:layout http://127.0.0.1:<web-port>` against a running
+  local Web server. This Agent Browser matrix uses synthetic responses and
+  checks actual control bounds, action text clipping, alignment, overflow,
+  intermediate widths, Chinese/German, themes, and resource states.
+- Visually check 1280x800 and 390x844 screenshots, plus intermediate-width
+  layouts. The automated matrix supplements this inspection.
 - Check Translate, Jobs, Settings, and Term maps at affected loading, empty,
   error, and populated states.
 - Check System, Light, and Dark preferences at desktop and mobile widths,
   including system-theme changes, hierarchy, and contrast.
 - Inspect computed font size, line height, control height, gap, and margins for
-  the changed controls. Same-kind controls must not silently diverge.
+  the changed controls. Measure rendered height, not just CSS `min-height`.
+  Compare left edges within each content column and centers in single-line
+  toolbars. Same-kind controls must not silently diverge.
 - Confirm there is no horizontal overflow, fixed-navigation overlap, clipped
   focus ring, or unexplained blank vertical region.
 - Capture screenshots for meaningful layout changes and treat unexpected
