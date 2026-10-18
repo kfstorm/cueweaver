@@ -1,4 +1,8 @@
 {
+  "jobs.progress": "번역 진행률",
+  "jobs.progressScenes": "장면 {completed} / {total}",
+  "jobs.progressBatches": "배치 {completed} / {total}",
+  "jobs.progressLines": "줄 수 {completed} / {total}",
   "common.pagination": "페이지 탐색",
   "common.previousPage": "이전 페이지",
   "common.nextPage": "다음 페이지",

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,10 @@ from PySubtrans import (
     init_translation_provider,
 )
 
+from .application.translation import TranslationProgress
 from .terminology import filter_terminology_for_text
+
+logger = logging.getLogger(__name__)
 
 
 class PySubtransTranslator:
@@ -34,6 +38,7 @@ class PySubtransTranslator:
         work_directory: PathLike[str],
         dynamic_terminology_enabled: bool = True,
         subtitle_terminology_filter_enabled: bool = True,
+        on_progress: Callable[[TranslationProgress], None] | None = None,
     ) -> bytes:
         source = Path(source).expanduser().resolve()
         source_text = source.read_text(encoding="utf-8-sig", errors="replace")
@@ -93,6 +98,20 @@ class PySubtransTranslator:
                 _overlay_terminology(engine.terminology_map, source_key, target)
             update.terminology_map = dict(engine.terminology_map)
 
+        report_progress = _progress_reporter(
+            on_progress, resume=engine.resume if on_progress is not None else False
+        )
+        progress_events = (
+            (
+                engine.events.preprocessed,
+                engine.events.batch_translated,
+                engine.events.scene_translated,
+            )
+            if on_progress is not None
+            else ()
+        )
+        for event in progress_events:
+            event.connect(report_progress, weak=False)
         engine.events.batch_translated.connect(save_checkpoint, weak=False)
         if static_terminology:
             engine.events.terminology_updated.connect(
@@ -112,12 +131,96 @@ class PySubtransTranslator:
                 raise RuntimeError("PySubtrans did not translate every subtitle")
             return _save_translation_bytes(project, source.suffix)
         finally:
-            project.SaveProjectFile()
             engine.events.batch_translated.disconnect(save_checkpoint)
+            for event in progress_events:
+                event.disconnect(report_progress)
             if static_terminology:
                 engine.events.terminology_updated.disconnect(
                     preserve_static_terminology
                 )
+            project.SaveProjectFile()
+
+
+def _progress_reporter(
+    on_progress: Callable[[TranslationProgress], None] | None,
+    *,
+    resume: bool,
+) -> Callable[..., None]:
+    scenes: list[Any] = []
+    skipped: set[int] = set()
+
+    def report(_sender: Any, **kwargs: Any) -> None:
+        # Observers must never prevent translation or checkpoint persistence.
+        try:
+            if "scenes" in kwargs:
+                scenes[:] = kwargs["scenes"]
+                skipped.clear()
+                # Freeze resume selection before translation changes batch.translated.
+                for scene in scenes if resume else ():
+                    scene_complete = _translation_complete(scene)
+                    selected = {
+                        batch.number
+                        for batch in scene.batches
+                        if not getattr(
+                            batch, "translation_complete", bool(batch.translated)
+                        )
+                    }
+                    skipped.update(
+                        id(batch)
+                        for batch in scene.batches
+                        if scene_complete
+                        # An empty selection makes TranslateScene process all batches.
+                        or (selected and batch.number not in selected)
+                        or _translation_complete(batch)
+                    )
+            batches = [batch for scene in scenes for batch in scene.batches]
+            completed = {
+                id(batch)
+                for batch in batches
+                if id(batch) in skipped or _translation_complete(batch)
+            }
+            assert on_progress is not None
+            on_progress(
+                TranslationProgress(
+                    completed_scenes=sum(
+                        getattr(
+                            scene,
+                            "translation_complete",
+                            all(id(batch) in completed for batch in scene.batches),
+                        )
+                        for scene in scenes
+                    ),
+                    total_scenes=len(scenes),
+                    completed_batches=len(completed),
+                    total_batches=len(batches),
+                    completed_lines=sum(
+                        batch.size
+                        if id(batch) in skipped
+                        else _translated_line_count(batch)
+                        for batch in batches
+                    ),
+                    total_lines=sum(batch.size for batch in batches),
+                )
+            )
+        except Exception:
+            logger.warning("Could not report translation progress", exc_info=True)
+
+    return report
+
+
+def _translation_complete(item: Any) -> bool:
+    try:
+        return bool(item.translation_complete)
+    except AttributeError:
+        # Legacy resume skips fully translated scenes/batches even with saved errors.
+        return bool(item.all_translated)
+
+
+def _translated_line_count(batch: Any) -> int:
+    # GUI-Subtrans counts original lines with a non-None translation, even in failed batches.
+    originals = {line.number for line in batch.originals}
+    translated = {line.number for line in batch.translated if line.text is not None}
+    return len(originals & translated)
 
 
 def _disable_thinking(engine: SubtitleTranslator) -> None:

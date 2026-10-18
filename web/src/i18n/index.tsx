@@ -43,6 +43,10 @@ export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
 ];
 
 const ENGLISH = {
+  "jobs.progress": "Translation progress",
+  "jobs.progressScenes": "Scenes {completed} / {total}",
+  "jobs.progressBatches": "Batches {completed} / {total}",
+  "jobs.progressLines": "Lines {completed} / {total}",
   "common.pagination": "Pagination",
   "common.previousPage": "Previous page",
   "common.nextPage": "Next page",

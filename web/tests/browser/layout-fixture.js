@@ -57,6 +57,21 @@ const job = {
     message: "Example provider timed out.\nTry again after checking the connection.",
   },
 };
+const runningJob = {
+  ...job,
+  id: "example-progress-job",
+  status: "Translating",
+  finished_at: null,
+  error: null,
+  progress: {
+    completed_scenes: 12,
+    total_scenes: 30,
+    completed_batches: 123,
+    total_batches: 300,
+    completed_lines: 1234,
+    total_lines: 3000,
+  },
+};
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.url, location.origin);
   if (!url.pathname.startsWith("/api/")) return originalFetch(input, init);
@@ -153,16 +168,17 @@ window.fetch = async (input, init) => {
       break;
     case "/api/jobs":
       data = {
-        active_jobs: [],
+        active_jobs: empty ? [] : [runningJob],
         history_jobs: empty ? [] : [job],
         next_cursor: null,
-        matching_count: empty ? 0 : 1,
+        matching_count: empty ? 0 : 2,
         completed_count: 0,
       };
       break;
     default:
       if (url.pathname.startsWith("/api/term-maps/")) data = { ...map, content };
-      else if (url.pathname.startsWith("/api/jobs/")) data = job;
+      else if (url.pathname.startsWith("/api/jobs/"))
+        data = url.pathname.endsWith(runningJob.id) ? runningJob : job;
       else
         return new Response(JSON.stringify({ message: "Unknown example endpoint" }), {
           status: 404,

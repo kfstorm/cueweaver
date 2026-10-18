@@ -46,6 +46,15 @@ function reconcileJobLists(activeJobs: Job[], historyJobs: Job[]): JobListData {
   };
 }
 
+export interface TranslationProgress {
+  completed_scenes: number;
+  total_scenes: number;
+  completed_batches: number;
+  total_batches: number;
+  completed_lines: number;
+  total_lines: number;
+}
+
 export interface Job {
   id: string;
   attempt: number;
@@ -55,6 +64,7 @@ export interface Job {
   finished_at: string | null;
   status_history?: JobStatusHistoryEntry[];
   queue_position: number | null;
+  progress?: TranslationProgress | null;
   request: {
     media_path: string;
     subtitle_path?: string;

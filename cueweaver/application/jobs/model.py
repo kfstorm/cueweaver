@@ -82,6 +82,7 @@ def _project_common(record: Mapping[str, object], *, summary: bool) -> JobRecord
         "started_at",
         "finished_at",
         "error",
+        "progress",
     )
     if not summary:
         fields += ("extraction", "status_history")

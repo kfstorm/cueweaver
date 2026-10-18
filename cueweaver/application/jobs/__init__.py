@@ -10,7 +10,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -26,7 +26,7 @@ from ..extraction import Extraction
 from ..media import require_readable_media
 from ..model_profiles import ModelProfiles
 from ..term_maps import TermMapDetail
-from ..translation import Translator
+from ..translation import TranslationProgress, Translator
 from .execution import (
     EmbeddedExecutionInput,
     JobExecution,
@@ -124,9 +124,10 @@ class Jobs:
         )
         self._pending: queue.Queue[str | None] = queue.Queue()
         self._records: dict[str, dict[str, object]] = {}
+        self._translation_progress: dict[str, TranslationProgress] = {}
         self._recovered_queue_ids: list[str] = []
         self._next_queue_sequence = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._lifecycle_lock = threading.Lock()
         self._closed = threading.Event()
         self._check_jobs_root()
@@ -530,7 +531,7 @@ class Jobs:
         self, statuses: tuple[str, ...] | None = None
     ) -> builtins.list[dict[str, object]]:
         with self._lock:
-            records = [copy_job_record(record) for record in self._records.values()]
+            records = [self._with_progress(record) for record in self._records.values()]
         if statuses is None:
             return records
         return [record for record in records if record.get("status") in statuses]
@@ -573,6 +574,7 @@ class Jobs:
         self._remove_record(job_id)
         with self._lock:
             self._records.pop(job_id, None)
+            self._translation_progress.pop(job_id, None)
 
     def _attempt_delete_terminal_job(self, job_id: str) -> ServiceError | None:
         try:
@@ -636,9 +638,30 @@ class Jobs:
         return self._copy_with_queue_position(record)
 
     def _copy_with_queue_position(self, record: dict[str, object]) -> dict[str, object]:
+        with self._lock:
+            copied = self._with_progress(record)
+            copied["queue_position"] = self._queue_position(record)
+            return copied
+
+    def _with_progress(self, record: dict[str, object]) -> dict[str, object]:
+        """Attach runtime state only to response copies while holding the lock."""
         copied = copy_job_record(record)
-        copied["queue_position"] = self._queue_position(record)
+        progress = self._translation_progress.get(str(record["id"]))
+        if record.get("status") == "Translating" and progress is not None:
+            copied["progress"] = asdict(progress)
         return copied
+
+    def _report_translation_progress(
+        self, job_id: str, attempt: object, progress: TranslationProgress
+    ) -> None:
+        with self._lock:
+            record = self._records.get(job_id)
+            if (
+                record is not None
+                and record.get("status") == "Translating"
+                and record.get("attempt") == attempt
+            ):
+                self._translation_progress[job_id] = progress
 
     def _queue_position(self, record: dict[str, object]) -> int | None:
         if record.get("status") != "Queued":
@@ -890,6 +913,9 @@ class Jobs:
                 if job_id is not None:
                     self._mark_failed_after_worker_error(job_id, error)
             finally:
+                if job_id is not None:
+                    with self._lock:
+                        self._translation_progress.pop(job_id, None)
                 self._pending.task_done()
 
     def _execute(self, job_id: str) -> None:
@@ -934,6 +960,11 @@ class Jobs:
                 AtomicOutputPublisher(),
                 extraction=self._extraction,
                 should_stop=self._closed.is_set,
+                on_translation_progress=lambda progress: (
+                    self._report_translation_progress(
+                        job_id, record["attempt"], progress
+                    )
+                ),
             ).execute(
                 JobExecutionInput(
                     subtitle_path=subtitle_path,
@@ -1197,6 +1228,8 @@ class Jobs:
         job_id = persisted["id"]
         assert isinstance(job_id, str)
         self._records[job_id] = persisted
+        if persisted["status"] != "Translating":
+            self._translation_progress.pop(job_id, None)
 
     def _check_jobs_root(self) -> None:
         if self._jobs_root.is_symlink():

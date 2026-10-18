@@ -1,4 +1,8 @@
 {
+  "jobs.progress": "翻譯進度",
+  "jobs.progressScenes": "場景 {completed} / {total}",
+  "jobs.progressBatches": "批次 {completed} / {total}",
+  "jobs.progressLines": "行數 {completed} / {total}",
   "common.pagination": "分頁",
   "common.previousPage": "上一頁",
   "common.nextPage": "下一頁",
