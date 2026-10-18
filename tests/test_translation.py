@@ -37,6 +37,7 @@ class Event:
 class MinimalEngine:
     def __init__(self, *_args, **_kwargs) -> None:
         self.aborted = False
+        self.resume = True
         self.errors: list[object] = []
         self.terminology_map: dict[str, str] = {}
         self.events = SimpleNamespace(
@@ -94,8 +95,6 @@ def test_progress_uses_actual_batch_state_without_double_counting(
         monkeypatch,
         Project(),
         lambda *_args, **_kwargs: engine,
-        lambda path: Path(path).write_bytes(b"translated"),
-        lambda **_kwargs: SimpleNamespace(provider="OpenAI", model="synthetic-model"),
     )
 
     def observe(progress):
@@ -111,21 +110,25 @@ def test_progress_uses_actual_batch_state_without_double_counting(
     )
     assert snapshots == [
         TranslationProgress(
-            int(resumed),
+            (2 if saved_errors else 1) if resumed else 0,
             2,
-            int(resumed),
+            (2 if saved_errors else 1) if resumed else 0,
             2,
             (3 if saved_errors else 2) if resumed else 0,
             3,
         ),
         *[
             TranslationProgress(
-                1, 2, 1, 2, (3 if saved_errors else 2) if resumed else 1, 3
+                (2 if resumed and saved_errors else 1),
+                2,
+                (2 if resumed and saved_errors else 1),
+                2,
+                (3 if saved_errors else 2) if resumed else 1,
+                3,
             )
         ]
         * 2,
-        *[TranslationProgress(1, 2, 1, 2, 3, 3)] * 2,
-        *[TranslationProgress(2, 2, 2, 2, 3, 3)] * 2,
+        *[TranslationProgress(2, 2, 2, 2, 3, 3)] * 4,
     ]
     assert len(checkpoints) == 5
     assert not engine.events.preprocessed.receivers
@@ -133,11 +136,15 @@ def test_progress_uses_actual_batch_state_without_double_counting(
     assert not engine.events.scene_translated.receivers
 
 
-def test_progress_prefers_native_completion_properties(tmp_path, monkeypatch):
+@pytest.mark.parametrize("saved_errors", [False, True])
+def test_progress_prefers_native_completion_properties(
+    tmp_path, monkeypatch, saved_errors
+):
     source = tmp_path / "source.srt"
     source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
     # Deliberately disagree with the fallback to prove the native contract wins.
     batch = SimpleNamespace(
+        number=1,
         translation_complete=False,
         all_translated=True,
         errors=[],
@@ -152,6 +159,9 @@ def test_progress_prefers_native_completion_properties(tmp_path, monkeypatch):
         SimpleNamespace(number=2, text=None),
         SimpleNamespace(number=99, text="Unmatched translation"),
     ]
+    if saved_errors:
+        batch.translated = batch.originals
+        batch.errors = ["Saved validation failure"]
     scene = SimpleNamespace(translation_complete=False, batches=[batch])
     engine = MinimalEngine()
     engine.events = TranslationEvents()
@@ -165,7 +175,7 @@ def test_progress_prefers_native_completion_properties(tmp_path, monkeypatch):
             batch.translation_complete = True
             scene.translation_complete = True
             batch.translated = batch.originals
-            batch.errors = ["Fallback would reject this state"]
+            batch.all_translated = False
             translator.events.scene_translated.send(translator, scene=scene)
 
         def SaveProjectFile(self):
@@ -175,16 +185,126 @@ def test_progress_prefers_native_completion_properties(tmp_path, monkeypatch):
         monkeypatch,
         Project(),
         lambda *_args, **_kwargs: engine,
-        lambda path: Path(path).write_bytes(b"translated"),
-        lambda **_kwargs: SimpleNamespace(provider="OpenAI", model="synthetic-model"),
     )
     PySubtransTranslator().translate(
         source, "fr", work_directory=tmp_path / "work", on_progress=snapshots.append
     )
     assert snapshots == [
-        TranslationProgress(0, 1, 0, 1, 1, 3),
+        TranslationProgress(0, 1, 0, 1, 3 if saved_errors else 1, 3),
         TranslationProgress(1, 1, 1, 1, 3, 3),
     ]
+
+
+@pytest.mark.parametrize("native_completion", [False, True])
+@pytest.mark.parametrize("empty_selection", [False, True])
+@pytest.mark.parametrize("resume", [False, True])
+def test_progress_snapshots_resume_skips_before_mutation_and_resets_on_retry(
+    tmp_path, monkeypatch, native_completion, empty_selection, resume
+):
+    source = tmp_path / "source.srt"
+    source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+    batches = [
+        SubtitleBatch(
+            {
+                "number": number,
+                "originals": [
+                    SubtitleLine({"number": number * 2 + offset, "text": "Example"})
+                    for offset in range(2)
+                ],
+            }
+        )
+        for number in (1, 2)
+    ]
+    first, second = batches
+    first.translated = first.originals[:1]
+    first.errors = ["Saved validation failure"]
+    second.translated = second.originals[:1] if empty_selection else []
+    scene = SubtitleScene({"batches": batches})
+    if native_completion:
+        # Newer engines select incomplete batches even when they have saved translations.
+        for batch in batches:
+            batch.translation_complete = False
+        scene.translation_complete = False
+    snapshots = []
+    checkpoints = []
+    attempt = 0
+    engine = MinimalEngine()
+    engine.resume = resume
+    engine.events = TranslationEvents()
+
+    class Project:
+        subtitles = SimpleNamespace(terminology_map={}, all_translated=True)
+
+        def TranslateSubtitles(self, translator):
+            nonlocal attempt
+            attempt += 1
+            translator.events.preprocessed.send(translator, scenes=[scene])
+            if attempt == 1:
+                second.translated = second.originals[:1]
+                second.errors = ["Synthetic validation failure"]
+                translator.events.batch_translated.send(translator, batch=second)
+                translator.events.batch_translated.send(translator, batch=second)
+                second.translated = second.originals
+                second.errors.clear()
+                if native_completion:
+                    second.translation_complete = True
+                translator.events.scene_translated.send(translator, scene=scene)
+                raise RuntimeError("Synthetic attempt failure")
+            for batch in batches:
+                batch.translated = batch.originals
+                batch.errors.clear()
+                if native_completion:
+                    batch.translation_complete = True
+            if native_completion:
+                scene.translation_complete = True
+            translator.events.scene_translated.send(translator, scene=scene)
+
+        def SaveProjectFile(self):
+            checkpoints.append(True)
+
+    _patch_translation_dependencies(
+        monkeypatch,
+        Project(),
+        lambda *_args, **_kwargs: engine,
+    )
+    translator = PySubtransTranslator()
+    with pytest.raises(RuntimeError, match="Synthetic attempt failure"):
+        translator.translate(
+            source, "fr", work_directory=tmp_path / "work", on_progress=snapshots.append
+        )
+    translator.translate(
+        source, "fr", work_directory=tmp_path / "work", on_progress=snapshots.append
+    )
+    skips_partial = resume and not native_completion and not empty_selection
+    assert snapshots == [
+        TranslationProgress(
+            0,
+            1,
+            int(skips_partial),
+            2,
+            2 if skips_partial else 1 + int(empty_selection),
+            4,
+        ),
+        *[
+            TranslationProgress(
+                0, 1, int(skips_partial), 2, 3 if skips_partial else 2, 4
+            )
+        ]
+        * 2,
+        TranslationProgress(
+            int(skips_partial),
+            1,
+            2 if skips_partial else 1,
+            2,
+            4 if skips_partial else 3,
+            4,
+        ),
+        # Both batches now have translations: legacy TranslateScene's empty selection
+        # falls back to all batches, so the partial batch is no longer skipped.
+        TranslationProgress(0, 1, 1, 2, 3, 4),
+        TranslationProgress(1, 1, 2, 2, 4, 4),
+    ]
+    assert len(checkpoints) == 4
 
 
 def test_all_pysubtrans_provider_extras_are_registered():
@@ -288,8 +408,18 @@ def test_disable_thinking_adds_explicit_request_body_option():
 
 
 def _patch_translation_dependencies(
-    monkeypatch, project, engine, save_translation, init_options
+    monkeypatch, project, engine, save_translation=None, init_options=None
 ):
+    if save_translation is None:
+
+        def save_translation(path):
+            Path(path).write_bytes(b"translated")
+
+    if init_options is None:
+
+        def init_options(**_kwargs):
+            return SimpleNamespace(provider="OpenAI", model="synthetic-model")
+
     monkeypatch.delenv("PROVIDER", raising=False)
     project.subtitles.SaveTranslation = save_translation
     monkeypatch.setattr("cueweaver.translation.init_options", init_options)

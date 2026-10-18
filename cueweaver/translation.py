@@ -98,7 +98,9 @@ class PySubtransTranslator:
                 _overlay_terminology(engine.terminology_map, source_key, target)
             update.terminology_map = dict(engine.terminology_map)
 
-        report_progress = _progress_reporter(on_progress)
+        report_progress = _progress_reporter(
+            on_progress, resume=engine.resume if on_progress is not None else False
+        )
         progress_events = (
             (
                 engine.events.preprocessed,
@@ -141,25 +143,61 @@ class PySubtransTranslator:
 
 def _progress_reporter(
     on_progress: Callable[[TranslationProgress], None] | None,
+    *,
+    resume: bool,
 ) -> Callable[..., None]:
     scenes: list[Any] = []
+    skipped: set[int] = set()
 
     def report(_sender: Any, **kwargs: Any) -> None:
         # Observers must never prevent translation or checkpoint persistence.
         try:
             if "scenes" in kwargs:
                 scenes[:] = kwargs["scenes"]
+                skipped.clear()
+                # Freeze resume selection before translation changes batch.translated.
+                for scene in scenes if resume else ():
+                    scene_complete = _translation_complete(scene)
+                    selected = {
+                        batch.number
+                        for batch in scene.batches
+                        if not getattr(
+                            batch, "translation_complete", bool(batch.translated)
+                        )
+                    }
+                    skipped.update(
+                        id(batch)
+                        for batch in scene.batches
+                        if scene_complete
+                        # An empty selection makes TranslateScene process all batches.
+                        or (selected and batch.number not in selected)
+                        or _translation_complete(batch)
+                    )
             batches = [batch for scene in scenes for batch in scene.batches]
-            completed = [batch for batch in batches if _batch_complete(batch)]
+            completed = {
+                id(batch)
+                for batch in batches
+                if id(batch) in skipped or _translation_complete(batch)
+            }
             assert on_progress is not None
             on_progress(
                 TranslationProgress(
-                    completed_scenes=sum(_scene_complete(scene) for scene in scenes),
+                    completed_scenes=sum(
+                        getattr(
+                            scene,
+                            "translation_complete",
+                            all(id(batch) in completed for batch in scene.batches),
+                        )
+                        for scene in scenes
+                    ),
                     total_scenes=len(scenes),
                     completed_batches=len(completed),
                     total_batches=len(batches),
                     completed_lines=sum(
-                        _translated_line_count(batch) for batch in batches
+                        batch.size
+                        if id(batch) in skipped
+                        else _translated_line_count(batch)
+                        for batch in batches
                     ),
                     total_lines=sum(batch.size for batch in batches),
                 )
@@ -170,12 +208,12 @@ def _progress_reporter(
     return report
 
 
-def _batch_complete(batch: Any) -> bool:
+def _translation_complete(item: Any) -> bool:
     try:
-        return bool(batch.translation_complete)
+        return bool(item.translation_complete)
     except AttributeError:
-        # PySubtrans 1.6.0 exposes line coverage and errors separately.
-        return bool(batch.all_translated and not batch.errors)
+        # Legacy resume skips fully translated scenes/batches even with saved errors.
+        return bool(item.all_translated)
 
 
 def _translated_line_count(batch: Any) -> int:
@@ -183,13 +221,6 @@ def _translated_line_count(batch: Any) -> int:
     originals = {line.number for line in batch.originals}
     translated = {line.number for line in batch.translated if line.text is not None}
     return len(originals & translated)
-
-
-def _scene_complete(scene: Any) -> bool:
-    try:
-        return bool(scene.translation_complete)
-    except AttributeError:
-        return all(_batch_complete(batch) for batch in scene.batches)
 
 
 def _disable_thinking(engine: SubtitleTranslator) -> None:
