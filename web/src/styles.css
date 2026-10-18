@@ -2535,6 +2535,10 @@ summary:focus-visible {
     flex-basis: auto;
   }
 }
+.job-item > .job-progress {
+  grid-column: 1 / -1;
+}
+
 .job-progress {
   display: grid;
   gap: var(--space-2);
