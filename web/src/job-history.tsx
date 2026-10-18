@@ -474,6 +474,7 @@ function JobListItem({
         <span className="job-id">{t("jobs.jobId", { id: job.id.slice(0, 8) })}</span>
       </button>
       <JobStatus status={job.status} />
+      <JobProgress job={job} />
       {job.queue_position !== null && job.queue_position !== undefined && (
         <span className="job-queue">
           {t("jobs.queuePosition")} {job.queue_position}
@@ -663,6 +664,7 @@ function JobDetail({
       )}
 
       {job.error && <JobError error={job.error} />}
+      <JobProgress job={job} announce />
 
       <section className="job-detail-section" aria-labelledby="job-summary-title">
         <h3 id="job-summary-title">{t("jobs.requestSummary")}</h3>
@@ -762,6 +764,54 @@ function JobDetail({
           <p className="job-history-unavailable">{t("jobs.statusUnavailable")}</p>
         )}
       </section>
+    </div>
+  );
+}
+
+function JobProgress({ job, announce = false }: { job: Job; announce?: boolean }) {
+  const { t } = useI18n();
+  const progress = job.progress;
+  if (job.status !== "Translating" || !progress) return null;
+  const percentage =
+    progress.total_lines > 0
+      ? Math.floor((progress.completed_lines / progress.total_lines) * 100)
+      : 0;
+  return (
+    <div className="job-progress">
+      <div className="job-progress-heading">
+        <span>{t("jobs.progress")}</span>
+        <span>{percentage}%</span>
+      </div>
+      <div
+        className="job-progress-track"
+        role="progressbar"
+        aria-label={t("jobs.progress")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percentage}
+      >
+        <div className="job-progress-fill" style={{ width: `${percentage}%` }} />
+      </div>
+      <div className="job-progress-counts" role={announce ? "status" : undefined}>
+        <span>
+          {t("jobs.progressScenes", {
+            completed: progress.completed_scenes,
+            total: progress.total_scenes,
+          })}
+        </span>
+        <span>
+          {t("jobs.progressBatches", {
+            completed: progress.completed_batches,
+            total: progress.total_batches,
+          })}
+        </span>
+        <span>
+          {t("jobs.progressLines", {
+            completed: progress.completed_lines,
+            total: progress.total_lines,
+          })}
+        </span>
+      </div>
     </div>
   );
 }

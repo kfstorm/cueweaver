@@ -2,16 +2,29 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from ...subtitle_formats import matching_format
 from ..errors import ServiceError
 from ..output import OutputPublisher
 from ..term_maps import reject_duplicate_json_pairs, validate_term_map_content
+
+
+@dataclass(frozen=True)
+class TranslationProgress:
+    """Runtime counts: successful Scenes/Batches and original lines with a translation."""
+
+    completed_scenes: int
+    total_scenes: int
+    completed_batches: int
+    total_batches: int
+    completed_lines: int
+    total_lines: int
 
 
 @dataclass(frozen=True)
@@ -55,10 +68,12 @@ class Translation:
         output: OutputPublisher,
         *,
         should_stop: Callable[[], bool] | None = None,
+        on_progress: Callable[[TranslationProgress], None] | None = None,
     ) -> None:
         self._translator = translator
         self._output = output
         self._should_stop = should_stop or (lambda: False)
+        self._on_progress = on_progress
 
     def translate(self, request: TranslateRequest) -> TranslateResult:
         subtitle_format = matching_format(request.subtitle_path, request.output_path)
@@ -69,10 +84,19 @@ class Translation:
             settings_arg = (
                 {"settings": request.settings} if request.settings is not None else {}
             )
+            progress_arg: dict[str, Any] = {}
+            if self._on_progress is not None:
+                parameters = inspect.signature(self._translator.translate).parameters
+                if "on_progress" in parameters or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                ):
+                    progress_arg["on_progress"] = self._on_progress
             content = self._translator.translate(
                 request.subtitle_path,
                 request.target_language_code,
                 **settings_arg,
+                **progress_arg,
                 user_overrides=term_map,
                 work_directory=request.work_directory,
                 dynamic_terminology_enabled=request.dynamic_terminology_enabled,

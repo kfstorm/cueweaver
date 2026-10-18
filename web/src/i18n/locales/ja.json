@@ -1,4 +1,8 @@
 {
+  "jobs.progress": "翻訳の進捗",
+  "jobs.progressScenes": "シーン {completed} / {total}",
+  "jobs.progressBatches": "バッチ {completed} / {total}",
+  "jobs.progressLines": "行数 {completed} / {total}",
   "common.pagination": "ページ切り替え",
   "common.previousPage": "前のページ",
   "common.nextPage": "次のページ",

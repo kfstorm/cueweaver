@@ -20,6 +20,7 @@ from ..translation import (
     TranslateRequest,
     TranslateResult,
     Translation,
+    TranslationProgress,
     Translator,
 )
 
@@ -85,11 +86,13 @@ class JobExecution:
         *,
         extraction: Extraction | None = None,
         should_stop: Callable[[], bool] | None = None,
+        on_translation_progress: Callable[[TranslationProgress], None] | None = None,
     ) -> None:
         self._translator = translator
         self._output = output
         self._extraction = extraction
         self._should_stop = should_stop or (lambda: False)
+        self._on_translation_progress = on_translation_progress
 
     def execute(
         self,
@@ -158,6 +161,7 @@ class JobExecution:
             self._translator,
             self._output,
             should_stop=self._should_stop,
+            on_progress=self._on_translation_progress,
         ).translate(
             TranslateRequest(
                 subtitle_path=subtitle_path,

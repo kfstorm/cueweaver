@@ -71,6 +71,33 @@ def test_translation_passes_request_options_and_publishes_result(tmp_path):
     assert request.work_directory.is_dir()
 
 
+def test_progress_is_optional_for_legacy_translators(tmp_path):
+    class LegacyTranslator:
+        def translate(  # noqa: PLR0913
+            self,
+            source,
+            target_language,
+            *,
+            user_overrides,
+            work_directory,
+            dynamic_terminology_enabled,
+            subtitle_terminology_filter_enabled,
+        ):
+            return SRT
+
+    subtitle = tmp_path / "Example.en.srt"
+    subtitle.write_bytes(SRT)
+    request = TranslateRequest(
+        subtitle, "fr", tmp_path / "Example.fr.srt", tmp_path / "work"
+    )
+    Translation(
+        LegacyTranslator(),
+        OutputFixture(),
+        on_progress=lambda progress: pytest.fail("Legacy translator has no progress"),
+    ).translate(request)
+    assert request.output_path.read_bytes() == SRT
+
+
 @pytest.mark.parametrize(
     ("subtitle_name", "output_name", "expected_error_code"),
     [

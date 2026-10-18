@@ -11,6 +11,13 @@ TimestampedFormatter.formatTime
 CueWeaverApplication
 TranslateRequest.subtitle_path
 TranslateRequest.term_map_path
+# Runtime progress fields are serialized by dataclasses.asdict.
+TranslationProgress.completed_scenes
+TranslationProgress.total_scenes
+TranslationProgress.completed_batches
+TranslationProgress.total_batches
+TranslationProgress.completed_lines
+TranslationProgress.total_lines
 create_app
 create_development_app_from_env
 create_product_app

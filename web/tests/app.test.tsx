@@ -1358,6 +1358,47 @@ describe("product shell", () => {
     ).toBeInTheDocument();
   });
 
+  it("polls line progress and removes it when the Job terminates", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const active = translatingEmbeddedJob("progress-job");
+    let current: JobFixture = active;
+    try {
+      await openVisibleJobDetail(jobsPageFetch(() => current));
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+      current = {
+        ...active,
+        progress: {
+          completed_scenes: 1,
+          total_scenes: 3,
+          completed_batches: 2,
+          total_batches: 5,
+          completed_lines: 10,
+          total_lines: 100,
+        },
+      };
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+      await waitFor(() => expect(screen.getAllByRole("progressbar")).toHaveLength(2));
+      for (const bar of screen.getAllByRole("progressbar")) {
+        expect(bar).toHaveAttribute("aria-valuenow", "10");
+      }
+      expect(screen.getAllByText(/1 \/ 3$/)).toHaveLength(2);
+      expect(screen.getAllByText(/2 \/ 5$/)).toHaveLength(2);
+      expect(screen.getAllByText(/10 \/ 100$/)).toHaveLength(2);
+      expect(
+        screen
+          .getAllByRole("status")
+          .filter((region) => region.textContent?.includes("10 / 100")),
+      ).toHaveLength(1);
+      current = { ...active, status: "Completed", progress: null };
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+      await waitFor(() =>
+        expect(screen.queryByRole("progressbar")).not.toBeInTheDocument(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an open Job detail current while polling", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const queued = {

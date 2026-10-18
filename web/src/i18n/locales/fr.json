@@ -1,4 +1,8 @@
 {
+  "jobs.progress": "Progression de la traduction",
+  "jobs.progressScenes": "Scènes {completed} / {total}",
+  "jobs.progressBatches": "Lots {completed} / {total}",
+  "jobs.progressLines": "Lignes {completed} / {total}",
   "common.pagination": "Pagination",
   "common.previousPage": "Page précédente",
   "common.nextPage": "Page suivante",

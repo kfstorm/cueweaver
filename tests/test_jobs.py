@@ -30,6 +30,7 @@ from cueweaver.application.jobs import (
     copy_job_record,
 )
 from cueweaver.application.term_maps import TermMapDetail
+from cueweaver.application.translation import TranslationProgress
 from cueweaver.product import create_product_app
 
 SRT = b"1\n00:00:00,000 --> 00:00:01,000\nTranslated\n"
@@ -593,6 +594,103 @@ def create_job(client: TestClient, target: str = "zh-Hans"):
             "output_conflict_policy": "append-number",
         },
     )
+
+
+def test_translation_progress_api_is_ephemeral_and_reset_on_retry(
+    tmp_path, monkeypatch
+):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    callbacks = []
+
+    class ProgressTranslator(FakeTranslator):
+        def translate(self, source, target_language, *, on_progress=None, **kwargs):
+            callbacks.append(on_progress)
+            on_progress(TranslationProgress(1, 2, 2, 4, 20, 40))
+            entered.set()
+            assert release.wait(5)
+            if len(callbacks) == 1:
+                raise RuntimeError("Synthetic provider failure")
+            return SRT
+
+    client = make_client(media_root, work_root, ProgressTranslator())
+    store = client.app.state.jobs._record_store
+    writes = []
+    original_write = store.write
+
+    def record_write(record):
+        writes.append(deepcopy(record))
+        original_write(record)
+
+    monkeypatch.setattr(store, "write", record_write)
+    job_id = create_job(client).json()["id"]
+    try:
+        assert entered.wait(5)
+        expected = {
+            "completed_scenes": 1,
+            "total_scenes": 2,
+            "completed_batches": 2,
+            "total_batches": 4,
+            "completed_lines": 20,
+            "total_lines": 40,
+        }
+        assert client.get(f"/api/jobs/{job_id}").json()["progress"] == expected
+        assert client.get("/api/jobs").json()["active_jobs"][0]["progress"] == expected
+        count = len(writes)
+        for _ in range(3):
+            callbacks[0](TranslationProgress(0, 2, 1, 4, 10, 40))
+        assert len(writes) == count
+        assert all("progress" not in record for record in writes)
+        assert all("progress" not in record for record in store.load())
+        release.set()
+        wait_for_status(client, job_id, "Failed")
+        assert client.get(f"/api/jobs/{job_id}").json().get("progress") is None
+        entered.clear()
+        release.clear()
+        assert client.post(f"/api/jobs/{job_id}/retry").json().get("progress") is None
+        assert entered.wait(5)
+        callbacks[0](TranslationProgress(2, 2, 4, 4, 40, 40))
+        assert client.get(f"/api/jobs/{job_id}").json()["progress"] == expected
+        release.set()
+        wait_for_status(client, job_id, "Completed")
+        assert client.get(f"/api/jobs/{job_id}").json().get("progress") is None
+        assert client.get("/api/jobs").json()["history_jobs"][0].get("progress") is None
+        assert client.delete(f"/api/jobs/{job_id}").status_code == 200
+        callbacks[-1](TranslationProgress(2, 2, 4, 4, 40, 40))
+        assert client.get(f"/api/jobs/{job_id}").json()["error_code"] == "job_not_found"
+    finally:
+        release.set()
+
+
+def test_interrupted_job_clears_translation_progress(tmp_path):
+    media_root, work_root, _media, _subtitle = make_roots(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    class ProgressTranslator(FakeTranslator):
+        def translate(self, source, target_language, *, on_progress=None, **kwargs):
+            on_progress(TranslationProgress(0, 1, 1, 2, 5, 10))
+            started.set()
+            assert release.wait(5)
+            return SRT
+
+    jobs = Jobs(ProgressTranslator(), media_root, work_root)
+    try:
+        job_id = jobs.create(
+            CreateJobRequest("Movie.mkv", "Movie.en.srt", "fr", "none")
+        )["id"]
+        assert started.wait(5)
+        assert jobs.get(job_id)["progress"]["completed_batches"] == 1
+        jobs.close()
+        release.set()
+        jobs.wait_closed()
+        assert jobs.get(job_id)["status"] == "Interrupted"
+        assert "progress" not in jobs.get(job_id)
+        assert not jobs._translation_progress
+    finally:
+        release.set()
+        jobs.wait_closed()
 
 
 def create_completed_jobs(client: TestClient):

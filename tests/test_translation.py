@@ -4,8 +4,13 @@ from types import SimpleNamespace
 import pytest
 from PySubtrans.Options import SettingsType
 from PySubtrans.Providers.Clients.CustomClient import CustomClient
+from PySubtrans.SubtitleBatch import SubtitleBatch
+from PySubtrans.SubtitleLine import SubtitleLine
+from PySubtrans.SubtitleScene import SubtitleScene
+from PySubtrans.TranslationEvents import TranslationEvents
 from PySubtrans.TranslationProvider import TranslationProvider
 
+from cueweaver.application.translation import TranslationProgress
 from cueweaver.translation import PySubtransTranslator, _disable_thinking
 
 _SUPPORTED_PROVIDERS = {
@@ -37,6 +42,149 @@ class MinimalEngine:
         self.events = SimpleNamespace(
             batch_translated=Event(), terminology_updated=Event()
         )
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+@pytest.mark.parametrize("observer_fails", [False, True])
+@pytest.mark.parametrize("saved_errors", [False, True])
+def test_progress_uses_actual_batch_state_without_double_counting(
+    tmp_path, monkeypatch, resumed, observer_fails, saved_errors
+):
+    source = tmp_path / "source.srt"
+    source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+    first = SubtitleBatch({"originals": [SubtitleLine({"number": 1, "text": "Hello"})]})
+    second = SubtitleBatch(
+        {
+            "originals": [
+                SubtitleLine({"number": 2, "text": "Welcome"}),
+                SubtitleLine({"number": 3, "text": "Goodbye"}),
+            ]
+        }
+    )
+    scenes = [SubtitleScene({"batches": [first]}), SubtitleScene({"batches": [second]})]
+    if resumed:
+        first.translated = first.originals
+        second.translated = second.originals if saved_errors else second.originals[:1]
+        second.errors = ["Saved validation failure"] if saved_errors else []
+    snapshots = []
+    checkpoints = []
+    engine = MinimalEngine()
+    engine.events = TranslationEvents()
+
+    class Project:
+        subtitles = SimpleNamespace(terminology_map={}, all_translated=True)
+
+        def TranslateSubtitles(self, translator):
+            translator.events.preprocessed.send(translator, scenes=scenes)
+            first.translated = first.originals
+            translator.events.batch_translated.send(translator, batch=first)
+            translator.events.batch_translated.send(translator, batch=first)
+            second.translated = second.originals
+            second.errors = ["Synthetic validation failure"]
+            translator.events.batch_translated.send(translator, batch=second)
+            translator.events.scene_translated.send(translator, scene=scenes[1])
+            second.errors.clear()
+            translator.events.batch_translated.send(translator, batch=second)
+            translator.events.scene_translated.send(translator, scene=scenes[1])
+
+        def SaveProjectFile(self):
+            checkpoints.append(True)
+
+    _patch_translation_dependencies(
+        monkeypatch,
+        Project(),
+        lambda *_args, **_kwargs: engine,
+        lambda path: Path(path).write_bytes(b"translated"),
+        lambda **_kwargs: SimpleNamespace(provider="OpenAI", model="synthetic-model"),
+    )
+
+    def observe(progress):
+        snapshots.append(progress)
+        if observer_fails:
+            raise RuntimeError("Synthetic observer failure")
+
+    assert (
+        PySubtransTranslator().translate(
+            source, "fr", work_directory=tmp_path / "work", on_progress=observe
+        )
+        == b"translated"
+    )
+    assert snapshots == [
+        TranslationProgress(
+            int(resumed),
+            2,
+            int(resumed),
+            2,
+            (3 if saved_errors else 2) if resumed else 0,
+            3,
+        ),
+        *[
+            TranslationProgress(
+                1, 2, 1, 2, (3 if saved_errors else 2) if resumed else 1, 3
+            )
+        ]
+        * 2,
+        *[TranslationProgress(1, 2, 1, 2, 3, 3)] * 2,
+        *[TranslationProgress(2, 2, 2, 2, 3, 3)] * 2,
+    ]
+    assert len(checkpoints) == 5
+    assert not engine.events.preprocessed.receivers
+    assert not engine.events.batch_translated.receivers
+    assert not engine.events.scene_translated.receivers
+
+
+def test_progress_prefers_native_completion_properties(tmp_path, monkeypatch):
+    source = tmp_path / "source.srt"
+    source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+    # Deliberately disagree with the fallback to prove the native contract wins.
+    batch = SimpleNamespace(
+        translation_complete=False,
+        all_translated=True,
+        errors=[],
+        size=3,
+        originals=[
+            SimpleNamespace(number=number, text="Example") for number in range(1, 4)
+        ],
+    )
+    batch.translated = [
+        batch.originals[0],
+        batch.originals[0],
+        SimpleNamespace(number=2, text=None),
+        SimpleNamespace(number=99, text="Unmatched translation"),
+    ]
+    scene = SimpleNamespace(translation_complete=False, batches=[batch])
+    engine = MinimalEngine()
+    engine.events = TranslationEvents()
+    snapshots = []
+
+    class Project:
+        subtitles = SimpleNamespace(terminology_map={}, all_translated=True)
+
+        def TranslateSubtitles(self, translator):
+            translator.events.preprocessed.send(translator, scenes=[scene])
+            batch.translation_complete = True
+            scene.translation_complete = True
+            batch.translated = batch.originals
+            batch.errors = ["Fallback would reject this state"]
+            translator.events.scene_translated.send(translator, scene=scene)
+
+        def SaveProjectFile(self):
+            pass
+
+    _patch_translation_dependencies(
+        monkeypatch,
+        Project(),
+        lambda *_args, **_kwargs: engine,
+        lambda path: Path(path).write_bytes(b"translated"),
+        lambda **_kwargs: SimpleNamespace(provider="OpenAI", model="synthetic-model"),
+    )
+    PySubtransTranslator().translate(
+        source, "fr", work_directory=tmp_path / "work", on_progress=snapshots.append
+    )
+    assert snapshots == [
+        TranslationProgress(0, 1, 0, 1, 1, 3),
+        TranslationProgress(1, 1, 1, 1, 3, 3),
+    ]
 
 
 def test_all_pysubtrans_provider_extras_are_registered():

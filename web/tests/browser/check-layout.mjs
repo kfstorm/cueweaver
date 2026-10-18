@@ -56,6 +56,7 @@ try {
             ],
           ],
           ["/jobs", [".job-item"]],
+          ["/jobs/example-progress-job", [".job-detail .job-progress"]],
           [
             "/jobs/example-job-0123456789abcdef0123456789abcdef",
             [".job-detail-actions button:nth-of-type(2)"],
