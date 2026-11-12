@@ -342,6 +342,53 @@ def test_api_key_translation_remains_default_even_with_plan_environment(
     assert len(plan_responses) == 1
 
 
+@pytest.mark.parametrize("status", [401, 400])
+def test_plan_inference_distinguishes_auth_from_other_provider_errors(
+    tmp_path, monkeypatch, plan_responses, status
+):
+    application = CueWeaverApplication(work_root=tmp_path)
+    save_session(ChatGPTAuth())
+
+    def reject(_client, request, **_kwargs):
+        return httpx.Response(
+            status,
+            request=request,
+            json={
+                "error": {
+                    "message": "synthetic provider rejection",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+    monkeypatch.setattr(httpx.Client, "send", reject)
+    source = tmp_path / "source.srt"
+    source.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+    try:
+        with pytest.raises(Exception) as failure:
+            PySubtransTranslator().translate(
+                source,
+                "fr",
+                settings={
+                    "provider": "OpenAI",
+                    "use_chatgpt_plan": True,
+                    "model": "gpt-synthetic",
+                },
+                work_directory=tmp_path / "translation",
+                dynamic_terminology_enabled=False,
+            )
+        message = str(failure.value)
+        if status == 401:
+            assert "Settings > ChatGPT" in message
+            assert "API key" not in message
+            assert "synthetic provider rejection" not in message
+        else:
+            assert "synthetic provider rejection" in message
+            assert "ChatGPT session unavailable" not in message
+    finally:
+        application.close()
+
+
 def test_revoked_session_returns_safe_actionable_http_error(
     tmp_path, monkeypatch, caplog
 ):
@@ -366,6 +413,26 @@ def test_revoked_session_returns_safe_actionable_http_error(
         assert ChatGPTAuth().store.Load()["host_id"] == data["host_id"]
     finally:
         application.close()
+
+
+def test_model_discovery_failure_keeps_safe_plan_guidance(tmp_path, monkeypatch):
+    application = CueWeaverApplication(work_root=tmp_path)
+    save_session(ChatGPTAuth())
+
+    def denied(*_args, **_kwargs):
+        raise ChatGPTAuthError("synthetic-access", error_code="invalid_grant")
+
+    monkeypatch.setattr(ChatGPTAuth, "ListModels", denied)
+    with TestClient(create_app(application)) as client:
+        response = client.post(
+            "/api/model-profile-options",
+            json={"provider": "OpenAI", "settings": {"use_chatgpt_plan": True}},
+        )
+    # Upstream's model cache retains only text, not the exception's type.
+    assert response.json()["error_code"] == "chatgpt_models_unavailable"
+    assert "Settings > ChatGPT" in response.json()["message"]
+    assert "synthetic-access" not in response.text
+    assert "API key" not in response.text
 
 
 def test_plan_translation_refreshes_after_restart_and_checkpoints_without_tokens(

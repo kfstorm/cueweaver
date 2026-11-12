@@ -20,7 +20,7 @@ from PySubtrans import (
 )
 
 from .application.translation import TranslationProgress
-from .chatgpt_auth import require_chatgpt_session
+from .chatgpt_auth import SIGN_IN_HELP, is_chatgpt_auth_failure, require_chatgpt_session
 from .terminology import filter_terminology_for_text
 
 logger = logging.getLogger(__name__)
@@ -120,18 +120,17 @@ class PySubtransTranslator:
                 preserve_static_terminology, weak=False
             )
         try:
-            project.TranslateSubtitles(engine)
-            if engine.errors:
-                # PySubtrans collects batch failures instead of raising them.
-                # Preserve their messages even if the engine also aborted.
-                raise RuntimeError(
-                    "\n".join(dict.fromkeys(str(error) for error in engine.errors))
-                )
-            if engine.aborted:
-                raise RuntimeError("PySubtrans translation was aborted")
-            if not project.subtitles.all_translated:
-                raise RuntimeError("PySubtrans did not translate every subtitle")
-            return _save_translation_bytes(project, source.suffix)
+            return _translate_project(project, engine, source.suffix)
+        except Exception as error:
+            if (
+                selected_provider == "OpenAI"
+                and resolved_settings.get("use_chatgpt_plan")
+                and is_chatgpt_auth_failure(error)
+            ):
+                raise ValueError(
+                    "ChatGPT session unavailable. " + SIGN_IN_HELP
+                ) from None
+            raise
         finally:
             engine.events.batch_translated.disconnect(save_checkpoint)
             for event in progress_events:
@@ -141,6 +140,21 @@ class PySubtransTranslator:
                     preserve_static_terminology
                 )
             project.SaveProjectFile()
+
+
+def _translate_project(project: Any, engine: Any, suffix: str) -> bytes:
+    project.TranslateSubtitles(engine)
+    if engine.errors:
+        # PySubtrans collects batch failures instead of raising them.
+        # Preserve their messages even if the engine also aborted.
+        raise RuntimeError(
+            "\n".join(dict.fromkeys(str(error) for error in engine.errors))
+        )
+    if engine.aborted:
+        raise RuntimeError("PySubtrans translation was aborted")
+    if not project.subtitles.all_translated:
+        raise RuntimeError("PySubtrans did not translate every subtitle")
+    return _save_translation_bytes(project, suffix)
 
 
 def _provider_settings(

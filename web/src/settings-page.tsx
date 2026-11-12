@@ -9,6 +9,7 @@ import { useTheme } from "./theme-context";
 const settingsSections = [
   { label: "settings.general", path: "/settings/general" },
   { label: "settings.modelProfiles", path: "/settings/model-profiles" },
+  { label: "chatgpt.title", path: "/settings/chatgpt" },
   { label: "settings.termMaps", path: "/settings/term-maps" },
 ] as const;
 

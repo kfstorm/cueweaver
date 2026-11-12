@@ -10,7 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { I18nProvider } from "../src/i18n";
+import { I18nProvider, translate } from "../src/i18n";
 import { ModelProfileEditor } from "../src/model-profiles-page";
 import type { ModelProfile, ModelProfileOptions } from "../src/model-profiles";
 import { ThemeProvider } from "../src/theme-provider";
@@ -101,6 +101,8 @@ function renderEditor({
       return referenceHandler
         ? referenceHandler()
         : response({ pysubtrans_version: "2.0", providers: ["OpenAI", "DeepSeek"] });
+    if (input === "/api/chatgpt-auth/status")
+      return response({ status: "not_configured" });
     if (input === "/api/model-profile-options") {
       optionRequests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return optionsHandler ? optionsHandler(init!) : response(options());
@@ -152,6 +154,51 @@ afterEach(() => {
 });
 
 describe("standalone Model Profile editor", () => {
+  it("guides ChatGPT setup before plan selection and preserves plan mode on authentication errors", async () => {
+    const { optionRequests } = renderEditor({
+      optionsHandler: async (init) => {
+        const { settings } = JSON.parse(String(init.body));
+        if (settings.use_chatgpt_plan)
+          return response(
+            { error_code: "chatgpt_session_unavailable", message: "Safe backend help" },
+            false,
+          );
+        return response({
+          ...options(),
+          options: [
+            ...options().options,
+            {
+              key: "use_chatgpt_plan",
+              type: "boolean",
+              description: null,
+              choices: null,
+            },
+          ],
+          refresh_when_changed: ["use_chatgpt_plan"],
+        });
+      },
+    });
+    await selectProvider();
+    expect(
+      screen.getByRole("link", { name: translate("chatgpt.instructions") }),
+    ).toHaveAttribute("href", "/settings/chatgpt");
+    expect(screen.getByText(translate("chatgpt.profileHelp"))).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("use_chatgpt_plan"), {
+      target: { value: "true" },
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      translate("chatgpt.authError"),
+    );
+    await screen.findByText(translate("chatgpt.not_configured"));
+    expect(screen.getByLabelText("use_chatgpt_plan")).toHaveValue("true");
+    expect(screen.getByText(translate("chatgpt.planHelp"))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry options" }));
+    await waitFor(() => expect(optionRequests).toHaveLength(3));
+    expect(optionRequests.at(-1)).toMatchObject({
+      settings: { use_chatgpt_plan: true },
+    });
+  });
+
   it("shows provider registry loading and retries an error", async () => {
     const first = deferred<ReturnType<typeof response>>();
     let calls = 0;

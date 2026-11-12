@@ -152,6 +152,13 @@ transferred session too.
 
 #### Persistence, status, and sign-out
 
+Open **Settings → ChatGPT** for setup guidance and a read-only credential status.
+You can refresh this status while CueWeaver runs. **Credentials present** means
+credentials are stored locally; it doesn't verify remote authorization, account
+eligibility, or remaining allowance. An unreadable file appears as unavailable;
+refresh again before asking the administrator to check it. The Web UI cannot
+sign in, refresh tokens, import credentials, switch accounts, or sign out.
+
 The Work volume contains `pysubtrans/chatgpt-auth.json`, with owner-only file
 permissions (`0600`) inside an owner-only directory (`0700`). It holds the stable
 host ID, client registration, and OAuth credentials. Keep the volume across

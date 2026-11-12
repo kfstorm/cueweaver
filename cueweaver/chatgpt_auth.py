@@ -14,8 +14,9 @@ import os
 import sys
 import uuid
 from collections.abc import Sequence
+from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from PySubtrans.Auth.ChatGPTAuth import (
     PLAN_USAGE_SCOPE,
@@ -28,11 +29,37 @@ from PySubtrans.Helpers.Resources import ConfigureConfigDir
 from .work import WorkRoot, WorkRootLease
 
 SIGN_IN_HELP = (
-    "ChatGPT authentication is managed separately from Model Profiles. "
+    "See Settings > ChatGPT for administrator authentication instructions. "
     "Stop CueWeaver and run cueweaver-chatgpt --work-root "
     "<absolute-work-root> sign-in on the browser's machine, or use the "
     "remote bootstrap instructions in the README. Then restart CueWeaver."
 )
+
+
+def read_chatgpt_status(
+    path: Path,
+) -> Literal["credentials_present", "not_configured", "unavailable"]:
+    """Read local presence only, without refreshing or changing credentials."""
+    try:
+        if path.is_symlink() or path.parent.is_symlink():
+            raise ValueError("Credential storage is a symbolic link")
+        # Upstream Load suppresses read/parse errors. Read once ourselves so an
+        # incomplete concurrent write is not mistaken for an unconfigured account.
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "not_configured"
+    except (OSError, ValueError):
+        return "unavailable"
+    if not isinstance(data, dict):
+        return "unavailable"
+    credentials = data.get("credentials")
+    if credentials is None:
+        return "not_configured"
+    if isinstance(credentials, dict):
+        token = credentials.get("refresh_token")
+        if isinstance(token, str) and token.strip():
+            return "credentials_present"
+    return "unavailable"
 
 
 def configure_chatgpt(work_root: Path) -> ChatGPTAuth:
@@ -95,6 +122,21 @@ def require_chatgpt_session(settings: dict[str, Any]) -> None:
         # OAuth responses are untrusted and can contain secrets. Never persist them
         # as Job errors or return them through the ordinary Model Profile API.
         raise ValueError("ChatGPT session unavailable. " + SIGN_IN_HELP) from None
+
+
+def is_chatgpt_auth_failure(error: BaseException) -> bool:
+    """Recognize typed OAuth errors and HTTP 401 through upstream wrappers."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if (
+            isinstance(current, ChatGPTAuthError)
+            or getattr(current, "status_code", None) == HTTPStatus.UNAUTHORIZED
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def main(argv: Sequence[str] | None = None) -> int:

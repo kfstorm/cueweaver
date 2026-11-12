@@ -62,6 +62,7 @@ try {
             [".job-detail-actions button:nth-of-type(2)"],
           ],
           ["/settings/general", []],
+          ["/settings/chatgpt", [".chatgpt-instructions"]],
           ["/settings/model-profiles", [".profile-row"]],
           ["/settings/term-maps", [".term-map-item"]],
           ["/settings/term-maps/automatic", [".directory-rule-list button"]],
@@ -99,6 +100,7 @@ try {
         "/translate",
         "/jobs",
         "/settings/model-profiles",
+        "/settings/chatgpt",
         "/settings/term-maps",
         "/settings/term-maps/automatic",
       ]) {
@@ -125,6 +127,15 @@ try {
     audit(`${width}/model-profile-editor/save-keyboard`);
     browser("press", "Tab");
     audit(`${width}/model-profile-editor/cancel-keyboard`);
+    browser("focus", "#profile-option-use_chatgpt_plan");
+    browser("select", "#profile-option-use_chatgpt_plan", "true");
+    browser("wait", ".profile-options [role=alert]");
+    audit(`${width}/model-profile-editor/chatgpt-missing`);
+    browser(
+      "wait",
+      "--fn",
+      "(() => { const rect = document.activeElement.getBoundingClientRect(); const nav = document.querySelector('.mobile-nav'); const bottom = nav && getComputedStyle(nav).display !== 'none' ? nav.getBoundingClientRect().top : innerHeight; return rect.top >= 0 && rect.bottom <= bottom; })()",
+    );
     open("/settings/term-maps");
     browser("wait", ".term-map-library-toolbar button");
     browser("click", ".term-map-library-toolbar button");

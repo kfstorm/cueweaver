@@ -7,6 +7,7 @@ import math
 from collections.abc import Mapping
 from typing import cast
 
+from PySubtrans.Auth.ChatGPTAuth import ChatGPTAuthError
 from PySubtrans.Options import MULTILINE_OPTION, ConfigActionOption
 from PySubtrans.SettingsType import SettingsType
 from PySubtrans.TranslationProvider import TranslationProvider
@@ -115,13 +116,15 @@ def _discover_model_profile_options(
                 and issubclass(option[0], ConfigActionOption)
             )
         ]
-        if provider == "OpenAI":
-            for option in options:
-                if option["key"] == "use_chatgpt_plan":
-                    option["description"] = f"{option['description']}. {SIGN_IN_HELP}"
         refresh_when_changed = list(runtime_provider.refresh_when_changed)
     except ServiceError:
         raise
+    except ChatGPTAuthError:
+        raise ServiceError(
+            "chatgpt_session_unavailable",
+            "ChatGPT session unavailable. " + SIGN_IN_HELP,
+            field="settings",
+        ) from None
     except Exception as error:
         raise ServiceError(
             "model_profile_runtime_failed",
