@@ -9,18 +9,21 @@ dependencies = [
     "alembic>=1.14.0",
     "langcodes[data]>=3.5.0",
     "pydantic>=2.13.4",
-    "pysubtrans[azure,bedrock,claude,gemini,mistral,openai]==1.6.0",
+    "pysubtrans[azure,bedrock,claude,gemini,mistral,openai]==1.7.4",
     "sqlalchemy>=2.0.0",
     "starlette>=1.6.0",
     "uvicorn>=0.35.0",
 ]
+
+[project.scripts]
+cueweaver-chatgpt = "cueweaver.chatgpt_auth:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
-# PySubtrans 1.6.0 uses the Mistral SDK v1 client API.
+# PySubtrans 1.7.4 uses the Mistral SDK v1 client API.
 override-dependencies = ["mistralai<2"]
 
 [dependency-groups]

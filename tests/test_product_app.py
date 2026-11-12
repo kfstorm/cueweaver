@@ -115,6 +115,7 @@ def test_product_startup_validates_media_and_creates_work_root(tmp_path: Path):
     assert set(work_root.iterdir()) == {
         work_root / ".cueweaver.lease",
         work_root / "cueweaver.sqlite3",
+        work_root / "pysubtrans",
     }
 
 

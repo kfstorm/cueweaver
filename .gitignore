@@ -13,3 +13,5 @@ web/coverage/
 *.tsbuildinfo
 web/test-results/
 web/playwright-report/
+chatgpt-auth*.json
+cueweaver-chatgpt-transfer.json

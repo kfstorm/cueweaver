@@ -23,6 +23,9 @@ create_development_app_from_env
 create_product_app
 create_product_app_from_env
 
+# The installed cueweaver-chatgpt console entry point loads this function.
+main
+
 # FastAPI middleware callbacks are registered dynamically by the decorator.
 require_json_content_type
 list_term_maps

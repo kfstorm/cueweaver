@@ -20,6 +20,7 @@ from PySubtrans import (
 )
 
 from .application.translation import TranslationProgress
+from .chatgpt_auth import require_chatgpt_session
 from .terminology import filter_terminology_for_text
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,11 @@ class PySubtransTranslator:
         on_progress: Callable[[TranslationProgress], None] | None = None,
     ) -> bytes:
         source = Path(source).expanduser().resolve()
+        selected_provider, resolved_settings = _provider_settings(settings)
         source_text = source.read_text(encoding="utf-8-sig", errors="replace")
         working_source = _prepare_working_source(
             source, target_language, user_overrides, work_directory
         )
-        resolved_settings = dict(settings or {})
-        selected_provider = resolved_settings.pop("provider", None)
         option_overrides: dict[str, Any] = {}
         if selected_provider is not None:
             option_overrides["provider"] = selected_provider
@@ -64,6 +64,8 @@ class PySubtransTranslator:
             postprocess_translation=False,
             build_terminology_map=dynamic_terminology_enabled,
             stop_on_error=True,
+            # Preserve strict validation after PySubtrans split warnings from errors.
+            warnings_as_errors=True,
             project_file=True,
         )
         if not options.provider:
@@ -139,6 +141,17 @@ class PySubtransTranslator:
                     preserve_static_terminology
                 )
             project.SaveProjectFile()
+
+
+def _provider_settings(
+    settings: Mapping[str, object] | None,
+) -> tuple[object, dict[str, object]]:
+    resolved = dict(settings or {})
+    provider = resolved.pop("provider", None)
+    if provider == "OpenAI":
+        resolved.setdefault("use_chatgpt_plan", False)
+        require_chatgpt_session(resolved)
+    return provider, resolved
 
 
 def _progress_reporter(

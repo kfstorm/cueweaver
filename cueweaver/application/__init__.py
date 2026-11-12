@@ -9,6 +9,7 @@ from ..adapters.sqlite_term_maps import (
     SqliteTermMapStore,
 )
 from ..adapters.translation import PySubtransTranslator
+from ..chatgpt_auth import configure_chatgpt
 from ..work import WorkRoot, WorkRootLease
 from .browsing import MediaBrowser
 from .database import DatabaseOpenError, DatabasePathError, SqliteDatabase
@@ -56,6 +57,7 @@ class CueWeaverApplication:
         self._lease = lease
         self._database = database
         try:
+            configure_chatgpt(configured_work_root.path)
             database.initialize()
             self.model_profiles = ModelProfiles(database)
             term_map_store = SqliteTermMapStore(database)
