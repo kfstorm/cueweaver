@@ -27,6 +27,7 @@ MANAGED_SETTINGS = frozenset(
         "postprocess_translation",
         "build_terminology_map",
         "stop_on_error",
+        "warnings_as_errors",
         "project_file",
     }
 )

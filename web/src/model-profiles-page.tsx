@@ -9,12 +9,14 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { PageHeader } from "./components/page-header";
+import { ChatGPTPlanStatus, ChatGPTProfileGuidance } from "./chatgpt-auth";
 import { FormField } from "./components/layout";
 import { Button } from "./components/ui/button";
 import { Input, Select, Textarea } from "./components/ui/input";
 import { useI18n } from "./i18n";
 import {
   requestModelProfileOptions,
+  ModelProfileRequestError,
   useDeleteModelProfile,
   useModelProfileReference,
   useModelProfiles,
@@ -45,6 +47,11 @@ export function ModelProfilesPage() {
           <Link to="/settings/model-profiles/new">{t("modelProfiles.create")}</Link>
         </Button>
       </PageHeader>
+      <p className="field-help">
+        <Link className="text-action chatgpt-link" to="/settings/chatgpt">
+          {t("chatgpt.instructions")}
+        </Link>
+      </p>
       {profiles.isPending && <p role="status">{t("modelProfiles.loading")}</p>}
       {profiles.isError && <p role="alert">{profiles.error.message}</p>}
       {profiles.data?.length === 0 && <p>{t("modelProfiles.empty")}</p>}
@@ -154,6 +161,7 @@ function ProfileForm({
   const [refreshKeys, setRefreshKeys] = useState<string[]>([]);
   const [optionsPending, setOptionsPending] = useState(Boolean(initial.provider));
   const [optionsError, setOptionsError] = useState<string>();
+  const [optionsErrorCode, setOptionsErrorCode] = useState<string>();
   const requestId = useRef(0);
   const optionsRevision = useRef(0);
   const controller = useRef<AbortController | undefined>(undefined);
@@ -174,6 +182,7 @@ function ProfileForm({
       const revision = optionsRevision.current;
       setOptionsPending(true);
       setOptionsError(undefined);
+      setOptionsErrorCode(undefined);
       try {
         const result = await requestModelProfileOptions(
           provider,
@@ -203,6 +212,9 @@ function ProfileForm({
       } catch (caught) {
         if (id !== requestId.current || nextController.signal.aborted) return;
         setOptionsError(caught instanceof Error ? caught.message : String(caught));
+        setOptionsErrorCode(
+          caught instanceof ModelProfileRequestError ? caught.errorCode : undefined,
+        );
       } finally {
         if (id === requestId.current) setOptionsPending(false);
       }
@@ -333,6 +345,7 @@ function ProfileForm({
         {draft.provider && (
           <section className="profile-options" aria-labelledby="profile-options-title">
             <h2 id="profile-options-title">{t("modelProfiles.settings")}</h2>
+            {draft.provider === "OpenAI" && <ChatGPTProfileGuidance />}
             {options.map((option) => (
               <OptionField
                 key={option.key}
@@ -347,6 +360,8 @@ function ProfileForm({
                 onRefresh={(value) => refreshAfterChange(option.key, value)}
               />
             ))}
+            {draft.provider === "OpenAI" &&
+              explicit.get("use_chatgpt_plan") === true && <ChatGPTPlanStatus />}
             {optionsPending && (
               <p className="field-help" role="status">
                 {t("modelProfiles.optionsLoading")}
@@ -355,7 +370,11 @@ function ProfileForm({
             {optionsError && (
               <div className="field-recovery">
                 <p role="alert" className="form-error">
-                  {t("modelProfiles.optionsError")}: {optionsError}
+                  {optionsErrorCode === "chatgpt_session_unavailable"
+                    ? t("chatgpt.authError")
+                    : optionsErrorCode === "chatgpt_models_unavailable"
+                      ? t("chatgpt.modelsError")
+                      : `${t("modelProfiles.optionsError")}: ${optionsError}`}
                 </p>
                 <Button
                   type="button"

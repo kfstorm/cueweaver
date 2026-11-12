@@ -7,11 +7,13 @@ import math
 from collections.abc import Mapping
 from typing import cast
 
-from PySubtrans.Options import MULTILINE_OPTION
+from PySubtrans.Auth.ChatGPTAuth import ChatGPTAuthError
+from PySubtrans.Options import MULTILINE_OPTION, ConfigActionOption
 from PySubtrans.SettingsType import SettingsType
 from PySubtrans.TranslationProvider import TranslationProvider
 
 from ..application.errors import ServiceError
+from ..chatgpt_auth import SIGN_IN_HELP, require_chatgpt_session
 
 _OPTION_TYPES = {
     str: "string",
@@ -61,12 +63,33 @@ def _discover_model_profile_options(
         )
     try:
         overrides = SettingsType(dict(settings))
+        if provider == "OpenAI":
+            # Subscription billing must be an explicit profile choice, regardless
+            # of environment defaults inherited by the server.
+            overrides.setdefault("use_chatgpt_plan", False)
+            try:
+                require_chatgpt_session(dict(overrides))
+            except ValueError as error:
+                raise ServiceError(
+                    "chatgpt_session_unavailable", str(error), field="settings"
+                ) from None
         runtime_provider = provider_class(overrides)
-        combined = runtime_provider.GetCombinedSettings(SettingsType(dict(settings)))
+        combined = runtime_provider.GetCombinedSettings(overrides)
         runtime_provider.ResetAvailableModels()
         runtime_provider.UpdateSettings(combined)
         selected_model = runtime_provider.selected_model
         available_models = runtime_provider.available_models
+        if (
+            provider == "OpenAI"
+            and overrides.get("use_chatgpt_plan")
+            and not available_models
+        ):
+            raise ServiceError(
+                "chatgpt_models_unavailable",
+                "Could not load ChatGPT plan models. Check connectivity and account access. "
+                + SIGN_IN_HELP,
+                field="settings",
+            )
         setting_updates: dict[str, str] = {}
         runtime_options = runtime_provider.GetOptions(combined)
         if available_models and selected_model not in available_models:
@@ -81,12 +104,27 @@ def _discover_model_profile_options(
             runtime_provider.UpdateSettings(SettingsType({"model": model}))
             setting_updates["model"] = model
             runtime_options = runtime_provider.GetOptions(combined)
+        # Upstream's desktop sign-in buttons are actions, never persisted fields.
+        # CueWeaver manages authentication through its offline administrator CLI.
         options = [
-            _convert_option(key, option) for key, option in runtime_options.items()
+            _convert_option(key, option)
+            for key, option in runtime_options.items()
+            if not (
+                isinstance(option, tuple)
+                and len(option) > 0
+                and isinstance(option[0], type)
+                and issubclass(option[0], ConfigActionOption)
+            )
         ]
         refresh_when_changed = list(runtime_provider.refresh_when_changed)
     except ServiceError:
         raise
+    except ChatGPTAuthError:
+        raise ServiceError(
+            "chatgpt_session_unavailable",
+            "ChatGPT session unavailable. " + SIGN_IN_HELP,
+            field="settings",
+        ) from None
     except Exception as error:
         raise ServiceError(
             "model_profile_runtime_failed",

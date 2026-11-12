@@ -69,6 +69,7 @@ import { TranslationDraftProvider, useTranslationDraft } from "./translation-dra
 import { DirectoryRulesPage } from "./directory-rules-page";
 import { TermMapNavigation } from "./term-map-navigation";
 import { GeneralSettingsPage, SettingsArea } from "./settings-page";
+import { ChatGPTSettingsPage } from "./chatgpt-auth";
 import {
   formatError,
   getErrorDetail,
@@ -2686,6 +2687,7 @@ export function App() {
                 <Route index element={<Navigate to="general" replace />} />
                 <Route path="general" element={<GeneralSettingsPage />} />
                 <Route path="model-profiles" element={<ModelProfilesPage />} />
+                <Route path="chatgpt" element={<ChatGPTSettingsPage />} />
                 <Route
                   path="model-profiles/:profileId"
                   element={<ModelProfileEditor />}

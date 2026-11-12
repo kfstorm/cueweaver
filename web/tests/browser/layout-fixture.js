@@ -87,6 +87,9 @@ window.fetch = async (input, init) => {
   const empty = state === "empty";
   let data;
   switch (url.pathname) {
+    case "/api/chatgpt-auth/status":
+      data = { status: empty ? "not_configured" : "credentials_present" };
+      break;
     case "/api/model-profiles":
       data = { model_profiles: empty ? [] : [profile] };
       break;
@@ -94,9 +97,23 @@ window.fetch = async (input, init) => {
       data = { pysubtrans_version: "1.0", providers: ["OpenAI", "DeepSeek"] };
       break;
     case "/api/model-profile-options":
+      if (JSON.parse(init.body).settings.use_chatgpt_plan)
+        return new Response(
+          JSON.stringify({
+            error_code: "chatgpt_session_unavailable",
+            message: "Example sign-in required",
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
       data = {
         provider: JSON.parse(init.body).provider,
         options: [
+          {
+            key: "use_chatgpt_plan",
+            type: "boolean",
+            description: "Example subscription mode",
+            choices: null,
+          },
           {
             key: "api_key",
             type: "string",
@@ -110,7 +127,7 @@ window.fetch = async (input, init) => {
             choices: null,
           },
         ],
-        refresh_when_changed: [],
+        refresh_when_changed: ["use_chatgpt_plan"],
         setting_updates: {},
       };
       break;

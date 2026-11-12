@@ -8,6 +8,7 @@ const routes = [
   ["/jobs", "Jobs"],
   ["/settings", "General"],
   ["/settings/model-profiles", "Model Profiles"],
+  ["/settings/chatgpt", "ChatGPT"],
   ["/settings/term-maps", "Term maps"],
 ] as const;
 const primaryNavigationLabels = ["Translate", "Jobs", "Settings"];
@@ -39,6 +40,24 @@ test("creates a standalone profile from the provider registry", async ({ page })
 
   await page.getByRole("button", { name: "Save Model Profile" }).click();
   await expect(page.getByRole("heading", { name: "Model Profiles" })).toBeVisible();
+});
+
+test("ChatGPT status is read-only and available while the production server runs", async ({
+  request,
+  page,
+}) => {
+  const response = await request.get("/api/chatgpt-auth/status");
+  expect(response.ok()).toBeTruthy();
+  expect(await response.json()).toEqual({ status: "not_configured" });
+  expect(response.headers()["cache-control"]).toBe("no-store");
+  await page.goto("/settings/chatgpt");
+  await expect(
+    page.getByText("Not configured — ask the administrator to sign in."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Refresh status" }).click();
+  await expect(
+    page.getByText("Not configured — ask the administrator to sign in."),
+  ).toBeVisible();
 });
 
 async function expectResponsiveShell(page: Page, mobile: boolean) {

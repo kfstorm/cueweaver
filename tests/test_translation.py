@@ -14,15 +14,20 @@ from cueweaver.application.translation import TranslationProgress
 from cueweaver.translation import PySubtransTranslator, _disable_thinking
 
 _SUPPORTED_PROVIDERS = {
+    "API Route",
+    "Atlas Cloud",
     "Azure",
     "Bedrock",
     "Claude",
     "Custom Server",
     "DeepSeek",
+    "DemonRoute",
     "Gemini",
     "Mistral",
     "OpenAI",
     "OpenRouter",
+    "Opper",
+    "Requesty",
 }
 
 
@@ -110,25 +115,26 @@ def test_progress_uses_actual_batch_state_without_double_counting(
     )
     assert snapshots == [
         TranslationProgress(
-            (2 if saved_errors else 1) if resumed else 0,
+            1 if resumed else 0,
             2,
-            (2 if saved_errors else 1) if resumed else 0,
+            1 if resumed else 0,
             2,
             (3 if saved_errors else 2) if resumed else 0,
             3,
         ),
         *[
             TranslationProgress(
-                (2 if resumed and saved_errors else 1),
+                1,
                 2,
-                (2 if resumed and saved_errors else 1),
+                1,
                 2,
                 (3 if saved_errors else 2) if resumed else 1,
                 3,
             )
         ]
         * 2,
-        *[TranslationProgress(2, 2, 2, 2, 3, 3)] * 4,
+        *[TranslationProgress(1, 2, 1, 2, 3, 3)] * 2,
+        *[TranslationProgress(2, 2, 2, 2, 3, 3)] * 2,
     ]
     assert len(checkpoints) == 5
     assert not engine.events.preprocessed.receivers
@@ -195,11 +201,10 @@ def test_progress_prefers_native_completion_properties(
     ]
 
 
-@pytest.mark.parametrize("native_completion", [False, True])
 @pytest.mark.parametrize("empty_selection", [False, True])
 @pytest.mark.parametrize("resume", [False, True])
 def test_progress_snapshots_resume_skips_before_mutation_and_resets_on_retry(
-    tmp_path, monkeypatch, native_completion, empty_selection, resume
+    tmp_path, monkeypatch, empty_selection, resume
 ):
     source = tmp_path / "source.srt"
     source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
@@ -220,11 +225,6 @@ def test_progress_snapshots_resume_skips_before_mutation_and_resets_on_retry(
     first.errors = ["Saved validation failure"]
     second.translated = second.originals[:1] if empty_selection else []
     scene = SubtitleScene({"batches": batches})
-    if native_completion:
-        # Newer engines select incomplete batches even when they have saved translations.
-        for batch in batches:
-            batch.translation_complete = False
-        scene.translation_complete = False
     snapshots = []
     checkpoints = []
     attempt = 0
@@ -246,17 +246,11 @@ def test_progress_snapshots_resume_skips_before_mutation_and_resets_on_retry(
                 translator.events.batch_translated.send(translator, batch=second)
                 second.translated = second.originals
                 second.errors.clear()
-                if native_completion:
-                    second.translation_complete = True
                 translator.events.scene_translated.send(translator, scene=scene)
                 raise RuntimeError("Synthetic attempt failure")
             for batch in batches:
                 batch.translated = batch.originals
                 batch.errors.clear()
-                if native_completion:
-                    batch.translation_complete = True
-            if native_completion:
-                scene.translation_complete = True
             translator.events.scene_translated.send(translator, scene=scene)
 
         def SaveProjectFile(self):
@@ -275,32 +269,12 @@ def test_progress_snapshots_resume_skips_before_mutation_and_resets_on_retry(
     translator.translate(
         source, "fr", work_directory=tmp_path / "work", on_progress=snapshots.append
     )
-    skips_partial = resume and not native_completion and not empty_selection
+    # PySubtrans 1.7.4 retries partial batches and batches with validation errors.
     assert snapshots == [
-        TranslationProgress(
-            0,
-            1,
-            int(skips_partial),
-            2,
-            2 if skips_partial else 1 + int(empty_selection),
-            4,
-        ),
-        *[
-            TranslationProgress(
-                0, 1, int(skips_partial), 2, 3 if skips_partial else 2, 4
-            )
-        ]
-        * 2,
-        TranslationProgress(
-            int(skips_partial),
-            1,
-            2 if skips_partial else 1,
-            2,
-            4 if skips_partial else 3,
-            4,
-        ),
-        # Both batches now have translations: legacy TranslateScene's empty selection
-        # falls back to all batches, so the partial batch is no longer skipped.
+        TranslationProgress(0, 1, 0, 2, 1 + int(empty_selection), 4),
+        *[TranslationProgress(0, 1, 0, 2, 2, 4)] * 2,
+        TranslationProgress(0, 1, 1, 2, 3, 4),
+        # The partial batch is retried, while the completed batch is skipped.
         TranslationProgress(0, 1, 1, 2, 3, 4),
         TranslationProgress(1, 1, 2, 2, 4, 4),
     ]
@@ -369,6 +343,7 @@ def test_typed_profile_settings_are_passed_to_pysubtrans(tmp_path, monkeypatch):
             "api_key": "synthetic-key",
             "max_threads": 2,
             "temperature": 0.5,
+            "use_chatgpt_plan": False,
         },
         "max_threads": 4,
     }
@@ -546,6 +521,7 @@ def test_translation_uses_provider_specific_thinking_policy(
         "postprocess_translation": False,
         "build_terminology_map": True,
         "stop_on_error": True,
+        "warnings_as_errors": True,
         "project_file": True,
     }
     assert captured["terminology_map"] == {"Jon": "琼恩"}

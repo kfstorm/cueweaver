@@ -9,6 +9,7 @@ from ..adapters.sqlite_term_maps import (
     SqliteTermMapStore,
 )
 from ..adapters.translation import PySubtransTranslator
+from ..chatgpt_auth import configure_chatgpt, read_chatgpt_status
 from ..work import WorkRoot, WorkRootLease
 from .browsing import MediaBrowser
 from .database import DatabaseOpenError, DatabasePathError, SqliteDatabase
@@ -56,6 +57,8 @@ class CueWeaverApplication:
         self._lease = lease
         self._database = database
         try:
+            auth = configure_chatgpt(configured_work_root.path)
+            self._chatgpt_auth_path = Path(auth.store.path)
             database.initialize()
             self.model_profiles = ModelProfiles(database)
             term_map_store = SqliteTermMapStore(database)
@@ -89,6 +92,10 @@ class CueWeaverApplication:
         except Exception:
             self._abort_startup()
             raise
+
+    def chatgpt_auth_status(self) -> str:
+        """Observe this deployment's credentials while its lease remains held."""
+        return read_chatgpt_status(self._chatgpt_auth_path)
 
     def _abort_startup(self) -> None:
         self._database.close()

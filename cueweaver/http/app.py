@@ -38,6 +38,8 @@ BUSINESS_ROUTES = frozenset(
 class Application(Protocol):
     def close(self) -> None: ...
 
+    def chatgpt_auth_status(self) -> str: ...
+
     @property
     def discovery(self) -> DiscoveryOperation: ...
 
@@ -108,6 +110,15 @@ def create_app(application: Application, media_root: Path | None = None) -> Fast
         return await call_next(request)
 
     register_term_maps(app, application)
+    if getattr(application, "chatgpt_auth_status", None) is not None:
+
+        @app.get("/api/chatgpt-auth/status")
+        def chatgpt_auth_status() -> JSONResponse:
+            return JSONResponse(
+                {"status": application.chatgpt_auth_status()},
+                headers={"Cache-Control": "no-store"},
+            )
+
     if getattr(application, "model_profiles", None) is not None:
         register_model_profiles(app, application)
     if getattr(application, "browsing", None) is not None:

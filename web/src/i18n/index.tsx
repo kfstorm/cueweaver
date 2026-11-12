@@ -43,6 +43,41 @@ export const LOCALE_OPTIONS: ReadonlyArray<{ code: Locale; label: string }> = [
 ];
 
 const ENGLISH = {
+  "chatgpt.title": "ChatGPT",
+  "chatgpt.detail":
+    "Administrator-managed authentication, separate from Model Profiles. One account is shared by this deployment.",
+  "chatgpt.statusTitle": "Stored credentials",
+  "chatgpt.credentials_present": "Credentials present",
+  "chatgpt.not_configured": "Not configured — ask the administrator to sign in.",
+  "chatgpt.unavailable":
+    "Credentials could not be read. Try refreshing; if this persists, ask the administrator to check them.",
+  "chatgpt.loading": "Checking stored credentials…",
+  "chatgpt.error": "Status could not be loaded. Try refreshing.",
+  "chatgpt.refresh": "Refresh status",
+  "chatgpt.disclaimer":
+    "This checks local credentials only. Remote authorization, account access, and remaining allowance are not verified.",
+  "chatgpt.instructions": "ChatGPT sign-in instructions",
+  "chatgpt.localTitle": "Local source deployment",
+  "chatgpt.localHelp":
+    "On the browser computer, stop CueWeaver. From the installed checkout, replace /absolute/work-root with the server's Work root and run this command. Complete browser sign-in, then restart CueWeaver.",
+  "chatgpt.copy": "Copy command",
+  "chatgpt.copied": "Command copied",
+  "chatgpt.copyFailed": "Select the command and copy it manually.",
+  "chatgpt.remoteTitle": "Docker or remote deployment",
+  "chatgpt.remoteHelp":
+    "The administrator signs in on a local browser computer, securely transfers the credentials over SSH, then imports them into the stopped server. This Web page cannot complete sign-in. Follow the guide to preserve the server's identity.",
+  "chatgpt.guide": "Open setup guide",
+  "chatgpt.recoveryTitle": "Expired or revoked authorization",
+  "chatgpt.recoveryHelp":
+    "Ask the administrator to stop CueWeaver and sign in again using the appropriate procedure above. After restarting, refresh this status, reload the Model Profile's options, and retry the failed Job. Account replacement and sign-out also use the CLI; see the guide.",
+  "chatgpt.profileHelp":
+    "To use a ChatGPT subscription, the administrator must authenticate first, separately from this profile. Then enable use_chatgpt_plan and choose a plan-backed model.",
+  "chatgpt.planHelp":
+    "ChatGPT-plan mode is selected. Authentication failures do not fall back to separately billed API usage.",
+  "chatgpt.authError":
+    "ChatGPT authentication is unavailable. Ask the administrator to complete or renew sign-in; see the ChatGPT instructions above. Then retry options.",
+  "chatgpt.modelsError":
+    "ChatGPT plan models could not be loaded. Check connectivity and account access; if authorization has expired or been revoked, ask the administrator to sign in again.",
   "jobs.progress": "Translation progress",
   "jobs.progressScenes": "Scenes {completed} / {total}",
   "jobs.progressBatches": "Batches {completed} / {total}",

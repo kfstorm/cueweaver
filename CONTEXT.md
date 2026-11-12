@@ -59,6 +59,10 @@ The configured writable root owned by CueWeaver. It contains the SQLite
 database and the observable `jobs/` directory; each Job owns one
 `jobs/<job-id>/` Work directory, including its assigned `translation/`
 directory.
+The protected `pysubtrans/` directory stores the deployment's ChatGPT registration,
+stable host identity, and OAuth credentials separately from Model Profiles and
+Job checkpoints. Offline authentication management uses the same Work-root lease
+as the server.
 _Avoid_: temporary root
 
 **Job**:

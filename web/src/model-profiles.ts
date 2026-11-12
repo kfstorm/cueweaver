@@ -28,10 +28,23 @@ export type ModelProfileOptions = {
   setting_updates: Record<string, string>;
 };
 
+export class ModelProfileRequestError extends Error {
+  constructor(
+    message: string,
+    readonly errorCode?: string,
+  ) {
+    super(message);
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const body = (await response.json()) as T & { message?: string };
-  if (!response.ok) throw new Error(body.message ?? "Model Profile request failed");
+  const body = (await response.json()) as T & { message?: string; error_code?: string };
+  if (!response.ok)
+    throw new ModelProfileRequestError(
+      body.message ?? "Model Profile request failed",
+      body.error_code,
+    );
   return body;
 }
 

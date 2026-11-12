@@ -988,7 +988,10 @@ describe("product shell", () => {
     const settingsNavigation = screen.getByRole("navigation", {
       name: "Settings sections",
     });
-    expect(within(settingsNavigation).getAllByRole("link")).toHaveLength(3);
+    expect(within(settingsNavigation).getAllByRole("link")).toHaveLength(4);
+    expect(
+      within(settingsNavigation).getByRole("link", { name: "ChatGPT" }),
+    ).toHaveAttribute("href", "/settings/chatgpt");
     expect(
       within(settingsNavigation).getByRole("link", { name: "General" }),
     ).toHaveAttribute("aria-current", "page");

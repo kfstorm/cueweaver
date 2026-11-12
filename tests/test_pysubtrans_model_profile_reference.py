@@ -36,7 +36,7 @@ def test_reference_endpoint_returns_installed_version_and_registry_names(
 
     assert response.status_code == 200
     assert response.json() == {
-        "pysubtrans_version": "1.6.0",
+        "pysubtrans_version": "1.7.4",
         "providers": ["Alpha", "Zulu"],
     }
 
