@@ -114,3 +114,37 @@ def test_discovery_rejects_missing_media_before_probing(tmp_path):
         Discovery(probe).discover(DiscoverRequest(tmp_path / "missing.mkv"))
 
     assert probe.media_path is None
+
+
+def test_discovery_filters_unrelated_files_before_metadata_checks_and_sees_changes(
+    tmp_path, monkeypatch
+):
+    media = tmp_path / "Episode.mkv"
+    media.write_bytes(b"synthetic media")
+    unrelated = [tmp_path / f"Other-{index}.en.srt" for index in range(100)]
+    unrelated.append(tmp_path / "Episode.en.txt")
+    for path in unrelated:
+        path.write_text("synthetic content")
+    (tmp_path / "Episode.fr.srt").mkdir()
+    subtitle = tmp_path / "Episode.en.srt"
+    subtitle.write_text("synthetic subtitles")
+    inspected = set()
+    original_is_file = Path.is_file
+
+    def is_file(path):
+        inspected.add(path)
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    discovery = Discovery(MediaProbeFixture([]))
+    result = discovery.discover(DiscoverRequest(media))
+
+    assert [candidate.path for candidate in result.candidates] == [subtitle]
+    assert inspected.isdisjoint(unrelated)
+
+    subtitle.unlink()
+    replacement = tmp_path / "Episode.de.VTT"
+    replacement.write_text("synthetic replacement")
+    result = discovery.discover(DiscoverRequest(media))
+    assert [candidate.path for candidate in result.candidates] == [replacement]
+    assert result.candidates[0].format == "vtt"

@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Condition, Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -450,6 +452,66 @@ def test_product_discover_reports_resolved_media_directory_for_file_links(
     assert response.json()["path"] == "Linked.mkv"
     assert response.json()["directory"] == "Example Series"
     assert str(media_root) not in response.text
+
+
+def test_product_discovery_limits_running_operations_and_releases_slots_after_errors(
+    tmp_path: Path,
+):
+    condition = Condition()
+    release = Event()
+    started = 0
+    active = 0
+    peak = 0
+
+    class BlockingApplication(ApplicationFixture):
+        def discover(self, request: DiscoverRequest) -> DiscoverResult:
+            nonlocal started, active, peak
+            with condition:
+                started += 1
+                active += 1
+                peak = max(peak, active)
+                condition.notify_all()
+            try:
+                assert release.wait(timeout=5)
+                if request.media_path.name == "Episode-0.mkv":
+                    raise ServiceError("discovery_failed", "Synthetic probe failure")
+                return DiscoverResult(request.media_path)
+            finally:
+                with condition:
+                    active -= 1
+
+    with (
+        TestClient(create_app(BlockingApplication(), tmp_path)) as client,
+        ThreadPoolExecutor(max_workers=12) as executor,
+    ):
+        futures = [
+            executor.submit(
+                client.post,
+                "/api/media/discover",
+                json={"path": f"Episode-{index}.mkv"},
+            )
+            for index in range(12)
+        ]
+        try:
+            with condition:
+                assert condition.wait_for(lambda: started >= 4, timeout=5)
+                assert not condition.wait_for(lambda: started > 4, timeout=0.2)
+            # Other API work remains available while Discovery is saturated.
+            assert (
+                client.post("/api/media/browse", json={"path": ""}).status_code == 200
+            )
+        finally:
+            release.set()
+        responses = [future.result(timeout=5) for future in futures]
+
+    assert responses[0].status_code == 400
+    assert all(response.status_code == 200 for response in responses[1:])
+    assert [response.json()["path"] for response in responses[1:]] == [
+        f"Episode-{index}.mkv" for index in range(1, 12)
+    ]
+    assert started == 12
+    assert active == 0
+    assert peak == 4
 
 
 def test_product_discover_resolves_relative_media_path_and_redacts_absolute_paths(

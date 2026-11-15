@@ -2961,6 +2961,147 @@ describe("product shell", () => {
     expect(screen.getByText("Selected")).toBeInTheDocument();
   });
 
+  it("selects and inverts only matching batch Media while preserving other selections", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      {
+        ...THREE_BATCH_MEDIA,
+        entries: [
+          ...THREE_BATCH_MEDIA.entries,
+          { kind: "directory", name: "Series", path: "Series" },
+        ],
+      },
+      undefined,
+      false,
+      THREE_UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    await screen.findByRole("button", { name: "Select First.mkv" });
+    expect(
+      screen.queryByRole("button", { name: "Select all" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Batch mode"));
+    const first = screen.getByRole("button", { name: "Select First.mkv" });
+    const second = screen.getByRole("button", { name: "Select Second.mkv" });
+    fireEvent.click(first);
+    const filter = screen.getByRole("searchbox", { name: "Filter this directory" });
+    fireEvent.change(filter, { target: { value: "SECOND" } });
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Invert selection" }));
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.change(filter, { target: { value: "Series" } });
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Invert selection" })).toBeDisabled();
+    fireEvent.change(filter, { target: { value: "no-match" } });
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+
+    fireEvent.change(filter, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Invert selection" }));
+    expect(first).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Select Second.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Select Third.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("region", { name: "Subtitle selection for Series" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("blocks bulk selection while cached directory data refreshes and then uses the fresh entries", async () => {
+    let resolveRefresh!: (response: ReturnType<typeof jsonResponse>) => void;
+    const refreshResponse = new Promise<ReturnType<typeof jsonResponse>>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let browseCalls = 0;
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (input: string, init?: RequestInit) => {
+        if (input === "/api/media/browse") {
+          browseCalls += 1;
+          return browseCalls === 1 ? jsonResponse(THREE_BATCH_MEDIA) : refreshResponse;
+        }
+        if (input === "/api/media/discover") {
+          const { path } = JSON.parse(String(init?.body)) as { path: string };
+          return jsonResponse(
+            THREE_UNIQUE_BATCH_DISCOVERIES.find((item) => item.path === path),
+          );
+        }
+        return jsonResponse({ term_maps: [] });
+      });
+    const { queryClient } = renderWithFetch("/translate", fetchMock);
+    await screen.findByRole("button", { name: "Select First.mkv" });
+    fireEvent.click(screen.getByLabelText("Batch mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Select First.mkv" }));
+    const filter = screen.getByRole("searchbox", { name: "Filter this directory" });
+    fireEvent.change(filter, { target: { value: "SECOND" } });
+
+    let refresh!: Promise<void>;
+    act(() => {
+      refresh = queryClient.invalidateQueries({ queryKey: ["media-directory", ""] });
+      fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    });
+    const selectAll = screen.getByRole("button", { name: "Select all" });
+    const invert = screen.getByRole("button", { name: "Invert selection" });
+    await waitFor(() => expect(selectAll).toBeDisabled());
+    expect(invert).toBeDisabled();
+    fireEvent.click(selectAll);
+    fireEvent.click(invert);
+    expect(screen.getByRole("button", { name: "Select Second.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await act(async () => {
+      resolveRefresh(
+        jsonResponse({
+          path: "",
+          entries: [THREE_BATCH_MEDIA.entries[0], THREE_BATCH_MEDIA.entries[2]],
+        }),
+      );
+      await refresh;
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Select Second.mkv" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(selectAll).toBeDisabled();
+    expect(invert).toBeDisabled();
+    fireEvent.change(filter, { target: { value: "THIRD" } });
+    expect(selectAll).toBeEnabled();
+    fireEvent.click(selectAll);
+    expect(screen.getByRole("button", { name: "Select First.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Select Third.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(invert);
+    expect(screen.getByRole("button", { name: "Select First.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Select Third.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("auto-selects unique batch candidates and leaves ambiguous Media unselected", async () => {
     renderRoute(
       "/translate",

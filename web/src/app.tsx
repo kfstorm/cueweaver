@@ -618,7 +618,29 @@ function Translate() {
               selectedMedia={selectedMedia}
               selectedMediaPaths={selectedBatchMedia}
               batchMode={batchMode}
-              collapseUnselected={!mediaBrowserExpanded}
+              collapseUnselected={!batchMode && !mediaBrowserExpanded}
+              onBatchSelect={(paths, action) => {
+                // Query notifications render asynchronously; reject clicks against
+                // a directory snapshot that has started refreshing in the meantime.
+                const current = queryClient.getQueryState([
+                  "media-directory",
+                  directory,
+                ]);
+                if (
+                  current?.fetchStatus !== "idle" ||
+                  current.status !== "success" ||
+                  current.data !== browser.data
+                )
+                  return;
+                setSelectedBatchMedia((current) => {
+                  const next = new Set(current);
+                  for (const path of paths) {
+                    if (action === "invert" && next.has(path)) next.delete(path);
+                    else next.add(path);
+                  }
+                  return next;
+                });
+              }}
               onMediaSelect={(path) => {
                 if (batchMode) {
                   setSelectedBatchMedia((current) => {
@@ -627,7 +649,6 @@ function Translate() {
                     else next.add(path);
                     return next;
                   });
-                  setMediaBrowserExpanded(false);
                 } else {
                   clearDiscovery(selectedMedia);
                   setSelectedMedia(path);
@@ -641,16 +662,6 @@ function Translate() {
             <div className="discovery-stack">
               {batchMode && (
                 <div className="batch-subtitle-controls">
-                  {batchPaths.length > 0 && !mediaBrowserExpanded && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="mobile-browser-restore"
-                      onClick={() => setMediaBrowserExpanded(true)}
-                    >
-                      {t("translate.selectAnotherMedia")}
-                    </Button>
-                  )}
                   <label htmlFor="batch-subtitle-filter">
                     {t("translate.searchSubtitles")}
                     <Input
@@ -1816,6 +1827,7 @@ function MediaBrowser({
   selectedMediaPaths,
   batchMode,
   collapseUnselected,
+  onBatchSelect,
   onMediaSelect,
   mediaButtonRefs,
   query,
@@ -1828,6 +1840,7 @@ function MediaBrowser({
   selectedMediaPaths: Set<string>;
   batchMode: boolean;
   collapseUnselected: boolean;
+  onBatchSelect: (paths: string[], action: "all" | "invert") => void;
   onMediaSelect: (path: string) => void;
   mediaButtonRefs: MutableRefObject<Map<string, HTMLButtonElement>>;
   query: ReturnType<typeof useMediaDirectory>;
@@ -1836,9 +1849,17 @@ function MediaBrowser({
   const selectionActive = batchMode
     ? selectedMediaPaths.size > 0
     : selectedMedia !== null;
+  const matchesFilter = (entry: MediaDirectoryEntry) =>
+    entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase());
+  // Selected rows stay reachable outside the filter, but bulk actions only
+  // affect matching Media, not those extra rows or directories.
+  const matchingMediaPaths =
+    query.data?.entries
+      .filter((entry) => entry.kind === "media" && matchesFilter(entry))
+      .map((entry) => entry.path) ?? [];
   const entries = query.data?.entries.filter(
     (entry) =>
-      entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()) ||
+      matchesFilter(entry) ||
       (entry.kind === "media" &&
         (batchMode
           ? selectedMediaPaths.has(entry.path)
@@ -1892,6 +1913,36 @@ function MediaBrowser({
           placeholder={t("translate.typeName")}
         />
       </label>
+      {batchMode && (
+        <div className="media-selection-actions">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={
+              query.isPending ||
+              query.isFetching ||
+              query.isError ||
+              matchingMediaPaths.length === 0
+            }
+            onClick={() => onBatchSelect(matchingMediaPaths, "all")}
+          >
+            {t("translate.selectAllMedia")}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={
+              query.isPending ||
+              query.isFetching ||
+              query.isError ||
+              matchingMediaPaths.length === 0
+            }
+            onClick={() => onBatchSelect(matchingMediaPaths, "invert")}
+          >
+            {t("translate.invertMediaSelection")}
+          </Button>
+        </div>
+      )}
       <div className="media-results" aria-live="polite">
         {query.isPending && (
           <div role="status" className="browser-message">

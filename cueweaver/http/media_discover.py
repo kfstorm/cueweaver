@@ -1,11 +1,13 @@
 """Product-facing, Media-root-relative Discovery HTTP adapter."""
 
+from asyncio import Semaphore
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ..application.discovery import (
     DiscoverRequest,
@@ -29,9 +31,16 @@ def register_media_discover(
     app: FastAPI, operation: DiscoveryOperation, media_root: Path
 ) -> None:
     root = media_root.resolve()
+    # A disconnected browser cannot stop a running synchronous ffprobe. Keep
+    # actual Discovery work bounded across clients, including cancelled requests.
+    limiter = Semaphore(4)
 
     @app.post("/api/media/discover")
-    def discover(body: MediaDiscoverBody) -> dict[str, object]:
+    async def discover(body: MediaDiscoverBody) -> dict[str, object]:
+        async with limiter:
+            return await run_in_threadpool(discover_media, body)
+
+    def discover_media(body: MediaDiscoverBody) -> dict[str, object]:
         relative = _relative_media_path(body.path)
         media_path = (root / relative).resolve()
         if not media_path.is_relative_to(root):

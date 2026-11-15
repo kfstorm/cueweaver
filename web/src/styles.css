@@ -794,14 +794,16 @@ a {
 
 .discovery-stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   min-width: 0;
 }
 
-@media (min-width: 768px) {
-  .mobile-browser-restore {
-    display: none;
-  }
+.media-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
 }
 
 .breadcrumbs {
@@ -2353,6 +2355,11 @@ summary:focus-visible {
 
   .subtitle-entry {
     min-height: 56px;
+    flex-wrap: wrap;
+  }
+
+  .subtitle-kind {
+    flex-basis: 100%;
   }
 
   .checkbox-field {
