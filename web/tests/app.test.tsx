@@ -2961,6 +2961,65 @@ describe("product shell", () => {
     expect(screen.getByText("Selected")).toBeInTheDocument();
   });
 
+  it("selects and inverts only matching batch Media while preserving other selections", async () => {
+    renderRoute(
+      "/translate",
+      true,
+      {
+        ...THREE_BATCH_MEDIA,
+        entries: [
+          ...THREE_BATCH_MEDIA.entries,
+          { kind: "directory", name: "Series", path: "Series" },
+        ],
+      },
+      undefined,
+      false,
+      THREE_UNIQUE_BATCH_DISCOVERIES,
+    );
+
+    await screen.findByRole("button", { name: "Select First.mkv" });
+    expect(
+      screen.queryByRole("button", { name: "Select all" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Batch mode"));
+    const first = screen.getByRole("button", { name: "Select First.mkv" });
+    const second = screen.getByRole("button", { name: "Select Second.mkv" });
+    fireEvent.click(first);
+    const filter = screen.getByRole("searchbox", { name: "Filter this directory" });
+    fireEvent.change(filter, { target: { value: "SECOND" } });
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Invert selection" }));
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(second).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.change(filter, { target: { value: "Series" } });
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Invert selection" })).toBeDisabled();
+    fireEvent.change(filter, { target: { value: "no-match" } });
+    expect(screen.getByRole("button", { name: "Select all" })).toBeDisabled();
+
+    fireEvent.change(filter, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Invert selection" }));
+    expect(first).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Select Second.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Select Third.mkv" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(first).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("region", { name: "Subtitle selection for Series" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("auto-selects unique batch candidates and leaves ambiguous Media unselected", async () => {
     renderRoute(
       "/translate",

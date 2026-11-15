@@ -255,7 +255,8 @@ const ENGLISH = {
   "translate.chooseSubtitle": "Choose a subtitle",
   "translate.sourceDiscovered": "Sources discovered for {name}.",
   "translate.chooseAnotherMedia": "Choose another Media",
-  "translate.selectAnotherMedia": "Select another Media",
+  "translate.selectAllMedia": "Select all",
+  "translate.invertMediaSelection": "Invert selection",
   "translate.loadingSubtitles": "Loading subtitles",
   "translate.multipleSubtitles":
     "Multiple subtitles found. Select one candidate to continue.",

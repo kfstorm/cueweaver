@@ -72,6 +72,34 @@ try {
           if (path === "/translate") {
             browser("click", ".checkbox-field input");
             audit(`${locale}/${theme}/${width}/translate/batch`);
+            browser("focus", ".media-entry:nth-child(1)");
+            browser("press", "Enter");
+            browser(
+              "wait",
+              "--fn",
+              "getComputedStyle(document.querySelector('.media-entry:nth-child(2)')).display !== 'none'",
+            );
+            browser("focus", ".media-entry:nth-child(2)");
+            browser("press", "Enter");
+            browser(
+              "wait",
+              "--fn",
+              "document.querySelectorAll('.media-entry[aria-pressed=true]').length === 2",
+            );
+            audit(`${locale}/${theme}/${width}/translate/batch-selected`);
+            browser("fill", ".media-filter input", "S01E01");
+            browser("click", ".media-selection-actions button:nth-child(2)");
+            browser(
+              "wait",
+              "--fn",
+              "document.querySelectorAll('.media-entry[aria-pressed=true]').length === 1 && document.querySelector('.media-entry:nth-child(2)').getAttribute('aria-pressed') === 'true'",
+            );
+            browser("click", ".media-selection-actions button:nth-child(1)");
+            browser(
+              "wait",
+              "--fn",
+              "document.querySelectorAll('.media-entry[aria-pressed=true]').length === 2",
+            );
           }
           if (path === "/settings/term-maps") {
             browser("wait", ".term-map-item");
