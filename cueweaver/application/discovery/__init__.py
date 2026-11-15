@@ -98,36 +98,39 @@ def _external_subtitles(
     media_path: Path,
 ) -> tuple[list[SubtitleCandidateResult], list[UnsupportedCandidateResult]]:
     candidates: list[SubtitleCandidateResult] = []
+    prefix = f"{media_path.stem}."
     try:
+        # Filter names before sorting or stat calls. Every Discovery still reads
+        # the directory afresh, so added or removed subtitles are never cached.
         paths = sorted(
-            media_path.parent.iterdir(), key=lambda path: path.name.casefold()
+            (
+                path
+                for path in media_path.parent.iterdir()
+                if path.suffix.casefold() in EXTERNAL_FORMATS
+                and (path.stem == media_path.stem or path.stem.startswith(prefix))
+            ),
+            key=lambda path: path.name.casefold(),
         )
     except OSError as error:
         raise ServiceError(
             "media_unreadable", "Media directory cannot be read", path=media_path
         ) from error
-    prefix = f"{media_path.stem}."
     for path in paths:
-        if not path.is_file() or (
-            path.stem != media_path.stem and not path.stem.startswith(prefix)
-        ):
+        if not path.is_file():
             continue
-        subtitle_format = EXTERNAL_FORMATS.get(path.suffix.casefold())
-        if subtitle_format is not None:
-            suffix = path.stem[len(media_path.stem) :].lstrip(".")
-            candidates.append(
-                SubtitleCandidateResult(
-                    "external",
-                    subtitle_format,
-                    {
-                        "language": next(
-                            (part for part in suffix.split(".") if part), ""
-                        ),
-                        "title": "",
-                    },
-                    path=path,
-                )
+        subtitle_format = EXTERNAL_FORMATS[path.suffix.casefold()]
+        suffix = path.stem[len(media_path.stem) :].lstrip(".")
+        candidates.append(
+            SubtitleCandidateResult(
+                "external",
+                subtitle_format,
+                {
+                    "language": next((part for part in suffix.split(".") if part), ""),
+                    "title": "",
+                },
+                path=path,
             )
+        )
     return candidates, []
 
 

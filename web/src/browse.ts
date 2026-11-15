@@ -1,4 +1,9 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import type { TranslationKey } from "./i18n";
 import { localizedError } from "./i18n/errors";
@@ -99,13 +104,62 @@ export function useMediaDiscovery(path: string | null) {
   });
 }
 
+function createBatchDiscoveryQueue() {
+  let active = 0;
+  const waiting = new Set<() => void>();
+  const drain = () => {
+    while (active < 4 && waiting.size > 0) {
+      const start = waiting.values().next().value!;
+      waiting.delete(start);
+      start();
+    }
+  };
+  return (path: string, signal: AbortSignal): Promise<MediaDiscovery> =>
+    new Promise((resolve, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const cancel = () => {
+        waiting.delete(start);
+        reject(signal.reason);
+      };
+      const start = () => {
+        signal.removeEventListener("abort", cancel);
+        active += 1;
+        void fetchDiscovery(path, signal)
+          .then(resolve, reject)
+          .finally(() => {
+            active -= 1;
+            drain();
+          });
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      waiting.add(start);
+      drain();
+    });
+}
+
+// Share the limit across observers without sharing queues between QueryClients.
+const batchDiscoveryQueues = new WeakMap<
+  QueryClient,
+  ReturnType<typeof createBatchDiscoveryQueue>
+>();
+
 export function useMediaDiscoveries(paths: string[]) {
+  const client = useQueryClient();
+  let discover = batchDiscoveryQueues.get(client);
+  if (!discover) {
+    discover = createBatchDiscoveryQueue();
+    batchDiscoveryQueues.set(client, discover);
+  }
   return useQueries({
     queries: paths.map((path) => ({
       queryKey: ["media-discovery", path],
-      queryFn: ({ signal }: { signal: AbortSignal }) => fetchDiscovery(path, signal),
+      queryFn: ({ signal }: { signal: AbortSignal }) => discover(path, signal),
       retry: false,
-      gcTime: 0,
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
     })),
   });
 }

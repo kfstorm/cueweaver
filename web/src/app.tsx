@@ -620,6 +620,18 @@ function Translate() {
               batchMode={batchMode}
               collapseUnselected={!batchMode && !mediaBrowserExpanded}
               onBatchSelect={(paths, action) => {
+                // Query notifications render asynchronously; reject clicks against
+                // a directory snapshot that has started refreshing in the meantime.
+                const current = queryClient.getQueryState([
+                  "media-directory",
+                  directory,
+                ]);
+                if (
+                  current?.fetchStatus !== "idle" ||
+                  current.status !== "success" ||
+                  current.data !== browser.data
+                )
+                  return;
                 setSelectedBatchMedia((current) => {
                   const next = new Set(current);
                   for (const path of paths) {
@@ -1907,7 +1919,10 @@ function MediaBrowser({
             type="button"
             variant="outline"
             disabled={
-              query.isPending || query.isError || matchingMediaPaths.length === 0
+              query.isPending ||
+              query.isFetching ||
+              query.isError ||
+              matchingMediaPaths.length === 0
             }
             onClick={() => onBatchSelect(matchingMediaPaths, "all")}
           >
@@ -1917,7 +1932,10 @@ function MediaBrowser({
             type="button"
             variant="outline"
             disabled={
-              query.isPending || query.isError || matchingMediaPaths.length === 0
+              query.isPending ||
+              query.isFetching ||
+              query.isError ||
+              matchingMediaPaths.length === 0
             }
             onClick={() => onBatchSelect(matchingMediaPaths, "invert")}
           >
